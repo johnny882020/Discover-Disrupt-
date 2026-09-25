@@ -20,6 +20,7 @@ from dndlabs.core.schemas import (
     ExportFormat,
     FeatureVector,
     NormalizedRecord,
+    Organization,
     PipelineRun,
     QualityReport,
     RawRecord,
@@ -124,6 +125,35 @@ class Exporter(Protocol):
 
         Returns:
             The serialized bytes.
+        """
+        ...
+
+
+class OrganizationRepository(Protocol):
+    """Persistence of organizations."""
+
+    def create(self, org: Organization) -> Organization:
+        """Insert a new organization.
+
+        Args:
+            org: The organization to store.
+
+        Returns:
+            The stored organization.
+        """
+        ...
+
+    def get(self, org_id: uuid.UUID) -> Organization:
+        """Fetch an organization by id.
+
+        Args:
+            org_id: Organization identifier.
+
+        Returns:
+            The organization.
+
+        Raises:
+            NotFoundError: If the organization does not exist.
         """
         ...
 
@@ -379,6 +409,7 @@ class EnrichmentRepository(Protocol):
 class Repositories:
     """Bundle of repositories handed to services and delivery layers."""
 
+    organizations: OrganizationRepository
     api_keys: ApiKeyRepository
     runs: RunRepository
     datasets: DatasetRepository

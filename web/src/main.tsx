@@ -3,13 +3,25 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
-const rootElement = document.getElementById("root");
-if (!rootElement) {
-  throw new Error("root element not found");
+async function enableMocking(): Promise<void> {
+  if (!(import.meta.env.DEV && import.meta.env.VITE_USE_MOCKS !== "false")) {
+    return;
+  }
+  const { worker } = await import("./mocks/browser");
+  await worker.start({ onUnhandledRequest: "bypass" });
 }
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+function mount(): void {
+  const rootElement = document.getElementById("root");
+  if (!rootElement) {
+    throw new Error("root element not found");
+  }
+
+  createRoot(rootElement).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+
+void enableMocking().then(mount);
