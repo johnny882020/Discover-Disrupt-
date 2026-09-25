@@ -1,0 +1,7 @@
+{
+  "molecules": [
+    {"smiles": "CC(=O)Oc1ccccc1C(=O)O", "score": 0.55},
+    {"smiles": "CC(=O)Oc1ccccc1C(=O)N", "score": 0.61},
+    {"smiles": "CC(=O)Oc1ccc(F)cc1C(=O)O", "score": 0.58}
+  ]
+}

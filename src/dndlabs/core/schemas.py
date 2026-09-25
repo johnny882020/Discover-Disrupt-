@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def new_id() -> uuid.UUID:
@@ -103,6 +103,23 @@ class SourceSpec(_Contract):
     json_path: str | None = None
     chembl_target: str | None = None
     dataset_name: str | None = None
+
+    @model_validator(mode="after")
+    def _check_inputs(self) -> "SourceSpec":
+        """Ensure the spec carries the input its source needs."""
+        if self.source is SourceType.PUBCHEM:
+            if not self.identifiers:
+                raise ValueError("pubchem source requires at least one identifier (CID)")
+            bad = [i for i in self.identifiers if not i.strip().isdigit()]
+            if bad:
+                raise ValueError(f"CIDs must be positive integers, got {bad}")
+        elif self.source is SourceType.CHEMBL and not self.chembl_target:
+            raise ValueError("chembl source requires chembl_target")
+        elif self.source is SourceType.CSV and not self.csv_path:
+            raise ValueError("csv source requires csv_path")
+        elif self.source is SourceType.JSON and not self.json_path:
+            raise ValueError("json source requires json_path")
+        return self
 
 
 class RawRecord(_Contract):

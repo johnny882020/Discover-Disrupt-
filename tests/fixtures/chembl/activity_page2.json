@@ -1,0 +1,6 @@
+{
+  "activities": [
+    {"activity_id": 3, "molecule_chembl_id": "CHEMBL113", "canonical_smiles": "Cn1cnc2c1c(=O)n(C)c(=O)n2C", "standard_type": "Ki", "standard_value": "40000", "standard_units": "nM", "standard_relation": "=", "target_chembl_id": "CHEMBL204"}
+  ],
+  "page_meta": {"limit": 2, "offset": 2, "total_count": 3, "next": null}
+}
