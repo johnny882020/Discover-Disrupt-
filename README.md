@@ -44,7 +44,11 @@ curl localhost:8000/datasets/<dataset_id>/quality-report    # data-quality repor
 
 To deploy the API and a managed PostgreSQL database, use the **Deploy to
 Render** button above. It reads the Blueprint in `render.yaml`. See
-[docs/deployment.md](docs/deployment.md).
+[docs/deployment.md](docs/deployment.md). After deploying, run:
+
+```bash
+python scripts/smoke_test.py https://<service>.onrender.com
+```
 
 ### Local
 
@@ -102,6 +106,8 @@ Run `dnd-pipeline <command> --help` for all options.
 | `GET` | `/datasets/{id}` | Dataset with records |
 | `GET` | `/datasets/{id}/quality-report` | Quality report |
 | `GET` | `/datasets/{id}/export?format=csv\|jsonl` | Download dataset |
+| `GET` | `/` | Service info and endpoint list |
+| `GET` | `/health` | Health check |
 
 See [docs/api.md](docs/api.md) for request and response details. The sample
 files are built into the Docker image at `/app/samples/`, so a CSV run can use
@@ -148,6 +154,7 @@ mypy src/
 
 Helper scripts live in `scripts/`:
 
+- `smoke_test.py <base_url>`: end-to-end check of a running deployment
 - `seed_sample_data.py`: load the sample datasets
 - `generate_synthetic_lab_export.py`: create test CSVs with injected defects
 - `record_pubchem_fixture.py`: refresh the PubChem test fixtures

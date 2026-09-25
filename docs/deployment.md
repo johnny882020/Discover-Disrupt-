@@ -25,16 +25,32 @@ On every deploy the container applies database migrations
    repository, and select the branch to deploy.
 2. **Apply it.** Review the two resources and click **Apply**. The first
    build takes a few minutes, mostly installing RDKit.
-3. **Verify it.** Replace `<service>` with your service's name:
+3. **Verify it.** Replace `<service>` with your service's name, then run the
+   end-to-end smoke test from a local checkout:
 
    ```bash
-   curl https://<service>.onrender.com/health
-   # {"status":"ok"}
-
-   curl -X POST https://<service>.onrender.com/pipelines/run \
-     -H 'content-type: application/json' \
-     -d '{"source": "csv", "path": "/app/samples/lab_export_malformed.csv"}'
+   python scripts/smoke_test.py https://<service>.onrender.com --pubchem
    ```
+
+   ```text
+   Smoke test: https://<service>.onrender.com
+     ok  root: D&D Labs Data API 0.1.0
+     ok  health
+     ok  /docs
+     ok  csv lab export: 5/12 accepted, pass rate 41.7%
+     ok  json upload: 2/4 accepted, pass rate 50.0%
+     ok  pubchem cids: 3/3 accepted, pass rate 100.0%
+   All smoke checks passed.
+   ```
+
+   Or check it by hand:
+
+   ```bash
+   curl https://<service>.onrender.com/          # service info and endpoint list
+   curl https://<service>.onrender.com/health    # {"status":"ok"}
+   ```
+
+   Swagger UI is at `https://<service>.onrender.com/docs`.
 
 The sample files in `tests/fixtures/` are built into the image at
 `/app/samples/`.
@@ -73,6 +89,19 @@ For production, change `plan:` in `render.yaml` to a paid plan, for example
   confidential data until authentication has been added.
 - **Deploy branch.** `autoDeploy: true` redeploys on every push to the
   branch the Blueprint tracks.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `{"detail":"Not Found"}` | The URL has no route; the service itself is running. Open `/` for the list of endpoints, or `/docs`. Versions before the root endpoint was added also returned this at `/`. |
+| First request takes about a minute | The free plan puts the service to sleep when idle; the first request wakes it. |
+| Run `failed` with `CSV file not found` | `path` is read on the server. Use `/app/samples/...` or another path inside the container. |
+| Run `failed` with `PubChem unreachable` | PubChem is down or rate-limiting the service. The error is stored on the run; retry later. |
+| Deploy fails during `init-db` | The database is unreachable or expired (free Postgres lasts 30 days). Check `dndlabs-db` in the Render Dashboard. |
+
+To redeploy, push to `main` (`autoDeploy: true`), or use **Manual Deploy →
+Deploy latest commit** on the service page.
 
 ## Docker Compose
 
