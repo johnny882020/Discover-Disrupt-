@@ -36,14 +36,18 @@ class Connector(Protocol):
 
     source: SourceType
 
-    async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
+    def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
         """Fetch raw records described by ``spec``.
+
+        Implementations are async generator functions: calling ``fetch``
+        returns an async iterator immediately (no ``await`` before the
+        ``async for``).
 
         Args:
             spec: What to ingest.
 
-        Yields:
-            Raw, unvalidated records.
+        Returns:
+            An async iterator of raw, unvalidated records.
 
         Raises:
             IngestionError: If the source cannot be read.
