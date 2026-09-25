@@ -16,11 +16,13 @@ services:
   api:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.api
     environment:
       DNDLABS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dndlabs}:${POSTGRES_PASSWORD:-dndlabs}@db:5432/${POSTGRES_DB:-dndlabs}
       DNDLABS_EXPORT_DIR: /app/exports
       DNDLABS_AUTO_CREATE_SCHEMA: "false"
+      DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${DNDLABS_ADMIN_BOOTSTRAP_SECRET:-dev-admin-secret}
+      DNDLABS_FRONTEND_ORIGIN: http://localhost:5173
     ports:
       - "8000:8000"
     depends_on:
@@ -28,6 +30,16 @@ services:
         condition: service_healthy
     volumes:
       - exports:/app/exports
+
+  web:
+    build:
+      context: ./web
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
 
 volumes:
   pgdata:

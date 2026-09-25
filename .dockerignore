@@ -8,4 +8,6 @@
 exports
 tests/unit
 tests/integration
-tests/*.py
+tests/live
+web/node_modules
+web/dist

@@ -1,9 +1,0 @@
-{
-  "exported_by": "internal-lake",
-  "records": [
-    {"id": "DL-1", "compound_name": "Aspirin", "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O", "value": 3.2, "unit": "uM", "assay_type": "IC50", "target": "COX-2", "batch": 7},
-    {"id": "DL-2", "compound_name": "Caffeine", "inchi": "InChI=1S/C8H10N4O2/c1-10-4-9-6-5(10)7(13)12(3)8(14)11(6)2/h4H,1-3H3", "value": 40, "unit": "uM", "assay_type": "Ki", "target": "ADORA2A", "batch": 7},
-    {"id": "DL-3", "compound_name": "Mismatch", "smiles": "CCO", "inchi": "InChI=1S/CH4O/c1-2/h2H,1H3", "batch": 8},
-    {"compound_name": "No id, no structure", "batch": 8}
-  ]
-}

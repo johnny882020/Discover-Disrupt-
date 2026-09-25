@@ -13,3 +13,8 @@ build/
 *.db
 exports/
 .env
+node_modules/
+web/dist/
+web/coverage/
+web/playwright-report/
+web/test-results/

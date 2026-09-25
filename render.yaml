@@ -1,12 +1,11 @@
 # Render Blueprint: https://render.com/docs/blueprint-spec
-# Deploys the API (Docker) and a managed PostgreSQL database.
 services:
   - type: web
     name: dndlabs-api
     runtime: docker
-    dockerfilePath: ./docker/Dockerfile
+    dockerfilePath: ./docker/Dockerfile.api
     dockerContext: .
-    plan: free            # upgrade to "starter" to avoid cold starts
+    plan: free
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -15,14 +14,34 @@ services:
           name: dndlabs-db
           property: connectionString
       - key: DNDLABS_AUTO_CREATE_SCHEMA
-        value: "false"    # schema is managed by Alembic (dnd-pipeline init-db)
+        value: "false"
       - key: DNDLABS_EXPORT_DIR
         value: /app/exports
       - key: DNDLABS_LOG_LEVEL
         value: INFO
+      - key: DNDLABS_ADMIN_BOOTSTRAP_SECRET
+        generateValue: true
+      - key: DNDLABS_FRONTEND_ORIGIN
+        value: https://dndlabs-web.onrender.com
+      - key: DNDLABS_NVIDIA_NIM_API_KEY
+        sync: false  # set manually in the dashboard; enrichment is skipped cleanly if unset
+
+  - type: web
+    name: dndlabs-web
+    runtime: static
+    buildCommand: cd web && npm ci && npm run build
+    staticPublishPath: web/dist
+    autoDeploy: true
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://dndlabs-api.onrender.com/api/v1
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
 
 databases:
   - name: dndlabs-db
     databaseName: dndlabs
     user: dndlabs
-    plan: free            # free Render Postgres expires after 30 days
+    plan: free

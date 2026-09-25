@@ -1,1 +1,1 @@
-"""Ingestion connectors that turn external sources into ``RawRecord`` lists."""
+"""Ingestion connectors that turn external sources into RawRecord lists."""

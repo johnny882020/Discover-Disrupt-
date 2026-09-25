@@ -1,9 +1,4 @@
-"""Custom exception hierarchy for D&D Labs.
-
-Every error raised deliberately by application code derives from
-:class:`DndLabsError`, so delivery layers can map them to exit codes or HTTP
-responses in one place.
-"""
+"""Custom exception hierarchy for D&D Labs."""
 
 
 class DndLabsError(Exception):
@@ -31,7 +26,15 @@ class StorageError(DndLabsError):
 
 
 class NotFoundError(StorageError):
-    """Raised when a requested entity does not exist."""
+    """Raised when a requested entity does not exist (or is not owned by the caller's org)."""
+
+
+class AuthError(DndLabsError):
+    """Raised when authentication or key management fails."""
+
+
+class InvalidApiKeyError(AuthError):
+    """Raised when a request presents a missing, malformed or revoked API key."""
 
 
 class PipelineError(DndLabsError):
@@ -40,3 +43,7 @@ class PipelineError(DndLabsError):
 
 class ExportError(DndLabsError):
     """Raised when a dataset cannot be exported."""
+
+
+class EnrichmentError(DndLabsError):
+    """Raised when the enrichment client's own machinery fails (not a single bad record)."""

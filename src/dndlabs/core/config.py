@@ -8,20 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """All runtime configuration, read from ``DNDLABS_*`` environment variables.
-
-    Attributes:
-        database_url: SQLAlchemy URL of the database.
-        export_dir: Directory where exported datasets are written.
-        log_level: Root log level name.
-        log_json: Emit JSON log lines when true, human-readable lines otherwise.
-        pubchem_base_url: Base URL of the PubChem PUG REST API.
-        pubchem_timeout_seconds: Per-request timeout for PubChem calls.
-        pubchem_batch_size: Maximum CIDs per PubChem request.
-        pubchem_max_retries: Retries for transient PubChem failures.
-        pubchem_backoff_seconds: Initial backoff between retries (doubles each time).
-        auto_create_schema: Create missing tables on startup (dev/test convenience).
-    """
+    """All runtime configuration, read from ``DNDLABS_*`` environment variables."""
 
     model_config = SettingsConfigDict(env_prefix="DNDLABS_", env_file=".env", extra="ignore")
 
@@ -29,17 +16,32 @@ class Settings(BaseSettings):
     export_dir: Path = Path("./exports")
     log_level: str = "INFO"
     log_json: bool = True
+    auto_create_schema: bool = True
+
+    admin_bootstrap_secret: str = "change-me-in-production"
+    frontend_origin: str = "http://localhost:5173"
+
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)
     pubchem_batch_size: int = Field(default=100, ge=1, le=500)
     pubchem_max_retries: int = Field(default=3, ge=0)
     pubchem_backoff_seconds: float = Field(default=0.5, ge=0)
-    auto_create_schema: bool = True
+
+    chembl_base_url: str = "https://www.ebi.ac.uk/chembl/api/data"
+    chembl_timeout_seconds: float = Field(default=30.0, gt=0)
+    chembl_page_size: int = Field(default=50, ge=1, le=1000)
+    chembl_max_retries: int = Field(default=3, ge=0)
+
+    nvidia_nim_api_key: str | None = None
+    nvidia_nim_base_url: str = "https://health.api.nvidia.com/v1/biology/nvidia/genmol"
+    nvidia_nim_timeout_seconds: float = Field(default=60.0, gt=0)
+    nvidia_nim_num_candidates: int = Field(default=5, ge=1, le=50)
+    nvidia_nim_scoring: str = "QED"
 
     @field_validator("database_url")
     @classmethod
     def _use_psycopg_driver(cls, url: str) -> str:
-        """Point bare Postgres URLs (as issued by Render/Heroku) at the psycopg 3 driver."""
+        """Point bare Postgres URLs (as issued by Render) at the psycopg 3 driver."""
         for prefix in ("postgres://", "postgresql://"):
             if url.startswith(prefix):
                 return "postgresql+psycopg://" + url.removeprefix(prefix)
