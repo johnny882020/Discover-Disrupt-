@@ -28,6 +28,7 @@ services:
         condition: service_healthy
     volumes:
       - exports:/app/exports
+      - ./tests/fixtures:/app/samples:ro
 
 volumes:
   pgdata:
