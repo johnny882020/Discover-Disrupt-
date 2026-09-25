@@ -76,6 +76,31 @@ def _run_case(client: httpx.Client, case: Case, timeout: float) -> None:
     )
 
 
+#: (label, method, path, JSON body, expected status) for error handling.
+ERROR_CASES: list[tuple[str, str, str, dict[str, Any] | None, int]] = [
+    ("unknown path", "GET", "/no-such-route", None, 404),
+    ("unknown run", "GET", "/pipelines/runs/does-not-exist", None, 404),
+    ("unknown dataset", "GET", "/datasets/does-not-exist", None, 404),
+    ("unknown report", "GET", "/datasets/does-not-exist/quality-report", None, 404),
+    ("bad export format", "GET", "/datasets/does-not-exist/export?format=xml", None, 422),
+    ("missing identifiers", "POST", "/pipelines/run", {"source": "pubchem"}, 422),
+    ("non-numeric CID", "POST", "/pipelines/run", {"source": "pubchem", "identifiers": ["x"]}, 422),
+    ("unsupported source", "POST", "/pipelines/run", {"source": "chembl"}, 422),
+]
+
+
+def _check_errors(client: httpx.Client) -> None:
+    """Verify that bad requests get clean 4xx responses, never 5xx."""
+    for label, method, path, body, expected in ERROR_CASES:
+        response = client.request(method, path, json=body)
+        _check(
+            response.status_code == expected,
+            f"{label}: expected {expected}, got {response.status_code} {response.text[:200]}",
+        )
+        _check("detail" in response.json(), f"{label}: error body has no detail")
+    typer.echo(f"  ok  error handling: {len(ERROR_CASES)} bad requests rejected cleanly")
+
+
 def main(
     base_url: Annotated[str, typer.Argument(help="API base URL.")],
     samples_dir: Annotated[
@@ -110,6 +135,17 @@ def main(
                 {"total_records": 3, "accepted_records": 3},
             )
         )
+        cases.append(
+            Case(
+                "pubchem names",
+                {
+                    "source": "pubchem",
+                    "identifiers": ["aspirin", "caffeine", "not-a-real-compound-xyz"],
+                    "identifier_type": "name",
+                },
+                {"total_records": 2, "accepted_records": 2},  # unknown name is skipped
+            )
+        )
     typer.echo(f"Smoke test: {base_url}")
     try:
         # Generous timeout: free hosting tiers cold-start on the first request.
@@ -122,6 +158,7 @@ def main(
             typer.echo("  ok  health")
             _check(client.get("/docs").status_code == 200, "docs: not served")
             typer.echo("  ok  /docs")
+            _check_errors(client)
             for case in cases:
                 _run_case(client, case, timeout)
     except (SmokeCheckError, httpx.HTTPError) as exc:
