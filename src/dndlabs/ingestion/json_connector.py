@@ -3,7 +3,6 @@
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -14,7 +13,8 @@ from dndlabs.ingestion.fields import build_raw_record
 
 logger = get_logger(__name__)
 
-_Item = dict[str, Any]
+JsonScalar = str | int | float | bool | None
+_Item = dict[str, JsonScalar]
 _ITEMS = TypeAdapter(list[_Item])
 
 
