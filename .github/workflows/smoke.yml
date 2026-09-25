@@ -1,0 +1,31 @@
+name: Smoke test
+
+# Manually run scripts/smoke_test.py against a deployed API (e.g. Render).
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Base URL of the deployed API
+        required: true
+        default: https://dndlabs-api.onrender.com
+      pubchem:
+        description: Also run a live PubChem request
+        type: boolean
+        default: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install client dependencies
+        run: pip install httpx typer
+      - name: Run smoke test
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          PUBCHEM_FLAG: ${{ inputs.pubchem && '--pubchem' || '--no-pubchem' }}
+        run: python scripts/smoke_test.py "$BASE_URL" $PUBCHEM_FLAG
