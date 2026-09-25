@@ -21,6 +21,24 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class ServiceInfo(BaseModel):
+    """Service description returned at the API root."""
+
+    name: str
+    version: str
+    docs: str
+    health: str
+    endpoints: list[str]
+
+
+def _public_endpoints(app: FastAPI) -> list[str]:
+    """List ``METHOD /path`` for every route in the app's OpenAPI schema."""
+    paths: dict[str, dict[str, object]] = app.openapi().get("paths", {})
+    return [
+        f"{method.upper()} {path}" for path, operations in paths.items() for method in operations
+    ]
+
+
 def create_app(services: ApiServices | None = None) -> FastAPI:
     """Create the API application.
 
@@ -71,5 +89,20 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             ``{"status": "ok"}``.
         """
         return HealthResponse()
+
+    @app.get("/", tags=["meta"])
+    def root() -> ServiceInfo:
+        """Describe the service and where to find its documentation.
+
+        Returns:
+            Name, version, documentation links and available endpoints.
+        """
+        return ServiceInfo(
+            name=app.title,
+            version=app.version,
+            docs=app.docs_url or "/openapi.json",
+            health="/health",
+            endpoints=_public_endpoints(app),
+        )
 
     return app

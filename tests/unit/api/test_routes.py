@@ -89,3 +89,17 @@ def test_ingestion_errors_are_422(services: ApiServices, client: TestClient) -> 
     services.runner.submit = boom  # type: ignore[method-assign]
     response = client.post("/pipelines/run", json={"source": "csv", "path": "x"})
     assert response.status_code == 422
+
+
+def test_root_describes_service(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "D&D Labs Data API"
+    assert body["docs"] == "/docs"
+    assert body["health"] == "/health"
+    assert "POST /pipelines/run" in body["endpoints"]
+
+
+def test_unknown_path_is_404(client: TestClient) -> None:
+    assert client.get("/no-such-route").json() == {"detail": "Not Found"}

@@ -101,9 +101,26 @@ Downloads the dataset with a fixed column order.
 | `format` | `csv` (default) | `text/csv` |
 | | `jsonl` | `application/x-ndjson` |
 
-## Health
+## Service
 
-`GET /health` returns `{"status": "ok"}`.
+### `GET /`
+
+Returns the service name, version, documentation links and every endpoint.
+Start here after a deploy.
+
+```json
+{
+  "name": "D&D Labs Data API",
+  "version": "0.1.0",
+  "docs": "/docs",
+  "health": "/health",
+  "endpoints": ["POST /pipelines/run", "GET /pipelines/runs/{run_id}", "GET /datasets", "..."]
+}
+```
+
+### `GET /health`
+
+Returns `{"status": "ok"}`. Render uses it as the health check.
 
 ## Errors
 
@@ -111,6 +128,6 @@ Errors return `{"detail": "<message>"}`.
 
 | Status | Meaning |
 |---|---|
-| `404` | Run or dataset not found |
+| `404` | Unknown path, run or dataset |
 | `422` | Invalid request or unusable source |
 | `500` | Internal error (e.g. storage failure) |
