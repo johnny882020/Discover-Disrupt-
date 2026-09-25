@@ -83,6 +83,14 @@ class PipelineService:
         self._featurizer = featurizer
         self._enrichment = EnrichmentService(enrichment_client)
 
+    def enrichment_enabled(self) -> bool:
+        """Whether real NVIDIA enrichment calls will be made.
+
+        Returns:
+            True if a real (non-null) enrichment client is configured.
+        """
+        return self._enrichment.is_enabled()
+
     def submit(self, org_id: uuid.UUID, spec: SourceSpec) -> PipelineRun:
         """Register a pending run without executing it.
 
@@ -146,17 +154,7 @@ class PipelineService:
         dataset_id = new_id()
         outcome = self._validator.run(run.id, dataset_id, raws)
 
-        if self._featurizer is not None:
-            vectors = [
-                self._featurizer.featurize(r) for r in outcome.accepted if r.canonical_smiles
-            ]
-            if vectors:
-                self._repos.features.save_many(org_id, vectors)
-
-        enrichment_results = await self._enrichment.enrich(outcome.accepted)
-        if enrichment_results:
-            self._repos.enrichments.save_many(org_id, enrichment_results)
-
+        # Records must exist before feature_vectors/enrichment_results (FK).
         dataset = self._repos.datasets.create(
             Dataset(
                 id=dataset_id,
@@ -169,6 +167,17 @@ class PipelineService:
             outcome.accepted,
         )
         self._repos.reports.save(org_id, outcome.report)
+
+        if self._featurizer is not None:
+            vectors = [
+                self._featurizer.featurize(r) for r in outcome.accepted if r.canonical_smiles
+            ]
+            if vectors:
+                self._repos.features.save_many(org_id, vectors)
+
+        enrichment_results = await self._enrichment.enrich(outcome.accepted)
+        if enrichment_results:
+            self._repos.enrichments.save_many(org_id, enrichment_results)
         return self._repos.runs.update(
             org_id,
             run.model_copy(
