@@ -43,6 +43,9 @@ On every deploy the container applies database migrations
    All smoke checks passed.
    ```
 
+   Or run it from GitHub without a local checkout: **Actions → Smoke test →
+   Run workflow**, then enter the service URL.
+
    Or check it by hand:
 
    ```bash
