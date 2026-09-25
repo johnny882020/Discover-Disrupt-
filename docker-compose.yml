@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dndlabs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dndlabs}
+      POSTGRES_DB: ${POSTGRES_DB:-dndlabs}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      DNDLABS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dndlabs}:${POSTGRES_PASSWORD:-dndlabs}@db:5432/${POSTGRES_DB:-dndlabs}
+      DNDLABS_EXPORT_DIR: /app/exports
+      DNDLABS_AUTO_CREATE_SCHEMA: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - exports:/app/exports
+
+volumes:
+  pgdata:
+  exports:
