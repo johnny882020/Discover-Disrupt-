@@ -153,6 +153,12 @@ def main(
             root = client.get("/").raise_for_status().json()
             _check(root.get("docs") == "/docs", "root: unexpected response")
             typer.echo(f"  ok  root: {root['name']} {root['version']}")
+            page = client.get("/", headers={"Accept": "text/html"}).raise_for_status()
+            _check(
+                page.headers["content-type"].startswith("text/html") and "/docs" in page.text,
+                "root: browsers did not get the HTML landing page",
+            )
+            typer.echo("  ok  landing page (HTML)")
             health = client.get("/health").raise_for_status().json()
             _check(health == {"status": "ok"}, f"health: {health}")
             typer.echo("  ok  health")

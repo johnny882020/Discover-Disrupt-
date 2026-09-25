@@ -106,7 +106,7 @@ Run `dnd-pipeline <command> --help` for all options.
 | `GET` | `/datasets/{id}` | Dataset with records |
 | `GET` | `/datasets/{id}/quality-report` | Quality report |
 | `GET` | `/datasets/{id}/export?format=csv\|jsonl` | Download dataset |
-| `GET` | `/` | Service info and endpoint list |
+| `GET` | `/` | Landing page (browsers) or service info as JSON |
 | `GET` | `/health` | Health check |
 
 See [docs/api.md](docs/api.md) for request and response details. The sample

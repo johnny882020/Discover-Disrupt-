@@ -103,3 +103,20 @@ def test_root_describes_service(client: TestClient) -> None:
 
 def test_unknown_path_is_404(client: TestClient) -> None:
     assert client.get("/no-such-route").json() == {"detail": "Not Found"}
+
+
+def test_root_serves_html_to_browsers(client: TestClient) -> None:
+    response = client.get("/", headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    page = response.text
+    assert "<title>D&amp;D Labs Data API</title>" in page
+    assert 'href="/docs"' in page
+    assert '<a href="/datasets">/datasets</a>' in page  # parameter-free GET is linked
+    assert "/datasets/{dataset_id}</td>" in page  # templated path is not
+
+
+def test_root_json_is_default_for_api_clients(client: TestClient) -> None:
+    response = client.get("/", headers={"Accept": "application/json"})
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["docs"] == "/docs"
