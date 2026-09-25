@@ -218,12 +218,15 @@ def _fault_message(response: httpx.Response) -> str:
         return response.text[:200]
 
 
-def build_pubchem_client(base_url: str, timeout_seconds: float) -> httpx.Client:
+def build_pubchem_client(
+    base_url: str, timeout_seconds: float, transport: httpx.BaseTransport | None = None
+) -> httpx.Client:
     """Create an HTTP client configured for PUG REST.
 
     Args:
         base_url: PUG REST base URL.
         timeout_seconds: Request timeout.
+        transport: Optional transport override (tests, fixture recording).
 
     Returns:
         A configured ``httpx.Client``.
@@ -232,4 +235,5 @@ def build_pubchem_client(base_url: str, timeout_seconds: float) -> httpx.Client:
         base_url=base_url,
         timeout=timeout_seconds,
         headers={"User-Agent": "dndlabs/0.1 (data-infrastructure MVP)"},
+        transport=transport,
     )
