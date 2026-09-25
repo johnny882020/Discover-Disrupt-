@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dndlabs"
+version = "0.1.0"
+description = "AI-native data infrastructure for drug discovery: ingest, validate, normalize and serve model-ready compound datasets."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "sqlalchemy>=2.0.25",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "pandas>=2.2",
+    "rdkit>=2023.9.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pandas-stubs>=2.2",
+]
+
+[project.scripts]
+dnd-pipeline = "dndlabs.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dndlabs"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "D", "T20", "BLE", "E722"]
+ignore = ["D203", "D213", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D100", "D101", "D102", "D103", "D104", "D105"]
+"src/dndlabs/storage/migrations/**" = ["D103"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["rdkit", "rdkit.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "live: hits the real PubChem API (opt-in with DNDLABS_LIVE_TESTS=1)",
+]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["dndlabs"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
