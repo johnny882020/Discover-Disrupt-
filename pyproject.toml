@@ -28,6 +28,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "pytest-asyncio>=0.23",
+    "httpx2>=2.13",  # starlette.testclient transport (plain httpx is deprecated there)
     "ruff>=0.4",
     "mypy>=1.10",
     "pandas-stubs>=2.2",
@@ -72,9 +73,7 @@ markers = [
     "live: hits the real PubChem API (opt-in with DNDLABS_LIVE_TESTS=1)",
 ]
 asyncio_default_fixture_loop_scope = "function"
-filterwarnings = [
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
-]
+filterwarnings = ["error::DeprecationWarning:starlette.*"]
 
 [tool.coverage.run]
 source = ["dndlabs"]

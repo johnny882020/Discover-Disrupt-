@@ -37,9 +37,11 @@ On every deploy the container applies database migrations
      ok  root: D&D Labs Data API 0.1.0
      ok  health
      ok  /docs
+     ok  error handling: 8 bad requests rejected cleanly
      ok  csv lab export: 5/12 accepted, pass rate 41.7%
      ok  json upload: 2/4 accepted, pass rate 50.0%
      ok  pubchem cids: 3/3 accepted, pass rate 100.0%
+     ok  pubchem names: 2/2 accepted, pass rate 100.0%
    All smoke checks passed.
    ```
 
