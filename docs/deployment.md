@@ -35,6 +35,7 @@ On every deploy the container applies database migrations
    ```text
    Smoke test: https://<service>.onrender.com
      ok  root: D&D Labs Data API 0.1.0
+     ok  landing page (HTML)
      ok  health
      ok  /docs
      ok  error handling: 8 bad requests rejected cleanly
@@ -51,11 +52,12 @@ On every deploy the container applies database migrations
    Or check it by hand:
 
    ```bash
-   curl https://<service>.onrender.com/          # service info and endpoint list
+   curl https://<service>.onrender.com/          # service info and endpoint list (JSON)
    curl https://<service>.onrender.com/health    # {"status":"ok"}
    ```
 
-   Swagger UI is at `https://<service>.onrender.com/docs`.
+   In a browser, `https://<service>.onrender.com/` opens a landing page, and
+   the Swagger UI is at `/docs`.
 
 The sample files in `tests/fixtures/` are built into the image at
 `/app/samples/`.

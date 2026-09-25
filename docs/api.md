@@ -108,6 +108,10 @@ Downloads the dataset with a fixed column order.
 Returns the service name, version, documentation links and every endpoint.
 Start here after a deploy.
 
+The response depends on the `Accept` header. Browsers (`text/html`) get an
+HTML landing page with links to the docs and datasets. Every other client gets
+JSON:
+
 ```json
 {
   "name": "D&D Labs Data API",

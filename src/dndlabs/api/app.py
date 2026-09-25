@@ -3,12 +3,14 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from dndlabs import __version__
 from dndlabs.api.dependencies import ApiServices
 from dndlabs.api.errors import register_error_handlers
+from dndlabs.api.landing import ServiceInfo, render_landing
 from dndlabs.api.routers import datasets, pipelines
 from dndlabs.core.config import get_settings
 from dndlabs.core.logging import configure_logging
@@ -19,16 +21,6 @@ class HealthResponse(BaseModel):
     """Liveness probe response."""
 
     status: str = "ok"
-
-
-class ServiceInfo(BaseModel):
-    """Service description returned at the API root."""
-
-    name: str
-    version: str
-    docs: str
-    health: str
-    endpoints: list[str]
 
 
 def _public_endpoints(app: FastAPI) -> list[str]:
@@ -90,19 +82,28 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
         """
         return HealthResponse()
 
-    @app.get("/", tags=["meta"])
-    def root() -> ServiceInfo:
+    @app.get("/", tags=["meta"], response_model=ServiceInfo)
+    def root(request: Request) -> ServiceInfo | HTMLResponse:
         """Describe the service and where to find its documentation.
+
+        Browsers (``Accept: text/html``) get an HTML landing page; every other
+        client gets JSON.
+
+        Args:
+            request: Incoming request, used for content negotiation.
 
         Returns:
             Name, version, documentation links and available endpoints.
         """
-        return ServiceInfo(
+        info = ServiceInfo(
             name=app.title,
             version=app.version,
             docs=app.docs_url or "/openapi.json",
             health="/health",
             endpoints=_public_endpoints(app),
         )
+        if "text/html" in request.headers.get("accept", ""):
+            return HTMLResponse(render_landing(info, app.description))
+        return info
 
     return app
