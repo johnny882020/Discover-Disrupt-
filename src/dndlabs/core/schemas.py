@@ -185,6 +185,14 @@ class QualityReport(_Contract):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class DatasetRuleOutcome(_Contract):
+    """Result of applying a dataset-level validation rule."""
+
+    kept: list[NormalizedRecord]
+    dropped: list[NormalizedRecord] = Field(default_factory=list)
+    issues: list[ValidationIssue] = Field(default_factory=list)
+
+
 class ValidationOutcome(_Contract):
     """Output of the validator: accepted records plus the quality report."""
 
