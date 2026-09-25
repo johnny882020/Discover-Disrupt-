@@ -7,6 +7,7 @@ from sqlalchemy import Engine
 
 from dndlabs.core.config import Settings
 from dndlabs.core.protocols import Repositories
+from dndlabs.core.schemas import ExportFormat
 from dndlabs.ingestion.csv_connector import CsvConnector
 from dndlabs.ingestion.json_connector import JsonConnector
 from dndlabs.ingestion.pubchem import PubChemConnector, build_pubchem_client
@@ -43,13 +44,16 @@ class Container:
 
 
 def build_container(
-    settings: Settings, pubchem_transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    pubchem_transport: httpx.BaseTransport | None = None,
+    export_format: ExportFormat = ExportFormat.CSV,
 ) -> Container:
     """Build all services from settings.
 
     Args:
         settings: Application settings.
         pubchem_transport: Optional HTTP transport override (tests, recording).
+        export_format: Format of files exported after each run.
 
     Returns:
         The wired container.
@@ -80,6 +84,7 @@ def build_container(
         repositories=repositories,
         exporter=exporter,
         export_dir=settings.export_dir,
+        export_format=export_format,
     )
     return Container(
         settings=settings,

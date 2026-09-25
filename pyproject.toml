@@ -73,7 +73,7 @@ markers = [
 ]
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.coverage.run]

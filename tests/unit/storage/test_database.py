@@ -36,3 +36,16 @@ def test_session_rolls_back_on_error() -> None:
 def test_non_sqlite_engine_is_lazy() -> None:
     engine = create_db_engine("postgresql+psycopg://u:p@localhost:1/db")
     assert engine.dialect.name == "postgresql"
+
+
+def test_migrations_adopt_schema_created_without_alembic(tmp_path: Path) -> None:
+    from dndlabs.storage.database import create_schema
+
+    url = f"sqlite:///{tmp_path / 'adopt.db'}"
+    engine = create_db_engine(url)
+    create_schema(engine)
+    engine.dispose()
+    run_migrations(url)
+    engine = create_db_engine(url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0001"

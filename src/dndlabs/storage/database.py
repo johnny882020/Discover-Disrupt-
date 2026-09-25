@@ -6,7 +6,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -68,9 +68,22 @@ def run_migrations(url: str) -> None:
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     try:
+        if _created_without_alembic(url):
+            # Tables made by create_schema() match revision 0001; adopt them.
+            command.stamp(config, "0001")
         command.upgrade(config, "head")
     except SQLAlchemyError as exc:
         raise StorageError(f"migration failed: {exc}") from exc
+
+
+def _created_without_alembic(url: str) -> bool:
+    """Return True if the schema exists but Alembic has never been run on it."""
+    engine = create_db_engine(url)
+    try:
+        tables = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+    return "pipeline_runs" in tables and "alembic_version" not in tables
 
 
 class SessionFactory:
