@@ -6,4 +6,6 @@
 .pytest_cache
 *.db
 exports
-tests
+tests/unit
+tests/integration
+tests/*.py

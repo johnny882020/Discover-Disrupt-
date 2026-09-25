@@ -8,6 +8,7 @@ datasets, each shipped with a data-quality report.
 
 [![CI](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml/badge.svg)](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/johnny882020/Discover-Disrupt-)
 
 ## Features
 
@@ -38,6 +39,12 @@ curl localhost:8000/pipelines/runs/<run_id>                 # status and dataset
 curl localhost:8000/datasets/<dataset_id>                   # normalized records
 curl localhost:8000/datasets/<dataset_id>/quality-report    # data-quality report
 ```
+
+### Render
+
+To deploy the API and a managed PostgreSQL database, use the **Deploy to
+Render** button above. It reads the Blueprint in `render.yaml`. See
+[docs/deployment.md](docs/deployment.md).
 
 ### Local
 
@@ -96,7 +103,9 @@ Run `dnd-pipeline <command> --help` for all options.
 | `GET` | `/datasets/{id}/quality-report` | Quality report |
 | `GET` | `/datasets/{id}/export?format=csv\|jsonl` | Download dataset |
 
-See [docs/api.md](docs/api.md) for request and response details.
+See [docs/api.md](docs/api.md) for request and response details. The sample
+files are built into the Docker image at `/app/samples/`, so a CSV run can use
+`"path": "/app/samples/lab_export_malformed.csv"`.
 
 ## Architecture
 

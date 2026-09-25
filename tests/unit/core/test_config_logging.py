@@ -40,3 +40,16 @@ def test_configure_logging(json_output: bool) -> None:
     assert logging.getLogger().level == logging.DEBUG
     assert get_logger("dndlabs.test").name == "dndlabs.test"
     configure_logging("INFO")
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("postgres://u:p@h:5432/db", "postgresql+psycopg://u:p@h:5432/db"),
+        ("postgresql://u:p@h/db", "postgresql+psycopg://u:p@h/db"),
+        ("postgresql+psycopg://u:p@h/db", "postgresql+psycopg://u:p@h/db"),
+        ("sqlite:///x.db", "sqlite:///x.db"),
+    ],
+)
+def test_database_url_uses_psycopg_driver(given: str, expected: str) -> None:
+    assert Settings(database_url=given).database_url == expected

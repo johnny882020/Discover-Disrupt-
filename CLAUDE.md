@@ -15,6 +15,8 @@ uvicorn dndlabs.api.app:create_app --factory --reload
 docker compose up --build
 ```
 
+For deployment (Render Blueprint in `render.yaml`), see [docs/deployment.md](docs/deployment.md).
+
 ## Layering
 
 - `core/` holds contracts, protocols, config, logging and exceptions. It imports nothing internal.

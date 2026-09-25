@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://localhost:8000`. The OpenAPI schema is at `/openapi.json`
+Base URL: `http://localhost:8000` locally, or `https://<service>.onrender.com` on Render. The OpenAPI schema is at `/openapi.json`
 and interactive docs at `/docs`. The API has no authentication yet.
 
 Schemas are defined in [`dndlabs.core.schemas`](../src/dndlabs/core/schemas.py).
@@ -27,7 +27,7 @@ Starts a pipeline run in the background and returns immediately.
 {"source": "csv", "path": "/app/samples/lab_export_malformed.csv"}
 ```
 
-In Docker, `tests/fixtures/` is mounted at `/app/samples/`.
+The Docker image (local and Render) includes `tests/fixtures/` at `/app/samples/`.
 
 **Responses:** `202` returns a `PipelineRun`; `422` means the spec is invalid.
 

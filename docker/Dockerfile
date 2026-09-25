@@ -14,10 +14,13 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install .
 
+COPY tests/fixtures /app/samples
+
 RUN useradd --create-home appuser && mkdir -p /app/exports && chown appuser /app/exports
 USER appuser
 
 EXPOSE 8000
 COPY --chown=appuser docker/entrypoint.sh /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["uvicorn", "dndlabs.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+# Hosting platforms such as Render inject $PORT; default to 8000 locally.
+CMD ["sh", "-c", "exec uvicorn dndlabs.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
