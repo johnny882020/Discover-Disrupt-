@@ -65,14 +65,19 @@ IDs are UUID4 strings. Timestamps are timezone-aware UTC.
 ```python
 class Connector(Protocol):
     source: SourceType
+
     def fetch(self, spec: SourceSpec) -> list[RawRecord]: ...
+
 
 class ValidationRule(Protocol):
     name: str
+
     def apply(self, raw: RawRecord, record: NormalizedRecord) -> RuleOutcome: ...
+
 
 class DatasetRule(Protocol):
     name: str
+
     def apply(self, records: Sequence[NormalizedRecord]) -> DatasetRuleOutcome: ...
 ```
 
