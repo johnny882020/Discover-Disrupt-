@@ -1,79 +1,53 @@
-# D&D Labs — Discover & Disrupt
+# D&D Labs
 
-AI-native data infrastructure for drug discovery. D&D Labs ingests fragmented
-chemical and biological data (public databases, lab-instrument/ELN exports,
-internal data-lake dumps), validates and normalizes it, and serves it back as
-**standardized, model-ready datasets**, each with a data-quality report.
+**Data infrastructure for AI-driven drug discovery.**
 
-This repository is the MVP: PubChem, CSV and JSON connectors → validation and
-normalization → PostgreSQL/SQLite storage → CSV/JSONL export, available through
-a CLI (`dnd-pipeline`) and a REST API (FastAPI).
+D&D Labs turns fragmented chemical data (public databases, lab-instrument
+exports, internal data lakes) into standardized, validated, model-ready
+datasets, each shipped with a data-quality report.
 
-## Architecture
+[![CI](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml/badge.svg)](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 
-```
- api/ (FastAPI)      cli/ (Typer)            delivery: thin, no SQL
-        └──────┬──────────┘
-          pipeline/                          orchestrator, exporter, composition root
-   ┌───────────┼────────────┐
-ingestion/  validation/   storage/           each imports only from core/
-   └───────────┼────────────┘
-            core/                            config, logging, exceptions,
-                                             Pydantic contracts, protocols
-```
+## Features
 
-One run: `SourceSpec → Connector.fetch → RawRecord[] → Validator → NormalizedRecord[] + QualityReport → repositories → export`.
+| Stage | What it does |
+|---|---|
+| **Ingest** | PubChem PUG REST (by CID or name), CSV lab/ELN exports, generic JSON uploads |
+| **Validate** | Required fields, RDKit structure checks (SMILES/InChI), duplicate detection by InChIKey |
+| **Normalize** | Canonical SMILES, InChI/InChIKey, formula, activity values converted to nM |
+| **Store** | PostgreSQL (Docker) or SQLite, with Alembic migrations and raw-record lineage |
+| **Serve** | REST API, CLI, and CSV/JSONL export with a fixed schema |
 
-* **Ingestion**: PubChem PUG REST (by CID, batched, or by name, with retry and backoff), CSV lab exports (delimiter sniffing, header aliases), and generic JSON uploads. ChEMBL, UniProt and PDB are documented stubs.
-* **Validation**: schema checks; RDKit compound-identity checks (valid SMILES/InChI, SMILES↔InChI agreement, canonical SMILES, InChIKey, formula); concentrations normalized to **nM**; duplicate detection by InChIKey. Bad records become issues in the report instead of crashing the run.
-* **Storage**: SQLAlchemy 2.0 plus Alembic, using the repository pattern. Tables hold runs, raw records (for lineage), datasets, normalized records and quality reports.
+## Quickstart
 
-Full contracts and DB schema: [`docs/architecture.md`](docs/architecture.md). API reference: [`docs/api.md`](docs/api.md).
-
-## 5-minute quickstart
-
-### Option A: Docker (API + Postgres)
+### Docker
 
 ```bash
-docker compose up --build            # migrates the DB, then serves on :8000
+docker compose up --build
 ```
 
-In a second terminal:
+The API starts on <http://localhost:8000> (interactive docs at `/docs`).
 
 ```bash
-# Trigger a PubChem run via the API
-curl -s -X POST localhost:8000/pipelines/run \
+curl -X POST localhost:8000/pipelines/run \
   -H 'content-type: application/json' \
   -d '{"source": "pubchem", "identifiers": ["2244", "3672", "5090"]}'
-# -> {"id": "<run_id>", "status": "pending", ...}
 
-curl -s localhost:8000/pipelines/runs/<run_id>          # -> status, dataset_id
-curl -s localhost:8000/datasets/<dataset_id>            # normalized records
-curl -s localhost:8000/datasets/<dataset_id>/quality-report
-curl -s "localhost:8000/datasets/<dataset_id>/export?format=csv"
-
-# A messy lab export (fixtures are mounted at /app/samples)
-curl -s -X POST localhost:8000/pipelines/run -H 'content-type: application/json' \
-  -d '{"source": "csv", "path": "/app/samples/lab_export_malformed.csv"}'
-
-# The CLI works inside the container too
-docker compose exec api dnd-pipeline run --source pubchem --ids 2244,3672,5090
+curl localhost:8000/pipelines/runs/<run_id>                 # status and dataset_id
+curl localhost:8000/datasets/<dataset_id>                   # normalized records
+curl localhost:8000/datasets/<dataset_id>/quality-report    # data-quality report
 ```
 
-Swagger UI: <http://localhost:8000/docs>.
-
-### Option B: Local (SQLite, no Docker)
+### Local
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-
 dnd-pipeline run --source pubchem --ids 2244,3672,5090
 ```
 
-Output (JSON logs go to stderr, and the summary goes to stdout):
-
-```
+```text
 Run 5f0c…
   status   succeeded
   source   pubchem
@@ -90,61 +64,89 @@ Quality report
   pass rate          100.0%
 ```
 
-To see validation at work:
+To see validation catch bad data, run the bundled malformed lab export:
 
 ```bash
 dnd-pipeline run --source csv --path tests/fixtures/lab_export_malformed.csv
-# 12 records -> 5 accepted, 6 rejected (bad SMILES, unknown unit, non-numeric/negative
-# value, missing structure, missing unit), 1 duplicate (same InChIKey, different SMILES)
-
-dnd-pipeline datasets                         # list datasets
-dnd-pipeline report <dataset_id>              # full quality report (--json for raw)
-dnd-pipeline show <dataset_id> --limit 5      # records as JSON lines
-dnd-pipeline export <dataset_id> --format jsonl --output-dir out/
-dnd-pipeline status <run_id>
-dnd-pipeline run --source pubchem --names aspirin,caffeine
-dnd-pipeline run --source json --path tests/fixtures/data_lake_upload.json
-
-uvicorn dndlabs.api.app:create_app --factory --reload   # the API, locally
-python scripts/seed_sample_data.py                      # load all sample datasets offline
+# 12 records → 5 accepted, 6 rejected, 1 duplicate
 ```
+
+## CLI
+
+| Command | Description |
+|---|---|
+| `dnd-pipeline run --source {pubchem,csv,json} …` | Ingest, validate, store and export a dataset |
+| `dnd-pipeline status <run_id>` | Show run status |
+| `dnd-pipeline datasets` | List datasets |
+| `dnd-pipeline show <dataset_id>` | Print records as JSON lines |
+| `dnd-pipeline report <dataset_id> [--json]` | Print the quality report |
+| `dnd-pipeline export <dataset_id> --format {csv,jsonl}` | Write the dataset to a file |
+| `dnd-pipeline init-db` | Apply database migrations |
+
+Run `dnd-pipeline <command> --help` for all options.
+
+## API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/pipelines/run` | Start a run (returns `202`) |
+| `GET` | `/pipelines/runs/{run_id}` | Run status |
+| `GET` | `/datasets` | List datasets |
+| `GET` | `/datasets/{id}` | Dataset with records |
+| `GET` | `/datasets/{id}/quality-report` | Quality report |
+| `GET` | `/datasets/{id}/export?format=csv\|jsonl` | Download dataset |
+
+See [docs/api.md](docs/api.md) for request and response details.
+
+## Architecture
+
+```text
+   api/          cli/          delivery
+      └─── pipeline/ ───┘      orchestration, export
+ingestion/  validation/  storage/
+              core/            contracts, config, logging, errors
+```
+
+Implementation modules depend only on `core/`, which holds the shared Pydantic
+contracts and protocols. See [docs/architecture.md](docs/architecture.md).
 
 ## Configuration
 
-All settings are environment variables (or a `.env` file; see `.env.example`):
+Settings are read from `DNDLABS_*` environment variables or a `.env` file
+(see [.env.example](.env.example)).
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `DNDLABS_DATABASE_URL` | `sqlite:///./dndlabs.db` | SQLAlchemy URL (`postgresql+psycopg://…` in Docker) |
-| `DNDLABS_EXPORT_DIR` | `./exports` | Where run exports are written |
-| `DNDLABS_LOG_LEVEL` / `DNDLABS_LOG_JSON` | `INFO` / `true` | Structured logging |
-| `DNDLABS_PUBCHEM_BASE_URL` | `https://pubchem.ncbi.nlm.nih.gov/rest/pug` | PUG REST endpoint |
-| `DNDLABS_PUBCHEM_TIMEOUT_SECONDS` | `30` | Per-request timeout |
-| `DNDLABS_PUBCHEM_BATCH_SIZE` | `100` | CIDs per request |
-| `DNDLABS_PUBCHEM_MAX_RETRIES` / `DNDLABS_PUBCHEM_BACKOFF_SECONDS` | `3` / `0.5` | Retry policy |
-| `DNDLABS_AUTO_CREATE_SCHEMA` | `true` | Create tables on startup (dev); Docker uses Alembic (`dnd-pipeline init-db`) |
+| Variable | Default |
+|---|---|
+| `DNDLABS_DATABASE_URL` | `sqlite:///./dndlabs.db` |
+| `DNDLABS_EXPORT_DIR` | `./exports` |
+| `DNDLABS_LOG_LEVEL` | `INFO` |
+| `DNDLABS_LOG_JSON` | `true` |
+| `DNDLABS_PUBCHEM_BASE_URL` | `https://pubchem.ncbi.nlm.nih.gov/rest/pug` |
+| `DNDLABS_PUBCHEM_TIMEOUT_SECONDS` | `30` |
+| `DNDLABS_PUBCHEM_BATCH_SIZE` | `100` |
+| `DNDLABS_PUBCHEM_MAX_RETRIES` | `3` |
+| `DNDLABS_PUBCHEM_BACKOFF_SECONDS` | `0.5` |
+| `DNDLABS_AUTO_CREATE_SCHEMA` | `true` |
 
 ## Development
 
 ```bash
-pytest --cov=dndlabs              # unit and integration tests (PubChem is mocked)
-DNDLABS_LIVE_TESTS=1 pytest -m live   # opt-in checks against live PubChem
+pytest --cov=dndlabs                   # full suite (PubChem mocked)
+DNDLABS_LIVE_TESTS=1 pytest -m live    # against live PubChem
 ruff check . && ruff format --check .
-mypy src/                         # strict
-python scripts/generate_synthetic_lab_export.py --rows 500 --out big.csv
-python scripts/record_pubchem_fixture.py   # re-record PubChem fixtures from the live API
+mypy src/
 ```
 
-Coding standards and layering rules are in [`CLAUDE.md`](CLAUDE.md).
+Helper scripts live in `scripts/`:
 
-```
-src/dndlabs/{core,ingestion,validation,storage,pipeline,api,cli}
-tests/{unit (mirrors src), integration, fixtures}
-scripts/  docker/  docs/
-```
+- `seed_sample_data.py`: load the sample datasets
+- `generate_synthetic_lab_export.py`: create test CSVs with injected defects
+- `record_pubchem_fixture.py`: refresh the PubChem test fixtures
 
-## MVP limitations
+Contributor guidelines are in [CLAUDE.md](CLAUDE.md).
 
-* No auth, multi-tenancy or UI. Runs execute in-process (FastAPI background tasks), not on a job queue.
-* CSV/JSON `path`s are read from the server's filesystem.
-* ChEMBL, UniProt and PDB connectors are stubs (`ingestion/registry.py`).
+## Roadmap
+
+- ChEMBL, UniProt and PDB connectors (currently stubs)
+- Authentication and multi-tenancy
+- A dedicated job queue in place of in-process background tasks

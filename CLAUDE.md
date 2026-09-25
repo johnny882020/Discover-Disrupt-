@@ -1,38 +1,35 @@
-# CLAUDE.md — D&D Labs
+# Contributor Guide
 
-AI-native data infrastructure for drug discovery. Contracts and module
-boundaries are frozen in `docs/architecture.md`; read it before changing code.
+D&D Labs is data infrastructure for drug discovery. Read
+[docs/architecture.md](docs/architecture.md) before changing code.
 
 ## Commands
 
 ```bash
-pip install -e ".[dev]"          # install
-pytest --cov=dndlabs             # full test suite with coverage
-ruff check . && ruff format --check .
-mypy src/                        # strict
-dnd-pipeline --help              # CLI
-uvicorn dndlabs.api.app:create_app --factory --reload   # API
-docker compose up --build        # API + Postgres
+pip install -e ".[dev]"
+pytest --cov=dndlabs                      # tests and coverage
+ruff check . && ruff format --check .     # lint and format
+mypy src/                                 # strict type-check
+DNDLABS_LIVE_TESTS=1 pytest -m live       # live PubChem (opt-in)
+uvicorn dndlabs.api.app:create_app --factory --reload
+docker compose up --build
 ```
 
-Live PubChem tests are opt-in: `DNDLABS_LIVE_TESTS=1 pytest -m live`.
+## Layering
 
-## Layering (enforced by review)
+- `core/` holds contracts, protocols, config, logging and exceptions. It imports nothing internal.
+- `ingestion/`, `validation/` and `storage/` import only from `core/`.
+- `pipeline/` orchestrates the run. `pipeline/factory.py` is the only place concrete classes are wired together.
+- `api/` and `cli/` are thin layers over `pipeline/` and the `core` protocols. They never import SQLAlchemy.
 
-- `core/` — config, logging, exceptions, Pydantic contracts, protocols. Depends on nothing internal.
-- `ingestion/`, `validation/`, `storage/` — import **only** from `core/`.
-- `pipeline/` — orchestrator, exporter, and the composition root (`pipeline/factory.py`).
-- `api/`, `cli/` — thin delivery layers over `pipeline/` services and `core` protocols. Never import SQLAlchemy.
+## Standards
 
-## Coding standards (non-negotiable)
-
-- Type hints on every function/method signature; `mypy --strict` passes on `src/`.
-- Every module, class, and public function has a Google-style docstring.
-- All boundaries (API requests/responses, connector outputs, DB rows) are Pydantic models from `core.schemas`; no raw dicts crossing a module boundary.
-- Repository pattern for all DB access; SQLAlchemy sessions never leave `storage/`.
-- Raise from the `DndLabsError` hierarchy (`core/exceptions.py`); never a bare `except:`; bad records become `ValidationIssue`s, not exceptions.
-- Structured logging via `dndlabs.core.logging.get_logger` — no `print()` (the CLI uses `typer.echo` for user output).
-- Config only via `dndlabs.core.config.Settings` (`DNDLABS_*` env vars); no hardcoded values or secrets.
-- Small, single-responsibility functions; composition over inheritance.
-- Every module ships with tests in the same commit; `tests/unit/` mirrors `src/dndlabs/` 1:1.
-- Contract changes (`core/schemas.py`, `core/protocols.py`, DB schema) must update `docs/architecture.md` and be called out explicitly.
+- **Types:** annotate every signature; `mypy --strict` must pass on `src/`.
+- **Docs:** Google-style docstrings on every module, class and public function.
+- **Boundaries:** values crossing modules, the API or the database are Pydantic models from `core.schemas`, never raw dicts.
+- **Data access:** only through repositories; SQLAlchemy sessions stay inside `storage/`.
+- **Errors:** raise subclasses of `DndLabsError`; no bare `except:`. Report a bad record as a `ValidationIssue`, not an exception.
+- **Logging:** use `core.logging.get_logger`, never `print()`. The CLI writes user output with `typer.echo`.
+- **Config:** use `core.config.Settings` (`DNDLABS_*` env vars). Don't hardcode values or commit secrets.
+- **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/`.
+- **Contracts:** changes to `core/schemas.py`, `core/protocols.py` or the DB schema must update `docs/architecture.md`, and DB changes need a new Alembic revision.
