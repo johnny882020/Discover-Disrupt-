@@ -1,0 +1,61 @@
+# Deployment
+
+## Render (free tier)
+
+`render.yaml` provisions three resources:
+
+| Resource | Type | Notes |
+|---|---|---|
+| `dndlabs-api` | Web service (Docker) | `docker/Dockerfile.api`; health check `/health`; `DNDLABS_ADMIN_BOOTSTRAP_SECRET` auto-generated; `DNDLABS_NVIDIA_NIM_API_KEY` left unset (`sync: false`) — set it manually in the dashboard when you have one |
+| `dndlabs-web` | Static Site | Builds `web/` with Vite; no cold start (static, CDN-backed) |
+| `dndlabs-db` | PostgreSQL | Free tier expires after 30 days |
+
+### Deploy
+
+1. In the Render Dashboard: **New → Blueprint**, connect this repo, pick the branch.
+2. **Apply.** The API's first build takes a few minutes (mostly RDKit).
+3. **Retrieve the admin secret** Render generated: API service → Environment
+   → `DNDLABS_ADMIN_BOOTSTRAP_SECRET`.
+4. **Bootstrap your first org:**
+   ```bash
+   curl -X POST https://dndlabs-api.onrender.com/api/v1/admin/orgs \
+     -H "X-Admin-Secret: <the generated secret>" \
+     -H "content-type: application/json" -d '{"name": "Your Org"}'
+   # -> {"raw_key": "ddl_live_...", ...}  — save this now, it is shown once
+   ```
+5. Open `https://dndlabs-web.onrender.com`, enter the key, and use the app.
+
+### Configuration
+
+| Variable | Where | Notes |
+|---|---|---|
+| `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment stage runs but marks every record `skipped_no_key`; see `docs/nvidia-nim.md` |
+| `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL for CORS |
+| `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build, so changing this requires a rebuild, not just a restart |
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `401` on every request | Missing/wrong `X-API-Key`, or the org's key was revoked — bootstrap a new org or issue a new key |
+| Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set — see `docs/nvidia-nim.md` for the one unverified detail (hosted base URL) to confirm first |
+| CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
+| First request slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site frontend never sleeps. |
+| Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
+
+## Docker Compose (local)
+
+```bash
+docker compose up --build
+```
+
+Starts Postgres, the API (`localhost:8000`, migrations applied automatically
+via `docker/entrypoint.sh`), and the frontend dev server (`localhost:5173`).
+
+## CI
+
+`.github/workflows/ci.yml` runs two parallel jobs — `backend` (ruff, mypy
+`--strict`, `pytest --cov`) and `frontend` (eslint, `tsc --noEmit`, vitest,
+`vite build`) — on every push and PR. `.github/workflows/smoke.yml` is a
+manual `workflow_dispatch` that runs `scripts/smoke_test.py` against a
+deployed URL, given the admin secret.
