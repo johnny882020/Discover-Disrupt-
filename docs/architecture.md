@@ -127,8 +127,11 @@ Record rules run in a fixed order; each receives the `NormalizedRecord` produced
 so far and returns an updated copy plus issues:
 
 1. `schema` — required identifiers present, numeric fields parse.
-2. `compound_identity` — SMILES/InChI parse with RDKit, canonicalize, derive
-   InChIKey, flag SMILES↔InChI and claimed-vs-computed InChIKey mismatches.
+2. `compound_identity` — SMILES/InChI parse with RDKit (via the typed wrapper
+   `validation/chem.py`), canonicalize, derive InChIKey. Unparsable structures
+   and SMILES↔InChI disagreement are **errors**; a claimed InChIKey or formula
+   that disagrees with the structure is a **warning** (computed value wins).
+   Missing formula / molecular weight are filled in from the structure.
 3. `unit_normalization` — activity value + unit → nM.
 
 Then dataset rules: `duplicates` (by `record_key`, first occurrence wins,
