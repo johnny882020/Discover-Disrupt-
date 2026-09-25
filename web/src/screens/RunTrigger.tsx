@@ -1,11 +1,11 @@
 /** RunTrigger: form to kick off a new pipeline run against any source. */
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import type { SourceType } from "../api/types";
 import { Button } from "../design-system/Button";
 import { Card } from "../design-system/Card";
-import { useTriggerRun } from "../hooks/useRunStatus";
+import { useRun, useTriggerRun } from "../hooks/useRunStatus";
 
 const SOURCES: SourceType[] = ["pubchem", "chembl", "csv", "json"];
 
@@ -19,6 +19,23 @@ export function RunTrigger(): React.JSX.Element {
   const [jsonPath, setJsonPath] = useState("");
   const [chemblTarget, setChemblTarget] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  // The POST only returns the *submitted* run (status pending/running,
+  // dataset_id still null) — the pipeline finishes in the background.
+  // Poll the run's own status until it's terminal before navigating.
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
+  const pendingRun = useRun(pendingRunId ?? undefined);
+
+  useEffect(() => {
+    if (!pendingRun.data) {
+      return;
+    }
+    if (pendingRun.data.status === "succeeded") {
+      navigate(`/datasets/${pendingRun.data.dataset_id ?? ""}`);
+    } else if (pendingRun.data.status === "failed") {
+      setFormError(pendingRun.data.error ?? "The run failed.");
+      setPendingRunId(null);
+    }
+  }, [pendingRun.data, navigate]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -38,11 +55,13 @@ export function RunTrigger(): React.JSX.Element {
         json_path: source === "json" ? jsonPath || undefined : undefined,
         chembl_target: source === "chembl" ? chemblTarget || undefined : undefined,
       });
-      navigate(`/datasets/${run.dataset_id ?? ""}`);
+      setPendingRunId(run.id);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "Could not start the run. Please try again.");
     }
   }
+
+  const isWaiting = pendingRunId !== null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -127,8 +146,8 @@ export function RunTrigger(): React.JSX.Element {
             </p>
           ) : null}
 
-          <Button type="submit" disabled={triggerRun.isPending}>
-            {triggerRun.isPending ? "Starting run…" : "Start run"}
+          <Button type="submit" disabled={triggerRun.isPending || isWaiting}>
+            {triggerRun.isPending || isWaiting ? "Running…" : "Start run"}
           </Button>
         </form>
       </Card>
