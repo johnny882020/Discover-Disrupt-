@@ -1,0 +1,6 @@
+{
+  "records": [
+    {"id": "DL-1", "compound_name": "Aspirin", "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O", "value": 3.2, "unit": "uM", "assay_type": "IC50", "target": "COX-2"},
+    {"id": "DL-2", "compound_name": "No structure", "value": 5, "unit": "nM"}
+  ]
+}
