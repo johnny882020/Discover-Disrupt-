@@ -6,9 +6,8 @@ from dndlabs.core.exceptions import ConnectorNotFoundError
 from dndlabs.core.protocols import Connector
 from dndlabs.core.schemas import SourceType
 
-#: Sources on the roadmap but intentionally not implemented in the MVP.
+#: Sources on the roadmap but intentionally not implemented yet.
 PLANNED_SOURCES: dict[str, str] = {
-    "chembl": "ChEMBL bioactivity (REST API) - planned",
     "uniprot": "UniProt protein targets (REST API) - planned",
     "pdb": "RCSB PDB structures (Search/Data API) - planned",
 }

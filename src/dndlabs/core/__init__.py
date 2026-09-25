@@ -1,1 +1,1 @@
-"""Stable core shared by every layer: config, logging, exceptions, contracts."""
+"""Stable core shared by every layer: config, logging, exceptions, contracts, protocols."""

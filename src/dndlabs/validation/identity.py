@@ -12,9 +12,9 @@ _Parser = Callable[[str], Molecule | None]
 class CompoundIdentityRule:
     """Validates SMILES/InChI and derives canonical identifiers.
 
-    * Invalid SMILES or InChI → error.
-    * SMILES and InChI describing different compounds → error.
-    * Claimed InChIKey or formula disagreeing with the structure → warning
+    * Invalid SMILES or InChI -> error.
+    * SMILES and InChI describing different compounds -> error.
+    * Claimed InChIKey or formula disagreeing with the structure -> warning
       (the computed value wins).
     * Missing formula / molecular weight are filled in from the structure.
 

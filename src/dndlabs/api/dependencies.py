@@ -1,51 +1,17 @@
 """Dependency-injection seams for the API."""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Annotated
 
-from fastapi import Request
+from fastapi import Depends, Request
 
+from dndlabs.auth.dependencies import get_current_org
+from dndlabs.auth.service import AuthService
+from dndlabs.core.config import Settings
 from dndlabs.core.protocols import Repositories
-from dndlabs.core.schemas import DatasetWithRecords, ExportFormat, PipelineRun, SourceSpec
-
-
-class PipelineRunner(Protocol):
-    """The subset of the pipeline service the API needs."""
-
-    def submit(self, spec: SourceSpec) -> PipelineRun:
-        """Register a pending run.
-
-        Args:
-            spec: What to ingest.
-
-        Returns:
-            The pending run.
-        """
-        ...
-
-    def execute_in_background(self, run_id: str) -> None:
-        """Execute a run without raising.
-
-        Args:
-            run_id: Run to execute.
-        """
-        ...
-
-
-class DatasetRenderer(Protocol):
-    """Serializes datasets for download."""
-
-    def render(self, dataset: DatasetWithRecords, fmt: ExportFormat) -> str:
-        """Render a dataset.
-
-        Args:
-            dataset: Dataset to render.
-            fmt: Output format.
-
-        Returns:
-            Serialized dataset.
-        """
-        ...
+from dndlabs.core.schemas import OrgContext
+from dndlabs.pipeline.exporter import DatasetExporter
+from dndlabs.pipeline.orchestrator import PipelineService
 
 
 @dataclass(frozen=True)
@@ -54,13 +20,17 @@ class ApiServices:
 
     Attributes:
         repositories: Storage repositories.
-        runner: Pipeline runner.
-        renderer: Dataset renderer.
+        service: Pipeline service.
+        exporter: Dataset exporter.
+        auth: Auth service.
+        settings: Application settings.
     """
 
     repositories: Repositories
-    runner: PipelineRunner
-    renderer: DatasetRenderer
+    service: PipelineService
+    exporter: DatasetExporter
+    auth: AuthService
+    settings: Settings
 
 
 def get_services(request: Request) -> ApiServices:
@@ -74,3 +44,7 @@ def get_services(request: Request) -> ApiServices:
     """
     services: ApiServices = request.app.state.services
     return services
+
+
+Services = Annotated[ApiServices, Depends(get_services)]
+CurrentOrg = Annotated[OrgContext, Depends(get_current_org)]

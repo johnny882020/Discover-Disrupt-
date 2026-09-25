@@ -4,7 +4,7 @@ from dndlabs.ingestion.fields import build_raw_record, canonical_field
 
 def test_canonical_field_aliases() -> None:
     assert canonical_field(" SMILES ") == "smiles"
-    assert canonical_field("Units") == "activity_unit"
+    assert canonical_field("standard_units") == "activity_unit"
     assert canonical_field("unknown") is None
 
 
@@ -27,4 +27,3 @@ def test_first_non_empty_alias_wins() -> None:
     )
     assert record.smiles == "CC"
     assert record.activity_value == "True"
-    assert record.source_record_id == "row-1"

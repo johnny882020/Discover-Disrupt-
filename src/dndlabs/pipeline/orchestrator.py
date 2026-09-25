@@ -1,25 +1,24 @@
-"""Pipeline orchestrator: ingest -> validate -> store -> export."""
+"""Pipeline orchestrator: ingest -> validate -> filter/featurize -> enrich -> store."""
 
+import uuid
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Protocol
 
 from dndlabs.core.exceptions import DndLabsError, PipelineError
 from dndlabs.core.logging import get_logger
-from dndlabs.core.protocols import Connector, Repositories
+from dndlabs.core.protocols import Connector, EnrichmentClient, Featurizer, Repositories
 from dndlabs.core.schemas import (
     Dataset,
-    DatasetWithRecords,
-    ExportFormat,
     PipelineRun,
     RawRecord,
-    RunResult,
     RunStatus,
     SourceSpec,
     SourceType,
     ValidationOutcome,
+    new_id,
     utcnow,
 )
+from dndlabs.enrichment.service import EnrichmentService
 
 logger = get_logger(__name__)
 
@@ -42,11 +41,14 @@ class ConnectorProvider(Protocol):
 class RecordValidator(Protocol):
     """Validates a batch of raw records."""
 
-    def run(self, run_id: str, raws: Sequence[RawRecord]) -> ValidationOutcome:
+    def run(
+        self, run_id: uuid.UUID, dataset_id: uuid.UUID, raws: Sequence[RawRecord]
+    ) -> ValidationOutcome:
         """Validate records.
 
         Args:
             run_id: Owning run.
+            dataset_id: Dataset the accepted records will belong to.
             raws: Raw records.
 
         Returns:
@@ -55,34 +57,16 @@ class RecordValidator(Protocol):
         ...
 
 
-class Exporter(Protocol):
-    """Writes datasets to files."""
-
-    def write(self, dataset: DatasetWithRecords, fmt: ExportFormat, directory: Path) -> Path:
-        """Export a dataset.
-
-        Args:
-            dataset: Dataset to export.
-            fmt: Output format.
-            directory: Target directory.
-
-        Returns:
-            The written file.
-        """
-        ...
-
-
 class PipelineService:
-    """Runs pipelines and records their lifecycle in storage."""
+    """Runs pipelines and records their lifecycle in storage, scoped by organization."""
 
     def __init__(
         self,
         connectors: ConnectorProvider,
         validator: RecordValidator,
         repositories: Repositories,
-        exporter: Exporter | None = None,
-        export_dir: Path | None = None,
-        export_format: ExportFormat = ExportFormat.CSV,
+        featurizer: Featurizer | None = None,
+        enrichment_client: EnrichmentClient | None = None,
     ) -> None:
         """Wire the service.
 
@@ -90,128 +74,130 @@ class PipelineService:
             connectors: Connector lookup.
             validator: Record validator.
             repositories: Storage.
-            exporter: Exporter; export is skipped when ``None``.
-            export_dir: Directory for exported files.
-            export_format: Default export format.
+            featurizer: Feature extractor; the featurize stage is skipped if ``None``.
+            enrichment_client: Enrichment client; a null client is used if ``None``.
         """
         self._connectors = connectors
         self._validator = validator
         self._repos = repositories
-        self._exporter = exporter
-        self._export_dir = export_dir
-        self._export_format = export_format
+        self._featurizer = featurizer
+        self._enrichment = EnrichmentService(enrichment_client)
 
-    def submit(self, spec: SourceSpec) -> PipelineRun:
+    def enrichment_enabled(self) -> bool:
+        """Whether real NVIDIA enrichment calls will be made.
+
+        Returns:
+            True if a real (non-null) enrichment client is configured.
+        """
+        return self._enrichment.is_enabled()
+
+    def submit(self, org_id: uuid.UUID, spec: SourceSpec) -> PipelineRun:
         """Register a pending run without executing it.
 
         Args:
+            org_id: Owning organization.
             spec: What to ingest.
 
         Returns:
             The pending run.
         """
-        return self._repos.runs.create(PipelineRun(spec=spec))
+        return self._repos.runs.create(PipelineRun(org_id=org_id, spec=spec))
 
-    def run(self, spec: SourceSpec) -> RunResult:
-        """Submit and synchronously execute a run.
-
-        Args:
-            spec: What to ingest.
-
-        Returns:
-            The run result.
-
-        Raises:
-            PipelineError: If the run fails.
-        """
-        return self.execute(self.submit(spec).id)
-
-    def execute(self, run_id: str) -> RunResult:
+    async def execute(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
         """Execute a previously submitted run.
 
-        The run is marked ``running``, then ``succeeded`` or ``failed``; the
-        failure reason is stored on the run.
-
         Args:
+            org_id: Owning organization.
             run_id: Run to execute.
 
         Returns:
-            The run result.
+            The finished run.
 
         Raises:
             PipelineError: If any stage fails.
         """
         run = self._repos.runs.update(
-            self._repos.runs.get(run_id).model_copy(update={"status": RunStatus.RUNNING})
+            org_id,
+            self._repos.runs.get(org_id, run_id).model_copy(update={"status": RunStatus.RUNNING}),
         )
-        logger.info("run started", extra={"run_id": run.id, "source": run.spec.source.value})
+        logger.info("run started", extra={"run_id": str(run.id), "source": run.spec.source.value})
         try:
-            result = self._execute_stages(run)
+            finished = await self._execute_stages(org_id, run)
         except Exception as exc:  # every failure must be recorded on the run; re-raised below
-            self._mark_failed(run, exc)
+            self._mark_failed(org_id, run, exc)
             if isinstance(exc, PipelineError):
                 raise
             raise PipelineError(f"run {run.id} failed: {exc}") from exc
         logger.info(
-            "run succeeded",
-            extra={"run_id": run.id, "dataset_id": result.dataset.id},
+            "run succeeded", extra={"run_id": str(run.id), "dataset_id": str(finished.dataset_id)}
         )
-        return result
+        return finished
 
-    def execute_in_background(self, run_id: str) -> None:
+    async def execute_in_background(self, org_id: uuid.UUID, run_id: uuid.UUID) -> None:
         """Execute a run, logging instead of raising (for background tasks).
 
         Args:
+            org_id: Owning organization.
             run_id: Run to execute.
         """
         try:
-            self.execute(run_id)
+            await self.execute(org_id, run_id)
         except DndLabsError:
-            logger.exception("background run failed", extra={"run_id": run_id})
+            logger.exception("background run failed", extra={"run_id": str(run_id)})
 
-    def _execute_stages(self, run: PipelineRun) -> RunResult:
-        """Run ingest, validate, store and export for ``run``."""
-        raws = self._connectors.get(run.spec.source).fetch(run.spec)
-        self._repos.raw_records.add_many(run.id, raws)
-        outcome = self._validator.run(run.id, raws)
+    async def _execute_stages(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
+        """Run ingest, validate, featurize, enrich and store for ``run``."""
+        raws = []
+        async for raw in self._connectors.get(run.spec.source).fetch(run.spec):
+            raws.append(raw)
+
+        dataset_id = new_id()
+        outcome = self._validator.run(run.id, dataset_id, raws)
+
+        # Records must exist before feature_vectors/enrichment_results (FK).
         dataset = self._repos.datasets.create(
             Dataset(
+                id=dataset_id,
+                org_id=org_id,
                 run_id=run.id,
-                name=run.spec.dataset_name or f"{run.spec.source.value}-{run.id[:8]}",
+                name=run.spec.dataset_name or f"{run.spec.source.value}-{str(run.id)[:8]}",
                 source=run.spec.source,
                 record_count=len(outcome.accepted),
             ),
             outcome.accepted,
         )
-        report = self._repos.reports.save(
-            outcome.report.model_copy(update={"dataset_id": dataset.id})
-        )
-        export_path = self._export(DatasetWithRecords(dataset=dataset, records=outcome.accepted))
-        finished = self._repos.runs.update(
+        self._repos.reports.save(org_id, outcome.report)
+
+        if self._featurizer is not None:
+            vectors = [
+                self._featurizer.featurize(r) for r in outcome.accepted if r.canonical_smiles
+            ]
+            if vectors:
+                self._repos.features.save_many(org_id, vectors)
+
+        enrichment_results = await self._enrichment.enrich(outcome.accepted)
+        if enrichment_results:
+            self._repos.enrichments.save_many(org_id, enrichment_results)
+        return self._repos.runs.update(
+            org_id,
             run.model_copy(
                 update={
                     "status": RunStatus.SUCCEEDED,
                     "dataset_id": dataset.id,
                     "finished_at": utcnow(),
                 }
-            )
+            ),
         )
-        return RunResult(run=finished, dataset=dataset, report=report, export_path=export_path)
 
-    def _export(self, dataset: DatasetWithRecords) -> Path | None:
-        """Export the dataset if an exporter is configured."""
-        if self._exporter is None or self._export_dir is None:
-            return None
-        return self._exporter.write(dataset, self._export_format, self._export_dir)
-
-    def _mark_failed(self, run: PipelineRun, exc: Exception) -> None:
+    def _mark_failed(self, org_id: uuid.UUID, run: PipelineRun, exc: Exception) -> None:
         """Record a failure on the run, never masking the original error."""
-        logger.error("run failed", extra={"run_id": run.id, "error": str(exc)})
+        logger.error("run failed", extra={"run_id": str(run.id), "error": str(exc)})
         try:
             self._repos.runs.update(
+                org_id,
                 run.model_copy(
                     update={"status": RunStatus.FAILED, "error": str(exc), "finished_at": utcnow()}
-                )
+                ),
             )
         except DndLabsError:
-            logger.exception("could not record run failure", extra={"run_id": run.id})
+            logger.exception("could not record run failure", extra={"run_id": str(run.id)})

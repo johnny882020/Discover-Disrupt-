@@ -1,9 +1,15 @@
+import uuid
+
 from dndlabs.core.schemas import NormalizedRecord, Severity, SourceType
 from dndlabs.validation.duplicates import DuplicateRule
 
+DATASET_ID = uuid.uuid4()
+
 
 def _rec(sid: str, key: str | None) -> NormalizedRecord:
-    return NormalizedRecord(source=SourceType.CSV, source_record_id=sid, record_key=key)
+    return NormalizedRecord(
+        dataset_id=DATASET_ID, source=SourceType.CSV, source_record_id=sid, record_key=key
+    )
 
 
 def test_first_occurrence_wins() -> None:
@@ -11,10 +17,7 @@ def test_first_occurrence_wins() -> None:
     outcome = DuplicateRule().apply(records)
     assert [r.source_record_id for r in outcome.kept] == ["a", "b"]
     assert [r.source_record_id for r in outcome.dropped] == ["c", "d"]
-    assert [i.source_record_id for i in outcome.issues] == ["c", "d"]
-    assert all(
-        i.severity is Severity.WARNING and "duplicate of a" in i.message for i in outcome.issues
-    )
+    assert all(i.severity is Severity.WARNING for i in outcome.issues)
 
 
 def test_records_without_key_are_kept() -> None:

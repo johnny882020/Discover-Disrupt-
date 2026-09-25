@@ -16,11 +16,11 @@ class ServiceInfo(BaseModel):
 
 
 _STYLE = """
-:root { color-scheme: light dark; --fg: #1a1a1a; --muted: #5f6368; --bg: #fafafa;
-        --card: #fff; --line: #e3e3e3; --accent: #0b6bcb; --on-accent: #fff; }
+:root { color-scheme: light dark; --fg: #12151A; --muted: #5f6368; --bg: #FAF9F6;
+        --card: #fff; --line: #e3e3e3; --accent: #1D7A85; --on-accent: #fff; }
 @media (prefers-color-scheme: dark) {
-  :root { --fg: #e8e8e8; --muted: #a0a4a8; --bg: #111418; --card: #1a1f25;
-          --line: #2c333b; --accent: #5aa9ff; --on-accent: #0b1220; } }
+  :root { --fg: #FAF9F6; --muted: #a0a4a8; --bg: #12151A; --card: #1a1f25;
+          --line: #2c333b; --accent: #4FB3BF; --on-accent: #0b1220; } }
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.5 system-ui, -apple-system, sans-serif; color: var(--fg);
        background: var(--bg); }
@@ -78,7 +78,6 @@ def render_landing(info: ServiceInfo, description: str) -> str:
   <p class="lead">{escape(description)} Version {escape(info.version)}.</p>
   <div class="links">
     <a class="primary" href="{escape(info.docs)}">Interactive API docs</a>
-    <a href="/datasets">Datasets</a>
     <a href="{escape(info.health)}">Health</a>
     <a href="/openapi.json">OpenAPI schema</a>
   </div>
@@ -86,7 +85,7 @@ def render_landing(info: ServiceInfo, description: str) -> str:
 {rows}
   </table>
   <footer>This page is shown to browsers. API clients requesting JSON receive the same
-  information as JSON.</footer>
+  information as JSON. Every endpoint under /api/v1 requires an X-API-Key header.</footer>
 </main>
 </body>
 </html>

@@ -3,7 +3,7 @@
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from dndlabs.core.exceptions import DndLabsError, IngestionError, NotFoundError
+from dndlabs.core.exceptions import DndLabsError, IngestionError, InvalidApiKeyError, NotFoundError
 from dndlabs.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -12,6 +12,15 @@ logger = get_logger(__name__)
 async def _not_found(_: Request, exc: Exception) -> JSONResponse:
     """Return 404 for missing entities."""
     return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": str(exc)})
+
+
+async def _unauthorized(_: Request, exc: Exception) -> JSONResponse:
+    """Return 401 for missing/invalid/revoked API keys."""
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": str(exc)},
+        headers={"WWW-Authenticate": "ApiKey"},
+    )
 
 
 async def _bad_input(_: Request, exc: Exception) -> JSONResponse:
@@ -36,5 +45,6 @@ def register_error_handlers(app: FastAPI) -> None:
         app: The FastAPI application.
     """
     app.add_exception_handler(NotFoundError, _not_found)
+    app.add_exception_handler(InvalidApiKeyError, _unauthorized)
     app.add_exception_handler(IngestionError, _bad_input)
     app.add_exception_handler(DndLabsError, _internal)

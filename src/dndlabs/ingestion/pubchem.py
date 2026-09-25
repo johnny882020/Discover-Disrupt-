@@ -1,29 +1,19 @@
 """PubChem PUG REST connector."""
 
 import time
-from collections.abc import Callable, Iterator, Sequence
-from urllib.parse import quote
+from collections.abc import AsyncIterator, Callable, Sequence
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dndlabs.core.exceptions import IngestionError
 from dndlabs.core.logging import get_logger
-from dndlabs.core.schemas import IdentifierType, RawRecord, SourceSpec, SourceType
+from dndlabs.core.schemas import RawRecord, SourceSpec, SourceType
 
 logger = get_logger(__name__)
 
-#: Properties requested from PUG REST. ``SMILES``/``ConnectivitySMILES`` are the
-#: current names; responses using the legacy keys are still understood.
-PROPERTIES = (
-    "Title",
-    "MolecularFormula",
-    "MolecularWeight",
-    "SMILES",
-    "ConnectivitySMILES",
-    "InChI",
-    "InChIKey",
-)
+PROPERTIES = ("Title", "MolecularFormula", "MolecularWeight", "SMILES", "ConnectivitySMILES",
+              "InChI", "InChIKey")  # fmt: skip
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -85,14 +75,13 @@ class _PropertyResponse(BaseModel):
     PropertyTable: _PropertyTable
 
 
-def _chunks(items: Sequence[str], size: int) -> Iterator[Sequence[str]]:
-    """Yield successive ``size``-long slices of ``items``."""
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
+def _chunks(items: Sequence[str], size: int) -> list[Sequence[str]]:
+    """Split ``items`` into successive ``size``-long slices."""
+    return [items[start : start + size] for start in range(0, len(items), size)]
 
 
 class PubChemConnector:
-    """Fetches compound properties from PubChem by CID or by name.
+    """Fetches compound properties from PubChem by CID.
 
     Attributes:
         source: Always :attr:`SourceType.PUBCHEM`.
@@ -123,13 +112,13 @@ class PubChemConnector:
         self._backoff = backoff_seconds
         self._sleep = sleep
 
-    def fetch(self, spec: SourceSpec) -> list[RawRecord]:
-        """Fetch compounds listed in ``spec``.
+    async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
+        """Fetch compounds listed in ``spec`` by CID.
 
         Args:
             spec: A PubChem source spec.
 
-        Returns:
+        Yields:
             Raw records in PubChem response order.
 
         Raises:
@@ -138,41 +127,15 @@ class PubChemConnector:
         """
         if spec.source is not SourceType.PUBCHEM:
             raise IngestionError(f"PubChemConnector cannot fetch {spec.source.value!r}")
-        identifiers = list(dict.fromkeys(i.strip() for i in spec.identifiers if i.strip()))
-        if spec.identifier_type is IdentifierType.CID:
-            records = self._fetch_cids(identifiers)
-        else:
-            records = self._fetch_names(identifiers)
-        logger.info(
-            "pubchem fetch complete",
-            extra={"requested": len(identifiers), "received": len(records)},
-        )
-        return records
-
-    def _fetch_cids(self, cids: Sequence[str]) -> list[RawRecord]:
-        """Fetch CIDs in batches."""
-        records: list[RawRecord] = []
+        cids = list(dict.fromkeys(i.strip() for i in spec.identifiers if i.strip()))
         for batch in _chunks(cids, self._batch_size):
             path = f"/compound/cid/{','.join(batch)}/property/{','.join(PROPERTIES)}/JSON"
-            records.extend(self._get_properties(path, allow_not_found=False))
-        return records
+            for record in self._get_properties(path):
+                yield record
 
-    def _fetch_names(self, names: Sequence[str]) -> list[RawRecord]:
-        """Fetch names one request at a time (PUG REST resolves one name per call)."""
-        records: list[RawRecord] = []
-        for name in names:
-            path = f"/compound/name/{quote(name, safe='')}/property/{','.join(PROPERTIES)}/JSON"
-            found = self._get_properties(path, allow_not_found=True)
-            if not found:
-                logger.warning("pubchem name not found", extra={"compound_name": name})
-            records.extend(found)
-        return records
-
-    def _get_properties(self, path: str, allow_not_found: bool) -> list[RawRecord]:
+    def _get_properties(self, path: str) -> list[RawRecord]:
         """GET a property endpoint and parse the result."""
         response = self._request(path)
-        if response.status_code == 404 and allow_not_found:
-            return []
         if response.is_error:
             raise IngestionError(
                 f"PubChem request failed ({response.status_code}): {_fault_message(response)}"
@@ -234,6 +197,6 @@ def build_pubchem_client(
     return httpx.Client(
         base_url=base_url,
         timeout=timeout_seconds,
-        headers={"User-Agent": "dndlabs/0.1 (data-infrastructure MVP)"},
+        headers={"User-Agent": "dndlabs/0.1 (data-infrastructure platform)"},
         transport=transport,
     )

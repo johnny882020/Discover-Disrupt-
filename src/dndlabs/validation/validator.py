@@ -1,11 +1,13 @@
 """Runs validation rules over raw records and builds the quality report."""
 
+import uuid
 from collections import Counter
 from collections.abc import Sequence
 
 from dndlabs.core.logging import get_logger
-from dndlabs.core.protocols import DatasetRule, ValidationRule
+from dndlabs.core.protocols import ValidationRule
 from dndlabs.core.schemas import (
+    DatasetRuleOutcome,
     NormalizedRecord,
     QualityReport,
     RawRecord,
@@ -30,30 +32,24 @@ def default_record_rules() -> list[ValidationRule]:
     return [SchemaRule(), CompoundIdentityRule(), UnitNormalizationRule()]
 
 
-def default_dataset_rules() -> list[DatasetRule]:
-    """Return the dataset rules in order.
-
-    Returns:
-        Duplicate detection.
-    """
-    return [DuplicateRule()]
-
-
-def seed_record(raw: RawRecord) -> NormalizedRecord:
+def seed_record(raw: RawRecord, dataset_id: uuid.UUID) -> NormalizedRecord:
     """Create the initial normalized record that rules refine.
 
     Args:
         raw: The raw record.
+        dataset_id: Dataset the record will belong to (generated ahead of
+            storage, since validation runs before a Dataset row exists).
 
     Returns:
         A normalized record carrying the pass-through fields.
     """
     return NormalizedRecord(
+        dataset_id=dataset_id,
         source=raw.source,
         source_record_id=raw.source_record_id,
         name=raw.name,
         molecular_formula=raw.molecular_formula,
-        activity_type=raw.activity_type,
+        assay_type=raw.assay_type,
         target=raw.target,
     )
 
@@ -64,22 +60,27 @@ class Validator:
     def __init__(
         self,
         record_rules: Sequence[ValidationRule] | None = None,
-        dataset_rules: Sequence[DatasetRule] | None = None,
+        dataset_rules: Sequence[object] | None = None,
     ) -> None:
         """Configure the validator.
 
         Args:
             record_rules: Record rules; defaults to :func:`default_record_rules`.
-            dataset_rules: Dataset rules; defaults to :func:`default_dataset_rules`.
+            dataset_rules: Dataset rules; defaults to ``[DuplicateRule()]``.
         """
         self._record_rules = list(record_rules or default_record_rules())
-        self._dataset_rules = list(dataset_rules or default_dataset_rules())
+        self._dataset_rules = list(
+            dataset_rules if dataset_rules is not None else [DuplicateRule()]
+        )
 
-    def run(self, run_id: str, raws: Sequence[RawRecord]) -> ValidationOutcome:
+    def run(
+        self, run_id: uuid.UUID, dataset_id: uuid.UUID, raws: Sequence[RawRecord]
+    ) -> ValidationOutcome:
         """Validate and normalize a batch of raw records.
 
         Args:
             run_id: Run the records belong to (copied into the report).
+            dataset_id: Dataset the accepted records will belong to.
             raws: Raw records from a connector.
 
         Returns:
@@ -89,7 +90,7 @@ class Validator:
         candidates: list[NormalizedRecord] = []
         rejected = 0
         for raw in raws:
-            record, record_issues = self._apply_record_rules(raw)
+            record, record_issues = self._apply_record_rules(raw, dataset_id)
             issues.extend(record_issues)
             if any(i.severity is Severity.ERROR for i in record_issues):
                 rejected += 1
@@ -98,16 +99,18 @@ class Validator:
 
         duplicates = 0
         for rule in self._dataset_rules:
-            outcome = rule.apply(candidates)
+            outcome: DatasetRuleOutcome = rule.apply(candidates)  # type: ignore[attr-defined]
             candidates = outcome.kept
             duplicates += len(outcome.dropped)
             issues.extend(outcome.issues)
 
-        report = build_report(run_id, len(raws), len(candidates), rejected, duplicates, issues)
+        report = build_report(
+            run_id, dataset_id, len(raws), len(candidates), rejected, duplicates, issues
+        )
         logger.info(
             "validation complete",
             extra={
-                "run_id": run_id,
+                "run_id": str(run_id),
                 "total": report.total_records,
                 "accepted": report.accepted_records,
                 "rejected": report.rejected_records,
@@ -116,9 +119,11 @@ class Validator:
         )
         return ValidationOutcome(accepted=candidates, report=report)
 
-    def _apply_record_rules(self, raw: RawRecord) -> tuple[NormalizedRecord, list[ValidationIssue]]:
+    def _apply_record_rules(
+        self, raw: RawRecord, dataset_id: uuid.UUID
+    ) -> tuple[NormalizedRecord, list[ValidationIssue]]:
         """Run every record rule, threading the record through."""
-        record = seed_record(raw)
+        record = seed_record(raw, dataset_id)
         issues: list[ValidationIssue] = []
         for rule in self._record_rules:
             outcome = rule.apply(raw, record)
@@ -128,7 +133,8 @@ class Validator:
 
 
 def build_report(
-    run_id: str,
+    run_id: uuid.UUID,
+    dataset_id: uuid.UUID,
     total: int,
     accepted: int,
     rejected: int,
@@ -139,6 +145,7 @@ def build_report(
 
     Args:
         run_id: Run identifier.
+        dataset_id: Dataset identifier.
         total: Records received.
         accepted: Records in the final dataset.
         rejected: Records with at least one error.
@@ -151,6 +158,7 @@ def build_report(
     severities = Counter(i.severity for i in issues)
     return QualityReport(
         run_id=run_id,
+        dataset_id=dataset_id,
         total_records=total,
         accepted_records=accepted,
         rejected_records=rejected,

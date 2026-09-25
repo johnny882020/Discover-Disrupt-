@@ -1,14 +1,12 @@
-"""Seed the configured database with the bundled sample datasets.
+"""Bootstrap a demo organization and seed it with the sample datasets.
 
-Runs the pipeline over the recorded PubChem sample (no network needed), the
-malformed lab CSV, and the data-lake JSON upload in ``tests/fixtures``.
+Uses the bundled fixtures (no live network needed for CSV/JSON; PubChem
+and ChEMBL use recorded responses unless --live is passed).
 
 Usage:
-    python scripts/seed_sample_data.py            # uses DNDLABS_* settings
-    python scripts/seed_sample_data.py --live     # fetch the PubChem sample live
+    python scripts/seed_sample_data.py
 """
 
-import json
 from pathlib import Path
 from typing import Annotated
 
@@ -17,52 +15,51 @@ import typer
 
 from dndlabs.core.config import get_settings
 from dndlabs.core.logging import configure_logging, get_logger
-from dndlabs.core.schemas import SourceSpec, SourceType
+from dndlabs.core.schemas import Organization, SourceSpec, SourceType
 from dndlabs.pipeline.factory import build_container
 
 logger = get_logger("seed_sample_data")
 FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
 
-def _recorded_transport() -> httpx.MockTransport:
-    """Serve the recorded PubChem response for CID requests."""
-    body = (FIXTURES / "pubchem_properties_12.json").read_bytes()
-    return httpx.MockTransport(lambda _request: httpx.Response(200, content=body))
+def _recorded_pubchem() -> httpx.MockTransport:
+    body = (FIXTURES / "pubchem" / "properties_3.json").read_bytes()
+    return httpx.MockTransport(lambda _r: httpx.Response(200, content=body))
 
 
 def main(live: Annotated[bool, typer.Option(help="Call PubChem for real.")] = False) -> None:
-    """Run the sample pipelines and log the resulting dataset ids."""
+    """Seed a demo org with datasets from every source."""
     settings = get_settings()
     configure_logging(settings.log_level, json_output=False)
-    cids = [
-        str(p["CID"])
-        for p in json.loads((FIXTURES / "pubchem_properties_12.json").read_text())["PropertyTable"][
-            "Properties"
-        ]
-    ]
-    specs = [
-        SourceSpec(source=SourceType.PUBCHEM, identifiers=cids, dataset_name="pubchem-sample"),
-        SourceSpec(
-            source=SourceType.CSV,
-            path=str(FIXTURES / "lab_export_malformed.csv"),
-            dataset_name="lab-export-malformed",
-        ),
-        SourceSpec(
-            source=SourceType.JSON,
-            path=str(FIXTURES / "data_lake_upload.json"),
-            dataset_name="data-lake-upload",
-        ),
-    ]
-    container = build_container(settings, None if live else _recorded_transport())
+    container = build_container(settings, pubchem_transport=None if live else _recorded_pubchem())
     try:
+        org = container.repositories.organizations.create(Organization(name="Demo Org"))
+        key = container.auth.issue_key(org)
+        logger.info("created demo org %s with key %s", org.id, key.raw_key)
+        specs = [
+            SourceSpec(
+                source=SourceType.PUBCHEM,
+                identifiers=["2244", "3672", "2519"],
+                dataset_name="pubchem-sample",
+            ),
+            SourceSpec(
+                source=SourceType.CSV,
+                csv_path=str(FIXTURES / "lab_export_malformed.csv"),
+                dataset_name="lab-export",
+            ),
+            SourceSpec(
+                source=SourceType.JSON,
+                json_path=str(FIXTURES / "data_lake_upload.json"),
+                dataset_name="data-lake",
+            ),
+        ]
         for spec in specs:
-            result = container.service.run(spec)
+            import asyncio
+
+            run = container.service.submit(org.id, spec)
+            finished = asyncio.run(container.service.execute(org.id, run.id))
             logger.info(
-                "seeded %s: dataset=%s accepted=%d/%d",
-                result.dataset.name,
-                result.dataset.id,
-                result.report.accepted_records,
-                result.report.total_records,
+                "seeded %s: run=%s status=%s", spec.dataset_name, finished.id, finished.status
             )
     finally:
         container.close()

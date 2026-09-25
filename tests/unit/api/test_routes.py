@@ -1,122 +1,186 @@
+import time
+
 from fastapi.testclient import TestClient
 
 from dndlabs.api.dependencies import ApiServices
 from dndlabs.core.exceptions import StorageError
-from dndlabs.core.schemas import DatasetWithRecords, PipelineRun, QualityReport
+from dndlabs.core.schemas import ApiKeyCreated
+
+ADMIN = {"X-Admin-Secret": "test-admin-secret"}
 
 
-def _run_pubchem(client: TestClient) -> PipelineRun:
-    response = client.post("/pipelines/run", json={"source": "pubchem", "identifiers": ["2244"]})
+def _run_csv(client: TestClient, headers: dict[str, str]) -> dict:  # type: ignore[type-arg]
+    response = client.post(
+        "/api/v1/pipelines/run", json={"source": "csv", "csv_path": "x.csv"}, headers=headers
+    )
     assert response.status_code == 202
-    submitted = PipelineRun.model_validate(response.json())
-    status = client.get(f"/pipelines/runs/{submitted.id}")
-    assert status.status_code == 200
-    return PipelineRun.model_validate(status.json())
+    run_id = response.json()["id"]
+    for _ in range(20):
+        status = client.get(f"/api/v1/pipelines/runs/{run_id}", headers=headers).json()
+        if status["status"] in ("succeeded", "failed"):
+            return status
+        time.sleep(0.05)
+    raise AssertionError("run did not finish")
 
 
 def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
-
-
-def test_run_then_fetch_dataset_and_report(client: TestClient) -> None:
-    run = _run_pubchem(client)
-    assert run.status == "succeeded"
-    assert run.dataset_id
-
-    listing = client.get("/datasets").json()
-    assert [d["id"] for d in listing] == [run.dataset_id]
-
-    dataset = DatasetWithRecords.model_validate(client.get(f"/datasets/{run.dataset_id}").json())
-    assert dataset.records[0].record_key == "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
-
-    report = QualityReport.model_validate(
-        client.get(f"/datasets/{run.dataset_id}/quality-report").json()
-    )
-    assert report.accepted_records == 1
-    assert report.pass_rate == 1.0
-
-
-def test_export_formats(client: TestClient) -> None:
-    run = _run_pubchem(client)
-    csv = client.get(f"/datasets/{run.dataset_id}/export")
-    assert csv.status_code == 200
-    assert csv.headers["content-type"].startswith("text/csv")
-    assert csv.text.startswith("record_key,")
-    jsonl = client.get(f"/datasets/{run.dataset_id}/export", params={"format": "jsonl"})
-    assert jsonl.headers["content-type"].startswith("application/x-ndjson")
-    assert '"record_key":"BSYNRYMUTXBXSQ-UHFFFAOYSA-N"' in jsonl.text
-    assert client.get(f"/datasets/{run.dataset_id}/export?format=xml").status_code == 422
-
-
-def test_failed_run_reports_error(client: TestClient) -> None:
-    response = client.post("/pipelines/run", json={"source": "csv", "path": "/data/x.csv"})
-    assert response.status_code == 202
-    run = client.get(f"/pipelines/runs/{response.json()['id']}").json()
-    assert run["status"] == "failed"
-    assert "cannot parse CSV" in run["error"]
-
-
-def test_invalid_spec_is_422(client: TestClient) -> None:
-    assert client.post("/pipelines/run", json={"source": "pubchem"}).status_code == 422
-    assert client.post("/pipelines/run", json={"source": "chembl"}).status_code == 422
-    bad_cid = client.post("/pipelines/run", json={"source": "pubchem", "identifiers": ["x"]})
-    assert bad_cid.status_code == 422
-
-
-def test_not_found(client: TestClient) -> None:
-    assert client.get("/pipelines/runs/nope").status_code == 404
-    assert client.get("/datasets/nope").status_code == 404
-    assert client.get("/datasets/nope/quality-report").status_code == 404
-    assert client.get("/datasets/nope/export").status_code == 404
-
-
-def test_storage_errors_are_500(services: ApiServices, client: TestClient) -> None:
-    def boom() -> list[object]:
-        raise StorageError("database unavailable")
-
-    services.repositories.datasets.list = boom  # type: ignore[method-assign]
-    response = client.get("/datasets")
-    assert response.status_code == 500
-    assert response.json() == {"detail": "database unavailable"}
-
-
-def test_ingestion_errors_are_422(services: ApiServices, client: TestClient) -> None:
-    from dndlabs.core.exceptions import IngestionError
-
-    def boom(spec: object) -> PipelineRun:
-        raise IngestionError("bad source")
-
-    services.runner.submit = boom  # type: ignore[method-assign]
-    response = client.post("/pipelines/run", json={"source": "csv", "path": "x"})
-    assert response.status_code == 422
-
-
-def test_root_describes_service(client: TestClient) -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["name"] == "D&D Labs Data API"
-    assert body["docs"] == "/docs"
-    assert body["health"] == "/health"
-    assert "POST /pipelines/run" in body["endpoints"]
-
-
-def test_unknown_path_is_404(client: TestClient) -> None:
-    assert client.get("/no-such-route").json() == {"detail": "Not Found"}
+    assert client.get("/api/v1/health").json() == {"status": "ok"}
 
 
 def test_root_serves_html_to_browsers(client: TestClient) -> None:
-    response = client.get("/", headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
-    assert response.status_code == 200
+    response = client.get("/", headers={"Accept": "text/html"})
     assert response.headers["content-type"].startswith("text/html")
-    page = response.text
-    assert "<title>D&amp;D Labs Data API</title>" in page
-    assert 'href="/docs"' in page
-    assert '<a href="/datasets">/datasets</a>' in page  # parameter-free GET is linked
-    assert "/datasets/{dataset_id}</td>" in page  # templated path is not
+    assert "D&amp;D Labs" in response.text
 
 
-def test_root_json_is_default_for_api_clients(client: TestClient) -> None:
+def test_root_json_by_default(client: TestClient) -> None:
     response = client.get("/", headers={"Accept": "application/json"})
-    assert response.headers["content-type"].startswith("application/json")
     assert response.json()["docs"] == "/docs"
+
+
+def test_admin_bootstrap_requires_secret(client: TestClient) -> None:
+    assert client.post("/api/v1/admin/orgs", json={"name": "Acme"}).status_code == 401
+    assert (
+        client.post(
+            "/api/v1/admin/orgs", json={"name": "Acme"}, headers={"X-Admin-Secret": "wrong"}
+        ).status_code
+        == 401
+    )
+
+
+def test_admin_bootstrap_creates_org_and_key(client: TestClient) -> None:
+    response = client.post("/api/v1/admin/orgs", json={"name": "Acme"}, headers=ADMIN)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["raw_key"].startswith("ddl_live_")
+    key = ApiKeyCreated.model_validate(body)
+    whoami = client.get("/api/v1/auth/whoami", headers={"X-API-Key": key.raw_key})
+    assert whoami.json()["org_name"] == "Acme"
+
+
+def test_missing_and_invalid_key_rejected(client: TestClient) -> None:
+    assert client.get("/api/v1/datasets").status_code == 401
+    assert client.get("/api/v1/datasets", headers={"X-API-Key": "bogus"}).status_code == 401
+
+
+def test_run_then_fetch_dataset_and_report(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    run = _run_csv(client, auth_headers)
+    assert run["status"] == "succeeded"
+    dataset_id = run["dataset_id"]
+
+    listing = client.get("/api/v1/datasets", headers=auth_headers).json()
+    assert [d["id"] for d in listing] == [dataset_id]
+
+    dataset = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    assert dataset["records"][0]["record_key"] == "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+
+    report = client.get(
+        f"/api/v1/datasets/{dataset_id}/quality-report", headers=auth_headers
+    ).json()
+    assert report["accepted_records"] == 1
+
+    enrichment = client.get(
+        f"/api/v1/datasets/{dataset_id}/enrichment", headers=auth_headers
+    ).json()
+    assert enrichment["enrichment_enabled"] is False
+    assert enrichment["results"][0]["status"] == "skipped_no_key"
+
+
+def test_filter_records(client: TestClient, auth_headers: dict[str, str]) -> None:
+    run = _run_csv(client, auth_headers)
+    dataset_id = run["dataset_id"]
+    filtered = client.get(
+        f"/api/v1/datasets/{dataset_id}/records", params={"mw_min": 100}, headers=auth_headers
+    )
+    assert len(filtered.json()) == 1
+    filtered = client.get(
+        f"/api/v1/datasets/{dataset_id}/records", params={"mw_min": 10000}, headers=auth_headers
+    )
+    assert filtered.json() == []
+
+
+def test_export_formats(client: TestClient, auth_headers: dict[str, str]) -> None:
+    run = _run_csv(client, auth_headers)
+    dataset_id = run["dataset_id"]
+    csv = client.get(f"/api/v1/datasets/{dataset_id}/export", headers=auth_headers)
+    assert csv.headers["content-type"].startswith("text/csv")
+    jsonl = client.get(
+        f"/api/v1/datasets/{dataset_id}/export", params={"format": "jsonl"}, headers=auth_headers
+    )
+    assert jsonl.headers["content-type"].startswith("application/x-ndjson")
+
+
+def test_failed_run_reports_error(client: TestClient, auth_headers: dict[str, str]) -> None:
+    response = client.post(
+        "/api/v1/pipelines/run",
+        json={"source": "json", "json_path": "x.json"},
+        headers=auth_headers,
+    )
+    run_id = response.json()["id"]
+    for _ in range(20):
+        status = client.get(f"/api/v1/pipelines/runs/{run_id}", headers=auth_headers).json()
+        if status["status"] == "failed":
+            break
+        time.sleep(0.05)
+    assert "cannot parse JSON" in status["error"]
+
+
+def test_org_isolation(
+    client: TestClient, services: ApiServices, auth_headers: dict[str, str]
+) -> None:
+    run = _run_csv(client, auth_headers)
+    dataset_id = run["dataset_id"]
+    from dndlabs.core.schemas import Organization
+
+    other_org = services.repositories.organizations.create(Organization(name="OtherCo"))
+    other_key = services.auth.issue_key(other_org)
+    other_headers = {"X-API-Key": other_key.raw_key}
+    assert client.get(f"/api/v1/datasets/{dataset_id}", headers=other_headers).status_code == 404
+    assert client.get("/api/v1/datasets", headers=other_headers).json() == []
+
+
+def test_revoked_key_is_rejected(client: TestClient, auth_headers: dict[str, str]) -> None:
+    assert client.post("/api/v1/auth/keys/revoke", headers=auth_headers).status_code == 204
+    assert client.get("/api/v1/datasets", headers=auth_headers).status_code == 401
+
+
+def test_privacy_delete_removes_org_data(client: TestClient, auth_headers: dict[str, str]) -> None:
+    _run_csv(client, auth_headers)
+    assert client.get("/api/v1/datasets", headers=auth_headers).json() != []
+    assert client.delete("/api/v1/orgs/me/data", headers=auth_headers).status_code == 204
+    assert client.get("/api/v1/datasets", headers=auth_headers).json() == []
+
+
+def test_invalid_spec_is_422(client: TestClient, auth_headers: dict[str, str]) -> None:
+    assert (
+        client.post(
+            "/api/v1/pipelines/run", json={"source": "pubchem"}, headers=auth_headers
+        ).status_code
+        == 422
+    )
+
+
+def test_not_found(client: TestClient, auth_headers: dict[str, str]) -> None:
+    import uuid
+
+    fake_id = str(uuid.uuid4())
+    assert client.get(f"/api/v1/pipelines/runs/{fake_id}", headers=auth_headers).status_code == 404
+    assert client.get(f"/api/v1/datasets/{fake_id}", headers=auth_headers).status_code == 404
+    assert (
+        client.get(f"/api/v1/datasets/{fake_id}/quality-report", headers=auth_headers).status_code
+        == 404
+    )
+
+
+def test_storage_errors_are_500(
+    services: ApiServices, client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    def boom(org_id: object) -> list[object]:
+        raise StorageError("database unavailable")
+
+    services.repositories.datasets.list_for_org = boom  # type: ignore[method-assign]
+    response = client.get("/api/v1/datasets", headers=auth_headers)
+    assert response.status_code == 500

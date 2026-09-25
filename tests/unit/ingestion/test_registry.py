@@ -12,12 +12,12 @@ def test_lookup_by_enum_and_string() -> None:
     registry = ConnectorRegistry([csv, js])
     assert registry.get(SourceType.CSV) is csv
     assert registry.get("JSON") is js
-    assert registry.sources == [SourceType.CSV, SourceType.JSON]
+    assert set(registry.sources) == {SourceType.CSV, SourceType.JSON}
 
 
 def test_planned_and_unknown_sources() -> None:
     registry = ConnectorRegistry([])
     with pytest.raises(ConnectorNotFoundError, match="planned"):
-        registry.get("chembl")
+        registry.get("uniprot")
     with pytest.raises(ConnectorNotFoundError, match="no connector"):
         registry.get("pubchem")

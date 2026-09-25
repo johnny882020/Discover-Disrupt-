@@ -4,23 +4,19 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 
 from dndlabs import __version__
 from dndlabs.api.dependencies import ApiServices
 from dndlabs.api.errors import register_error_handlers
 from dndlabs.api.landing import ServiceInfo, render_landing
-from dndlabs.api.routers import datasets, pipelines
+from dndlabs.api.routers import admin, auth, datasets, enrichment, health, pipelines
 from dndlabs.core.config import get_settings
 from dndlabs.core.logging import configure_logging
 from dndlabs.pipeline.factory import build_container
 
-
-class HealthResponse(BaseModel):
-    """Liveness probe response."""
-
-    status: str = "ok"
+API_PREFIX = "/api/v1"
 
 
 def _public_endpoints(app: FastAPI) -> list[str]:
@@ -55,8 +51,10 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
         container = build_container(settings)
         app.state.services = ApiServices(
             repositories=container.repositories,
-            runner=container.service,
-            renderer=container.exporter,
+            service=container.service,
+            exporter=container.exporter,
+            auth=container.auth,
+            settings=settings,
         )
         try:
             yield
@@ -64,30 +62,46 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             container.close()
 
     app = FastAPI(
-        title="D&D Labs Data API",
+        title="D&D Labs Data Platform API",
         version=__version__,
-        description="Ingest, validate and serve model-ready drug-discovery datasets.",
+        description=(
+            "Multi-tenant ingestion, validation and enrichment of "
+            "model-ready drug-discovery datasets."
+        ),
         lifespan=lifespan,
     )
+
+    frontend_origin = get_settings().frontend_origin if services is None else "*"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[frontend_origin],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     register_error_handlers(app)
-    app.include_router(pipelines.router)
-    app.include_router(datasets.router)
+    app.include_router(admin.router, prefix=API_PREFIX)
+    app.include_router(auth.router, prefix=API_PREFIX)
+    app.include_router(pipelines.router, prefix=API_PREFIX)
+    app.include_router(datasets.router, prefix=API_PREFIX)
+    app.include_router(enrichment.router, prefix=API_PREFIX)
+    app.include_router(health.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["meta"])
-    def health() -> HealthResponse:
-        """Liveness probe.
+    def root_health() -> dict[str, str]:
+        """Liveness probe at the bare root path, for platform health checks.
 
         Returns:
             ``{"status": "ok"}``.
         """
-        return HealthResponse()
+        return {"status": "ok"}
 
     @app.get("/", tags=["meta"], response_model=ServiceInfo)
-    def root(request: Request) -> ServiceInfo | HTMLResponse:
+    def landing(request: Request) -> ServiceInfo | HTMLResponse:
         """Describe the service and where to find its documentation.
 
-        Browsers (``Accept: text/html``) get an HTML landing page; every other
-        client gets JSON.
+        Browsers (``Accept: text/html``) get an HTML landing page; every
+        other client gets JSON.
 
         Args:
             request: Incoming request, used for content negotiation.

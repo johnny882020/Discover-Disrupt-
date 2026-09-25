@@ -10,9 +10,16 @@ from tests.conftest import FIXTURES
 
 
 def recorded_pubchem(request: httpx.Request) -> httpx.Response:
-    """Serve the recorded 12-CID PUG REST response for any CID property request."""
     assert "/compound/cid/" in request.url.path
-    return httpx.Response(200, content=(FIXTURES / "pubchem_properties_12.json").read_bytes())
+    return httpx.Response(200, content=(FIXTURES / "pubchem" / "properties_3.json").read_bytes())
+
+
+def recorded_chembl(request: httpx.Request) -> httpx.Response:
+    if "offset=2" in (request.url.query.decode() or ""):
+        return httpx.Response(
+            200, content=(FIXTURES / "chembl" / "activity_page2.json").read_bytes()
+        )
+    return httpx.Response(200, content=(FIXTURES / "chembl" / "activity_page1.json").read_bytes())
 
 
 @pytest.fixture
@@ -27,6 +34,10 @@ def settings(tmp_path: Path) -> Settings:
 @pytest.fixture
 def container(settings: Settings) -> Iterator[Container]:
     migrate(settings)
-    c = build_container(settings, pubchem_transport=httpx.MockTransport(recorded_pubchem))
+    c = build_container(
+        settings,
+        pubchem_transport=httpx.MockTransport(recorded_pubchem),
+        chembl_transport=httpx.MockTransport(recorded_chembl),
+    )
     yield c
     c.close()

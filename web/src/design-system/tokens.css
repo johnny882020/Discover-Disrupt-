@@ -1,0 +1,57 @@
+/**
+ * Design tokens for the D&D Labs interface.
+ *
+ * Palette: ink (near-black) on paper (warm off-white), teal accent — never
+ * purple. Dark mode follows `prefers-color-scheme` by default and can be
+ * forced with `[data-theme="dark"]` / `[data-theme="light"]` on <html>.
+ * Spacing follows an 8px grid; borders are hairlines, not shadows.
+ */
+
+:root {
+  --color-ink: #12151a;
+  --color-paper: #faf9f6;
+  --color-accent: #1d7a85;
+  --color-accent-fg: #faf9f6;
+  --color-warn: #b8862b;
+  --color-danger: #b0473f;
+  --color-success: #3f7a5c;
+
+  --color-bg: var(--color-paper);
+  --color-fg: var(--color-ink);
+  --color-border: rgb(18 21 26 / 0.12);
+  --color-surface: #ffffff;
+  --color-muted: rgb(18 21 26 / 0.6);
+
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: var(--color-ink);
+    --color-fg: var(--color-paper);
+    --color-border: rgb(250 249 246 / 0.16);
+    --color-surface: #1a1e25;
+    --color-muted: rgb(250 249 246 / 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: var(--color-ink);
+  --color-fg: var(--color-paper);
+  --color-border: rgb(250 249 246 / 0.16);
+  --color-surface: #1a1e25;
+  --color-muted: rgb(250 249 246 / 0.6);
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+}

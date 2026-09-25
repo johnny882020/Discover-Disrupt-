@@ -1,23 +1,18 @@
 import json
-from pathlib import Path
+import uuid
 
 import pandas as pd
-import pytest
 
-from dndlabs.core.exceptions import ExportError
-from dndlabs.core.schemas import (
-    Dataset,
-    DatasetWithRecords,
-    ExportFormat,
-    NormalizedRecord,
-    SourceType,
-)
+from dndlabs.core.schemas import ExportFormat, NormalizedRecord, SourceType
 from dndlabs.pipeline.exporter import EXPORT_COLUMNS, DatasetExporter
 
+DATASET_ID = uuid.uuid4()
 
-def _dataset(n: int = 2) -> DatasetWithRecords:
-    records = [
+
+def _records(n: int = 2) -> list[NormalizedRecord]:
+    return [
         NormalizedRecord(
+            dataset_id=DATASET_ID,
             record_key=f"K{i}",
             source=SourceType.CSV,
             source_record_id=str(i),
@@ -26,33 +21,24 @@ def _dataset(n: int = 2) -> DatasetWithRecords:
         )
         for i in range(n)
     ]
-    ds = Dataset(run_id="r", name="d", source=SourceType.CSV, record_count=n)
-    return DatasetWithRecords(dataset=ds, records=records)
 
 
-def test_csv_has_fixed_columns(tmp_path: Path) -> None:
-    path = DatasetExporter().write(_dataset(), ExportFormat.CSV, tmp_path / "out")
-    frame = pd.read_csv(path)
+def test_csv_has_fixed_columns() -> None:
+    body = DatasetExporter().export(_records(), ExportFormat.CSV)
+    import io
+
+    frame = pd.read_csv(io.BytesIO(body))
     assert tuple(frame.columns) == EXPORT_COLUMNS
     assert list(frame["canonical_smiles"]) == ["C", "CC"]
-    assert path.name.endswith(".csv")
 
 
 def test_empty_csv_still_has_header() -> None:
-    text = DatasetExporter().render(_dataset(0), ExportFormat.CSV)
-    assert text.strip().split(",") == list(EXPORT_COLUMNS)
+    body = DatasetExporter().export([], ExportFormat.CSV)
+    assert body.decode().strip().split(",") == list(EXPORT_COLUMNS)
 
 
-def test_jsonl_roundtrip(tmp_path: Path) -> None:
-    path = DatasetExporter().write(_dataset(), ExportFormat.JSONL, tmp_path)
-    rows = [
-        NormalizedRecord.model_validate(json.loads(line)) for line in path.read_text().splitlines()
-    ]
-    assert rows == _dataset().records
-
-
-def test_write_failure_raises(tmp_path: Path) -> None:
-    blocker = tmp_path / "file"
-    blocker.write_text("x")
-    with pytest.raises(ExportError):
-        DatasetExporter().write(_dataset(), ExportFormat.CSV, blocker / "sub")
+def test_jsonl_roundtrip() -> None:
+    body = DatasetExporter().export(_records(), ExportFormat.JSONL)
+    rows = [json.loads(line) for line in body.decode().splitlines()]
+    assert len(rows) == 2
+    assert rows[0]["record_key"] == "K0"

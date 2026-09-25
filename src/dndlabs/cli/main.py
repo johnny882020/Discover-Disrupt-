@@ -1,5 +1,11 @@
-"""``dnd-pipeline`` command-line interface."""
+"""``dnd-pipeline`` command-line interface.
 
+Operates directly against the configured database (like an operator tool),
+not over HTTP — it is a thin wrapper over the same services the API uses.
+"""
+
+import asyncio
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -7,33 +13,32 @@ from typing import Annotated
 
 import typer
 
-from dndlabs.cli.formatting import format_datasets, format_report, format_result, format_run
+from dndlabs.cli.formatting import format_datasets, format_report, format_run
 from dndlabs.core.config import Settings, get_settings
 from dndlabs.core.exceptions import DndLabsError
 from dndlabs.core.logging import configure_logging
-from dndlabs.core.schemas import ExportFormat, IdentifierType, SourceSpec, SourceType
+from dndlabs.core.schemas import Organization, SourceSpec, SourceType
 from dndlabs.pipeline.factory import Container, build_container, migrate
 
 app = typer.Typer(
     name="dnd-pipeline",
-    help="Ingest, validate and export model-ready drug-discovery datasets.",
+    help="D&D Labs Platform operator CLI: bootstrap orgs, run pipelines, inspect data.",
     no_args_is_help=True,
 )
 
-ContainerFactory = Callable[[Settings, ExportFormat], Container]
+ContainerFactory = Callable[[Settings], Container]
 
 
-def default_container_factory(settings: Settings, fmt: ExportFormat) -> Container:
+def default_container_factory(settings: Settings) -> Container:
     """Build the production container.
 
     Args:
         settings: Application settings.
-        fmt: Export format for pipeline runs.
 
     Returns:
         The wired container.
     """
-    return build_container(settings, export_format=fmt)
+    return build_container(settings)
 
 
 #: Builds the service container; replaced in tests.
@@ -41,15 +46,11 @@ container_factory: ContainerFactory = default_container_factory
 
 
 @contextmanager
-def _container(
-    fmt: ExportFormat = ExportFormat.CSV, export_dir: Path | None = None
-) -> Iterator[Container]:
+def _container() -> Iterator[Container]:
     """Yield a container, translating domain errors into a clean exit."""
     settings = get_settings()
-    if export_dir is not None:
-        settings = settings.model_copy(update={"export_dir": export_dir})
     configure_logging(settings.log_level, settings.log_json)
-    container = container_factory(settings, fmt)
+    container = container_factory(settings)
     try:
         yield container
     except DndLabsError as exc:
@@ -59,107 +60,104 @@ def _container(
         container.close()
 
 
-def _split(values: str | None) -> list[str]:
-    """Split a comma-separated option into trimmed, non-empty items."""
-    return [v.strip() for v in (values or "").split(",") if v.strip()]
+@app.command("bootstrap-org")
+def bootstrap_org(name: str) -> None:
+    """Create an organization and print its first API key (shown once)."""
+    with _container() as container:
+        org = container.repositories.organizations.create(Organization(name=name))
+        key = container.auth.issue_key(org)
+        typer.echo(f"org_id   {org.id}")
+        typer.echo(f"api_key  {key.raw_key}")
+        typer.echo("Save this key now — it will not be shown again.")
+
+
+@app.command()
+def run(
+    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
+    source: Annotated[SourceType, typer.Option(help="Source connector.")],
+    ids: Annotated[str | None, typer.Option(help="Comma-separated PubChem CIDs.")] = None,
+    path: Annotated[Path | None, typer.Option(help="Input file for csv/json.")] = None,
+    chembl_target: Annotated[str | None, typer.Option(help="ChEMBL target id.")] = None,
+    name: Annotated[str | None, typer.Option(help="Dataset name.")] = None,
+) -> None:
+    """Ingest, validate, store, feature-ize and enrich a dataset."""
+    spec = _build_spec(source, ids, path, chembl_target, name)
+    with _container() as container:
+        run_record = container.service.submit(uuid.UUID(org_id), spec)
+        finished = asyncio.run(container.service.execute(uuid.UUID(org_id), run_record.id))
+        typer.echo(format_run(finished))
+        if finished.dataset_id:
+            report = container.repositories.reports.get_for_dataset(
+                uuid.UUID(org_id), finished.dataset_id
+            )
+            typer.echo("")
+            typer.echo(format_report(report))
 
 
 def _build_spec(
     source: SourceType,
     ids: str | None,
-    names: str | None,
     path: Path | None,
-    dataset_name: str | None,
+    chembl_target: str | None,
+    name: str | None,
 ) -> SourceSpec:
     """Translate CLI options into a :class:`SourceSpec`."""
     if source is SourceType.PUBCHEM:
-        if bool(ids) == bool(names):
-            raise typer.BadParameter("pass exactly one of --ids or --names for pubchem")
-        return SourceSpec(
-            source=source,
-            identifiers=_split(ids or names),
-            identifier_type=IdentifierType.CID if ids else IdentifierType.NAME,
-            dataset_name=dataset_name,
-        )
+        if not ids:
+            raise typer.BadParameter("--ids is required for pubchem")
+        return SourceSpec(source=source, identifiers=_split(ids), dataset_name=name)
+    if source is SourceType.CHEMBL:
+        if not chembl_target:
+            raise typer.BadParameter("--chembl-target is required for chembl")
+        return SourceSpec(source=source, chembl_target=chembl_target, dataset_name=name)
     if path is None:
         raise typer.BadParameter(f"--path is required for {source.value}")
-    return SourceSpec(source=source, path=str(path), dataset_name=dataset_name)
+    kwargs = {"csv_path": str(path)} if source is SourceType.CSV else {"json_path": str(path)}
+    return SourceSpec(source=source, dataset_name=name, **kwargs)
+
+
+def _split(values: str) -> list[str]:
+    """Split a comma-separated option into trimmed, non-empty items."""
+    return [v.strip() for v in values.split(",") if v.strip()]
 
 
 @app.command()
-def run(
-    source: Annotated[SourceType, typer.Option(help="Source connector.")],
-    ids: Annotated[str | None, typer.Option(help="Comma-separated PubChem CIDs.")] = None,
-    names: Annotated[str | None, typer.Option(help="Comma-separated PubChem names.")] = None,
-    path: Annotated[Path | None, typer.Option(help="Input file for csv/json.")] = None,
-    name: Annotated[str | None, typer.Option(help="Dataset name.")] = None,
-    fmt: Annotated[ExportFormat, typer.Option("--format", help="Export format.")] = (
-        ExportFormat.CSV
-    ),
-    output_dir: Annotated[
-        Path | None, typer.Option(help="Export directory (default: DNDLABS_EXPORT_DIR).")
-    ] = None,
-) -> None:
-    """Ingest, validate, store and export a dataset, then print its quality report."""
-    try:
-        spec = _build_spec(source, ids, names, path, name)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    with _container(fmt, output_dir) as container:
-        result = container.service.run(spec)
-        typer.echo(format_result(result))
-
-
-@app.command()
-def status(run_id: str) -> None:
-    """Show the status of a pipeline run."""
+def datasets(org_id: Annotated[str, typer.Option(help="Organization UUID.")]) -> None:
+    """List stored datasets for an organization, newest first."""
     with _container() as container:
-        typer.echo(format_run(container.repositories.runs.get(run_id)))
-
-
-@app.command()
-def datasets() -> None:
-    """List stored datasets, newest first."""
-    with _container() as container:
-        typer.echo(format_datasets(container.repositories.datasets.list()))
-
-
-@app.command()
-def show(
-    dataset_id: str,
-    limit: Annotated[int, typer.Option(min=1, help="Rows to print.")] = 20,
-) -> None:
-    """Print a dataset's records as JSON lines."""
-    with _container() as container:
-        dataset = container.repositories.datasets.get(dataset_id)
-        typer.echo(dataset.dataset.model_dump_json())
-        for record in dataset.records[:limit]:
-            typer.echo(record.model_dump_json())
+        typer.echo(format_datasets(container.repositories.datasets.list_for_org(uuid.UUID(org_id))))
 
 
 @app.command()
 def report(
+    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
     dataset_id: str,
     as_json: Annotated[bool, typer.Option("--json", help="Print raw JSON.")] = False,
 ) -> None:
     """Print a dataset's quality report."""
     with _container() as container:
-        quality = container.repositories.reports.get_for_dataset(dataset_id)
+        quality = container.repositories.reports.get_for_dataset(
+            uuid.UUID(org_id), uuid.UUID(dataset_id)
+        )
         typer.echo(quality.model_dump_json(indent=2) if as_json else format_report(quality, 50))
 
 
 @app.command()
 def export(
+    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
     dataset_id: str,
-    fmt: Annotated[ExportFormat, typer.Option("--format", help="Export format.")] = (
-        ExportFormat.CSV
-    ),
-    output_dir: Annotated[Path, typer.Option(help="Target directory.")] = Path("."),
+    fmt: Annotated[str, typer.Option("--format")] = "csv",
+    output: Annotated[Path | None, typer.Option(help="Output file path.")] = None,
 ) -> None:
     """Export a stored dataset to a file."""
+    from dndlabs.core.schemas import ExportFormat
+
     with _container() as container:
-        dataset = container.repositories.datasets.get(dataset_id)
-        typer.echo(str(container.exporter.write(dataset, fmt, output_dir)))
+        dataset = container.repositories.datasets.get(uuid.UUID(org_id), uuid.UUID(dataset_id))
+        body = container.exporter.export(dataset.records, ExportFormat(fmt))
+        out_path = output or Path(f"{dataset_id}.{fmt}")
+        out_path.write_bytes(body)
+        typer.echo(str(out_path))
 
 
 @app.command("init-db")

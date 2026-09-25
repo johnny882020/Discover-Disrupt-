@@ -20,9 +20,6 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 def create_db_engine(url: str) -> Engine:
     """Create a SQLAlchemy engine for ``url``.
 
-    In-memory SQLite gets a static pool so every session sees the same data,
-    and SQLite connections enforce foreign keys.
-
     Args:
         url: SQLAlchemy database URL.
 
@@ -69,7 +66,6 @@ def run_migrations(url: str) -> None:
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     try:
         if _created_without_alembic(url):
-            # Tables made by create_schema() match revision 0001; adopt them.
             command.stamp(config, "0001")
         command.upgrade(config, "head")
     except SQLAlchemyError as exc:
@@ -83,7 +79,7 @@ def _created_without_alembic(url: str) -> bool:
         tables = set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
-    return "pipeline_runs" in tables and "alembic_version" not in tables
+    return "organizations" in tables and "alembic_version" not in tables
 
 
 class SessionFactory:

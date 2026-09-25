@@ -7,88 +7,70 @@ from typer.testing import CliRunner
 from dndlabs.cli import main as cli_main
 from dndlabs.cli.main import app
 from dndlabs.core.config import Settings
-from dndlabs.core.schemas import ExportFormat
-from tests.conftest import FIXTURES
 
 runner = CliRunner()
 
 
-def _dataset_id(output: str) -> str:
-    match = re.search(r"dataset\s+([0-9a-f-]{36})", output)
-    assert match, output
-    return match.group(1)
-
-
-def test_run_pubchem_prints_report(cli_env: Path) -> None:
-    result = runner.invoke(app, ["run", "--source", "pubchem", "--ids", "2244,3672,5090"])
+def _bootstrap(cli_env: Path) -> tuple[str, str]:
+    result = runner.invoke(app, ["bootstrap-org", "Acme"])
     assert result.exit_code == 0, result.output
-    assert "status   succeeded" in result.output
-    assert "Quality report" in result.output
-    assert "pass rate          100.0%" in result.output
-    assert list((cli_env / "exports").glob("*.csv"))
+    org_id = re.search(r"org_id\s+(\S+)", result.output).group(1)  # type: ignore[union-attr]
+    return org_id, result.output
+
+
+def test_bootstrap_org(cli_env: Path) -> None:
+    org_id, output = _bootstrap(cli_env)
+    assert "api_key" in output
+    assert len(org_id) == 36
 
 
 def test_run_csv_then_query_commands(cli_env: Path) -> None:
+    org_id, _ = _bootstrap(cli_env)
+    csv_path = cli_env / "lab.csv"
+    csv_path.write_text("smiles,name,mw\nCCO,ethanol,46.07\n", encoding="utf-8")
+
     result = runner.invoke(
-        app,
-        [
-            "run", "--source", "csv", "--path", str(FIXTURES / "lab_export_malformed.csv"),
-            "--name", "lab", "--format", "jsonl", "--output-dir", str(cli_env / "out"),
-        ],
-    )  # fmt: skip
+        app, ["run", "--org-id", org_id, "--source", "csv", "--path", str(csv_path)]
+    )
     assert result.exit_code == 0, result.output
-    assert "rejected (errors)  6" in result.output
-    assert list((cli_env / "out").glob("*.jsonl"))
-    dataset_id = _dataset_id(result.output)
-    run_id = re.search(r"Run ([0-9a-f-]{36})", result.output).group(1)  # type: ignore[union-attr]
+    assert "status   succeeded" in result.output
+    assert "Quality report" in result.output
 
-    status = runner.invoke(app, ["status", run_id])
-    assert "succeeded" in status.output
+    dataset_id = re.search(r"dataset\s+(\S+)", result.output).group(1)  # type: ignore[union-attr]
 
-    listing = runner.invoke(app, ["datasets"])
-    assert dataset_id in listing.output and "lab" in listing.output
+    listing = runner.invoke(app, ["datasets", "--org-id", org_id])
+    assert dataset_id in listing.output
 
-    shown = runner.invoke(app, ["show", dataset_id, "--limit", "2"])
-    lines = shown.output.strip().splitlines()
-    assert len(lines) == 3
-    assert json.loads(lines[0])["name"] == "lab"
+    report = runner.invoke(app, ["report", "--org-id", org_id, dataset_id, "--json"])
+    assert json.loads(report.output)["accepted_records"] == 1
 
-    report = runner.invoke(app, ["report", dataset_id, "--json"])
-    assert json.loads(report.output)["accepted_records"] == 5
-    assert "more issue" not in runner.invoke(app, ["report", dataset_id]).output
-
-    exported = runner.invoke(app, ["export", dataset_id, "--output-dir", str(cli_env / "x")])
+    exported = runner.invoke(
+        app, ["export", "--org-id", org_id, dataset_id, "--output", str(cli_env / "out.csv")]
+    )
     assert Path(exported.output.strip()).exists()
 
 
-def test_run_by_names(cli_env: Path) -> None:
-    result = runner.invoke(app, ["run", "--source", "pubchem", "--names", "aspirin,unobtainium"])
-    assert result.exit_code == 0, result.output
-    assert "records  1" in result.output
-
-
 def test_empty_datasets(cli_env: Path) -> None:
-    assert "No datasets yet." in runner.invoke(app, ["datasets"]).output
+    org_id, _ = _bootstrap(cli_env)
+    assert "No datasets yet." in runner.invoke(app, ["datasets", "--org-id", org_id]).output
 
 
-def test_errors_exit_nonzero(cli_env: Path) -> None:
-    missing = runner.invoke(app, ["status", "nope"])
-    assert missing.exit_code == 1
-    assert "not found" in missing.output
-
-    bad_file = runner.invoke(app, ["run", "--source", "csv", "--path", "/no/such.csv"])
-    assert bad_file.exit_code == 1
-    assert "CSV file not found" in bad_file.output
+def test_missing_path_is_bad_parameter(cli_env: Path) -> None:
+    org_id, _ = _bootstrap(cli_env)
+    result = runner.invoke(app, ["run", "--org-id", org_id, "--source", "csv"])
+    assert result.exit_code == 2
 
 
-def test_bad_parameters(cli_env: Path) -> None:
-    assert runner.invoke(app, ["run", "--source", "pubchem"]).exit_code == 2
-    assert (
-        runner.invoke(app, ["run", "--source", "pubchem", "--ids", "1", "--names", "a"]).exit_code
-        == 2
-    )
-    assert runner.invoke(app, ["run", "--source", "csv"]).exit_code == 2
-    assert runner.invoke(app, ["run", "--source", "pubchem", "--ids", "abc"]).exit_code == 2
+def test_missing_ids_is_bad_parameter(cli_env: Path) -> None:
+    org_id, _ = _bootstrap(cli_env)
+    result = runner.invoke(app, ["run", "--org-id", org_id, "--source", "pubchem"])
+    assert result.exit_code == 2
+
+
+def test_missing_chembl_target_is_bad_parameter(cli_env: Path) -> None:
+    org_id, _ = _bootstrap(cli_env)
+    result = runner.invoke(app, ["run", "--org-id", org_id, "--source", "chembl"])
+    assert result.exit_code == 2
 
 
 def test_init_db(cli_env: Path) -> None:
@@ -110,8 +92,14 @@ def test_init_db_failure(cli_env: Path, monkeypatch) -> None:  # type: ignore[no
     assert "cannot connect" in result.output
 
 
+def test_report_for_unknown_dataset_exits_nonzero(cli_env: Path) -> None:
+    import uuid
+
+    org_id, _ = _bootstrap(cli_env)
+    result = runner.invoke(app, ["report", "--org-id", org_id, str(uuid.uuid4())])
+    assert result.exit_code == 1
+
+
 def test_default_container_factory(cli_env: Path) -> None:
-    container = cli_main.default_container_factory(
-        Settings(database_url="sqlite:///:memory:"), ExportFormat.CSV
-    )
+    container = cli_main.default_container_factory(Settings(database_url="sqlite:///:memory:"))
     container.close()

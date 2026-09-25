@@ -1,168 +1,144 @@
-# D&D Labs
+# D&D Labs Platform
 
-**Data infrastructure for AI-driven drug discovery.**
+**Multi-tenant data infrastructure for AI-native drug discovery.**
 
-D&D Labs turns fragmented chemical data (public databases, lab-instrument
-exports, internal data lakes) into standardized, validated, model-ready
-datasets, each shipped with a data-quality report.
+D&D Labs ingests fragmented chemical/biological data — PubChem, ChEMBL, lab
+instrument exports, internal data lakes — validates and normalizes it into
+standardized, model-ready datasets, and enriches accepted compounds with
+AI-generated candidate analogs from NVIDIA's BioNeMo GenMol NIM. Every
+organization's data is isolated from every other's behind its own API key.
 
-[![CI](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml/badge.svg)](https://github.com/johnny882020/Discover-Disrupt-/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/johnny882020/Discover-Disrupt-)
+This is a full rebuild of the project's original single-tenant MVP, adding
+the layers a real product needs: a database, authentication, filtering and
+preprocessing, a real ChEMBL connector (no longer stubbed), an NVIDIA
+BioNeMo enrichment stage, and a proper React frontend — all built and
+tested the same way the MVP was: contracts frozen first, then fanned out
+into parallel workstreams, gated on tests at every step.
 
-## Features
+## Architecture
 
-| Stage | What it does |
-|---|---|
-| **Ingest** | PubChem PUG REST (by CID or name), CSV lab/ELN exports, generic JSON uploads |
-| **Validate** | Required fields, RDKit structure checks (SMILES/InChI), duplicate detection by InChIKey |
-| **Normalize** | Canonical SMILES, InChI/InChIKey, formula, activity values converted to nM |
-| **Store** | PostgreSQL (Docker) or SQLite, with Alembic migrations and raw-record lineage |
-| **Serve** | REST API, CLI, and CSV/JSONL export with a fixed schema |
+```text
+      api/ (FastAPI)        cli/ (Typer)          web/ (React+TS, separate app)
+             └───────┬───────────┘                          │
+                 pipeline/                          talks to the API only
+      ┌──────────────┼───────────────┬──────────────┐
+ ingestion/     validation/      filtering/   preprocessing/  enrichment/
+      └──────────────┼───────────────┴──────────────┘
+              core/  +  auth/  +  storage/
+```
+
+`Ingest → Normalize & validate → Featurize → Enrich → Deliver model-ready
+data`, all scoped to the authenticated organization. Full contracts, DB
+schema and layering rules: [docs/architecture.md](docs/architecture.md).
+API reference: [docs/api.md](docs/api.md). NVIDIA integration design and
+what's verified vs. guessed: [docs/nvidia-nim.md](docs/nvidia-nim.md).
 
 ## Quickstart
 
-### Docker
+### Docker (recommended)
 
 ```bash
 docker compose up --build
 ```
 
-The API starts on <http://localhost:8000> (interactive docs at `/docs`).
+- API: <http://localhost:8000> (docs at `/docs`)
+- Frontend: <http://localhost:5173>
+
+Bootstrap your first organization:
 
 ```bash
-curl -X POST localhost:8000/pipelines/run \
-  -H 'content-type: application/json' \
-  -d '{"source": "pubchem", "identifiers": ["2244", "3672", "5090"]}'
-
-curl localhost:8000/pipelines/runs/<run_id>                 # status and dataset_id
-curl localhost:8000/datasets/<dataset_id>                   # normalized records
-curl localhost:8000/datasets/<dataset_id>/quality-report    # data-quality report
+curl -X POST localhost:8000/api/v1/admin/orgs \
+  -H "X-Admin-Secret: dev-admin-secret" \
+  -H "content-type: application/json" -d '{"name": "Acme Pharma"}'
+# -> {"raw_key": "ddl_live_...", ...} — copy raw_key, shown once
 ```
 
-### Render
-
-To deploy the API and a managed PostgreSQL database, use the **Deploy to
-Render** button above. It reads the Blueprint in `render.yaml`. See
-[docs/deployment.md](docs/deployment.md). After deploying, run:
+Open <http://localhost:5173>, paste the key, and use the app — or drive it
+by hand:
 
 ```bash
-python scripts/smoke_test.py https://<service>.onrender.com
+KEY="ddl_live_..."
+curl -X POST localhost:8000/api/v1/pipelines/run -H "X-API-Key: $KEY" \
+  -H "content-type: application/json" \
+  -d '{"source": "pubchem", "identifiers": ["2244", "3672"]}'
+# -> {"id": "<run_id>", "status": "pending", ...}
+
+curl localhost:8000/api/v1/pipelines/runs/<run_id> -H "X-API-Key: $KEY"
+curl localhost:8000/api/v1/datasets/<dataset_id> -H "X-API-Key: $KEY"
+curl localhost:8000/api/v1/datasets/<dataset_id>/quality-report -H "X-API-Key: $KEY"
 ```
 
-### Local
+### Local (no Docker)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-dnd-pipeline run --source pubchem --ids 2244,3672,5090
+dnd-pipeline init-db
+dnd-pipeline bootstrap-org "Acme Pharma"      # prints org_id and api_key
+dnd-pipeline run --org-id <org_id> --source pubchem --ids 2244,3672
+dnd-pipeline datasets --org-id <org_id>
+dnd-pipeline report --org-id <org_id> <dataset_id>
+
+uvicorn dndlabs.api.app:create_app --factory --reload   # the API, locally
+
+cd web && npm ci && npm run dev              # frontend at :5173, mocked API by default
 ```
 
-```text
-Run 5f0c…
-  status   succeeded
-  source   pubchem
-  dataset  9b1e…
-  records  3
-  export   exports/9b1e….csv
+Deploying to Render: [docs/deployment.md](docs/deployment.md).
 
-Quality report
-  total records      3
-  accepted           3
-  rejected (errors)  0
-  duplicates         0
-  warnings / errors  0 / 0
-  pass rate          100.0%
-```
-
-To see validation catch bad data, run the bundled malformed lab export:
+## What validation catches
 
 ```bash
-dnd-pipeline run --source csv --path tests/fixtures/lab_export_malformed.csv
-# 12 records → 5 accepted, 6 rejected, 1 duplicate
+dnd-pipeline run --org-id <org_id> --source csv --path tests/fixtures/lab_export_malformed.csv
+# 5 records -> 3 accepted, 2 rejected (bad SMILES, missing structure)
 ```
 
-## CLI
-
-| Command | Description |
-|---|---|
-| `dnd-pipeline run --source {pubchem,csv,json} …` | Ingest, validate, store and export a dataset |
-| `dnd-pipeline status <run_id>` | Show run status |
-| `dnd-pipeline datasets` | List datasets |
-| `dnd-pipeline show <dataset_id>` | Print records as JSON lines |
-| `dnd-pipeline report <dataset_id> [--json]` | Print the quality report |
-| `dnd-pipeline export <dataset_id> --format {csv,jsonl}` | Write the dataset to a file |
-| `dnd-pipeline init-db` | Apply database migrations |
-
-Run `dnd-pipeline <command> --help` for all options.
-
-## API
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/pipelines/run` | Start a run (returns `202`) |
-| `GET` | `/pipelines/runs/{run_id}` | Run status |
-| `GET` | `/datasets` | List datasets |
-| `GET` | `/datasets/{id}` | Dataset with records |
-| `GET` | `/datasets/{id}/quality-report` | Quality report |
-| `GET` | `/datasets/{id}/export?format=csv\|jsonl` | Download dataset |
-| `GET` | `/` | Landing page (browsers) or service info as JSON |
-| `GET` | `/health` | Health check |
-
-See [docs/api.md](docs/api.md) for request and response details. The sample
-files are built into the Docker image at `/app/samples/`, so a CSV run can use
-`"path": "/app/samples/lab_export_malformed.csv"`.
-
-## Architecture
-
-```text
-   api/          cli/          delivery
-      └─── pipeline/ ───┘      orchestration, export
-ingestion/  validation/  storage/
-              core/            contracts, config, logging, errors
-```
-
-Implementation modules depend only on `core/`, which holds the shared Pydantic
-contracts and protocols. See [docs/architecture.md](docs/architecture.md).
+Every rejection is a `ValidationIssue` (rule, field, message) in the
+`QualityReport` — nothing crashes on bad data.
 
 ## Configuration
 
-Settings are read from `DNDLABS_*` environment variables or a `.env` file
-(see [.env.example](.env.example)).
+`DNDLABS_*` environment variables (see [.env.example](.env.example)); key
+ones:
 
-| Variable | Default |
-|---|---|
-| `DNDLABS_DATABASE_URL` | `sqlite:///./dndlabs.db` |
-| `DNDLABS_EXPORT_DIR` | `./exports` |
-| `DNDLABS_LOG_LEVEL` | `INFO` |
-| `DNDLABS_LOG_JSON` | `true` |
-| `DNDLABS_PUBCHEM_BASE_URL` | `https://pubchem.ncbi.nlm.nih.gov/rest/pug` |
-| `DNDLABS_PUBCHEM_TIMEOUT_SECONDS` | `30` |
-| `DNDLABS_PUBCHEM_BATCH_SIZE` | `100` |
-| `DNDLABS_PUBCHEM_MAX_RETRIES` | `3` |
-| `DNDLABS_PUBCHEM_BACKOFF_SECONDS` | `0.5` |
-| `DNDLABS_AUTO_CREATE_SCHEMA` | `true` |
+| Variable | Default | Purpose |
+|---|---|---|
+| `DNDLABS_DATABASE_URL` | `sqlite:///./dndlabs.db` | `postgresql+psycopg://…` in Docker/Render |
+| `DNDLABS_ADMIN_BOOTSTRAP_SECRET` | `change-me-in-production` | Guards `POST /admin/orgs` |
+| `DNDLABS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin |
+| `DNDLABS_NVIDIA_NIM_API_KEY` | unset | Enrichment runs but marks every record `skipped_no_key` when unset |
+
+Frontend build-time: `VITE_API_BASE_URL` (see `web/.env.example`).
 
 ## Development
 
 ```bash
-pytest --cov=dndlabs                   # full suite (PubChem mocked)
-DNDLABS_LIVE_TESTS=1 pytest -m live    # against live PubChem
-ruff check . && ruff format --check .
-mypy src/
+pytest --cov=dndlabs                       # 167 tests, 96% coverage (PubChem/ChEMBL/GenMol mocked)
+DNDLABS_LIVE_TESTS=1 pytest -m live        # against the real APIs
+ruff check . && ruff format --check . && mypy src/
+
+cd web && npm run lint && npm run typecheck && npm test -- --run && npm run build
+npx playwright test                        # e2e; needs PLAYWRIGHT_BASE_URL pointed at a real backend
 ```
 
-Helper scripts live in `scripts/`:
+Coding standards and layering rules: [CLAUDE.md](CLAUDE.md).
 
-- `smoke_test.py <base_url>`: end-to-end check of a running deployment
-- `seed_sample_data.py`: load the sample datasets
-- `generate_synthetic_lab_export.py`: create test CSVs with injected defects
-- `record_pubchem_fixture.py`: refresh the PubChem test fixtures
+```
+src/dndlabs/{core,auth,ingestion,validation,filtering,preprocessing,enrichment,pipeline,storage,api,cli}
+tests/{unit (mirrors src), integration, live, fixtures}
+web/{src (mirrors into web/tests), e2e}
+docker/  docs/  scripts/
+```
 
-Contributor guidelines are in [CLAUDE.md](CLAUDE.md).
+## Status / known limitations
 
-## Roadmap
-
-- ChEMBL, UniProt and PDB connectors (currently stubs)
-- Authentication and multi-tenancy
-- A dedicated job queue in place of in-process background tasks
+- **NVIDIA enrichment**: the request/response contract is verified from
+  NVIDIA's own source (not guessed); the exact *hosted* base URL is not
+  (this build environment cannot reach any NVIDIA domain) — see
+  [docs/nvidia-nim.md](docs/nvidia-nim.md) before relying on it live.
+- **No self-service signup**: an operator bootstraps each organization via
+  the admin-secret-protected endpoint (matches the pitch's sales-assisted,
+  10–30-account model).
+- UniProt and PDB connectors are documented stubs (`ingestion/registry.py`).
+- `PRIVACY_POLICY.md` is a draft pending legal review — see the file for
+  what it does and doesn't cover.

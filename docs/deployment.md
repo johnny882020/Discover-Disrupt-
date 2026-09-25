@@ -1,119 +1,61 @@
 # Deployment
 
-## Render
+## Render (free tier)
 
-The repository includes a [Render Blueprint](https://render.com/docs/blueprint-spec)
-(`render.yaml`) that provisions two resources:
+`render.yaml` provisions three resources:
 
 | Resource | Type | Notes |
 |---|---|---|
-| `dndlabs-api` | Web service (Docker) | Built from `docker/Dockerfile`; health check `/health` |
-| `dndlabs-db` | PostgreSQL | Its connection string is passed to the API as `DNDLABS_DATABASE_URL` |
-
-On every deploy the container applies database migrations
-(`dnd-pipeline init-db`) and then starts the API on the port Render assigns
-(`$PORT`).
+| `dndlabs-api` | Web service (Docker) | `docker/Dockerfile.api`; health check `/health`; `DNDLABS_ADMIN_BOOTSTRAP_SECRET` auto-generated; `DNDLABS_NVIDIA_NIM_API_KEY` left unset (`sync: false`) — set it manually in the dashboard when you have one |
+| `dndlabs-web` | Static Site | Builds `web/` with Vite; no cold start (static, CDN-backed) |
+| `dndlabs-db` | PostgreSQL | Free tier expires after 30 days |
 
 ### Deploy
 
-1. **Open the Blueprint.** Either click the button (it reads `render.yaml`
-   from the repository's default branch):
-
-   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/johnny882020/Discover-Disrupt-)
-
-   Or, in the Render Dashboard, choose **New → Blueprint**, connect this
-   repository, and select the branch to deploy.
-2. **Apply it.** Review the two resources and click **Apply**. The first
-   build takes a few minutes, mostly installing RDKit.
-3. **Verify it.** Replace `<service>` with your service's name, then run the
-   end-to-end smoke test from a local checkout:
-
+1. In the Render Dashboard: **New → Blueprint**, connect this repo, pick the branch.
+2. **Apply.** The API's first build takes a few minutes (mostly RDKit).
+3. **Retrieve the admin secret** Render generated: API service → Environment
+   → `DNDLABS_ADMIN_BOOTSTRAP_SECRET`.
+4. **Bootstrap your first org:**
    ```bash
-   python scripts/smoke_test.py https://<service>.onrender.com --pubchem
+   curl -X POST https://dndlabs-api.onrender.com/api/v1/admin/orgs \
+     -H "X-Admin-Secret: <the generated secret>" \
+     -H "content-type: application/json" -d '{"name": "Your Org"}'
+   # -> {"raw_key": "ddl_live_...", ...}  — save this now, it is shown once
    ```
-
-   ```text
-   Smoke test: https://<service>.onrender.com
-     ok  root: D&D Labs Data API 0.1.0
-     ok  landing page (HTML)
-     ok  health
-     ok  /docs
-     ok  error handling: 8 bad requests rejected cleanly
-     ok  csv lab export: 5/12 accepted, pass rate 41.7%
-     ok  json upload: 2/4 accepted, pass rate 50.0%
-     ok  pubchem cids: 3/3 accepted, pass rate 100.0%
-     ok  pubchem names: 2/2 accepted, pass rate 100.0%
-   All smoke checks passed.
-   ```
-
-   Or run it from GitHub without a local checkout: **Actions → Smoke test →
-   Run workflow**, then enter the service URL.
-
-   Or check it by hand:
-
-   ```bash
-   curl https://<service>.onrender.com/          # service info and endpoint list (JSON)
-   curl https://<service>.onrender.com/health    # {"status":"ok"}
-   ```
-
-   In a browser, `https://<service>.onrender.com/` opens a landing page, and
-   the Swagger UI is at `/docs`.
-
-The sample files in `tests/fixtures/` are built into the image at
-`/app/samples/`.
+5. Open `https://dndlabs-web.onrender.com`, enter the key, and use the app.
 
 ### Configuration
 
-The Blueprint sets:
-
-| Variable | Value |
-|---|---|
-| `DNDLABS_DATABASE_URL` | From `dndlabs-db`. A bare `postgres://` or `postgresql://` URL is rewritten to use the psycopg 3 driver. |
-| `DNDLABS_AUTO_CREATE_SCHEMA` | `false`, because Alembic manages the schema |
-| `DNDLABS_EXPORT_DIR` | `/app/exports` |
-| `DNDLABS_LOG_LEVEL` | `INFO` |
-
-You can set any other `DNDLABS_*` variable under the service's
-**Environment** tab. See the configuration table in the
-[README](../README.md#configuration).
-
-### Plans and limits
-
-`render.yaml` uses the **free** plans, which suit a demo:
-
-| Limit | Effect |
-|---|---|
-| Free web services sleep when idle | The first request after a sleep takes about a minute. |
-| Free PostgreSQL databases expire after 30 days | Data is lost when the database expires. |
-| The service disk is not persistent | Files in `DNDLABS_EXPORT_DIR` are lost on redeploy. Datasets stay in Postgres and can always be downloaded again from `GET /datasets/{id}/export`. |
-
-For production, change `plan:` in `render.yaml` to a paid plan, for example
-`starter` for the web service and `basic-256mb` for the database.
-
-### Notes
-
-- **No authentication.** The API is public once deployed. Don't load
-  confidential data until authentication has been added.
-- **Deploy branch.** `autoDeploy: true` redeploys on every push to the
-  branch the Blueprint tracks.
+| Variable | Where | Notes |
+|---|---|---|
+| `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment stage runs but marks every record `skipped_no_key`; see `docs/nvidia-nim.md` |
+| `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL for CORS |
+| `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build, so changing this requires a rebuild, not just a restart |
 
 ### Troubleshooting
 
-| Symptom | Cause and fix |
+| Symptom | Cause / fix |
 |---|---|
-| `{"detail":"Not Found"}` | The URL has no route; the service itself is running. Open `/` for the list of endpoints, or `/docs`. Versions before the root endpoint was added also returned this at `/`. |
-| First request takes about a minute | The free plan puts the service to sleep when idle; the first request wakes it. |
-| Run `failed` with `CSV file not found` | `path` is read on the server. Use `/app/samples/...` or another path inside the container. |
-| Run `failed` with `PubChem unreachable` | PubChem is down or rate-limiting the service. The error is stored on the run; retry later. |
-| Deploy fails during `init-db` | The database is unreachable or expired (free Postgres lasts 30 days). Check `dndlabs-db` in the Render Dashboard. |
+| `401` on every request | Missing/wrong `X-API-Key`, or the org's key was revoked — bootstrap a new org or issue a new key |
+| Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set — see `docs/nvidia-nim.md` for the one unverified detail (hosted base URL) to confirm first |
+| CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
+| First request slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site frontend never sleeps. |
+| Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
 
-To redeploy, push to `main` (`autoDeploy: true`), or use **Manual Deploy →
-Deploy latest commit** on the service page.
-
-## Docker Compose
+## Docker Compose (local)
 
 ```bash
 docker compose up --build
 ```
 
-This starts the API on <http://localhost:8000> with a local PostgreSQL.
+Starts Postgres, the API (`localhost:8000`, migrations applied automatically
+via `docker/entrypoint.sh`), and the frontend dev server (`localhost:5173`).
+
+## CI
+
+`.github/workflows/ci.yml` runs two parallel jobs — `backend` (ruff, mypy
+`--strict`, `pytest --cov`) and `frontend` (eslint, `tsc --noEmit`, vitest,
+`vite build`) — on every push and PR. `.github/workflows/smoke.yml` is a
+manual `workflow_dispatch` that runs `scripts/smoke_test.py` against a
+deployed URL, given the admin secret.

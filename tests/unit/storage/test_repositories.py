@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -6,10 +7,14 @@ from dndlabs.core.exceptions import NotFoundError, StorageError
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     Dataset,
+    DatasetFilter,
+    EnrichmentResult,
+    FeatureVector,
+    GeneratedCandidate,
     NormalizedRecord,
+    Organization,
     PipelineRun,
     QualityReport,
-    RawRecord,
     RunStatus,
     Severity,
     SourceSpec,
@@ -18,12 +23,17 @@ from dndlabs.core.schemas import (
 )
 
 
-def _run() -> PipelineRun:
-    return PipelineRun(spec=SourceSpec(source=SourceType.PUBCHEM, identifiers=["2244"]))
+def _org(repos: Repositories, name: str = "Acme") -> Organization:
+    return repos.organizations.create(Organization(name=name))
 
 
-def _record(key: str, sid: str = "1") -> NormalizedRecord:
+def _run(org_id: uuid.UUID) -> PipelineRun:
+    return PipelineRun(org_id=org_id, spec=SourceSpec(source=SourceType.PUBCHEM, identifiers=["1"]))
+
+
+def _record(dataset_id: uuid.UUID, key: str, sid: str = "1") -> NormalizedRecord:
     return NormalizedRecord(
+        dataset_id=dataset_id,
         record_key=key,
         source=SourceType.PUBCHEM,
         source_record_id=sid,
@@ -33,83 +43,183 @@ def _record(key: str, sid: str = "1") -> NormalizedRecord:
     )
 
 
+def test_organization_roundtrip(repos: Repositories) -> None:
+    org = _org(repos)
+    assert repos.organizations.get(org.id) == org
+    with pytest.raises(NotFoundError):
+        repos.organizations.get(uuid.uuid4())
+
+
 def test_run_create_get_update(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    fetched = repos.runs.get(run.id)
-    assert fetched == run
-    done = run.model_copy(
-        update={"status": RunStatus.SUCCEEDED, "finished_at": datetime.now(UTC), "dataset_id": "d"}
-    )
-    repos.runs.update(done)
-    assert repos.runs.get(run.id).status is RunStatus.SUCCEEDED
-    assert repos.runs.get(run.id).finished_at is not None
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    assert repos.runs.get(org.id, run.id) == run
+    done = run.model_copy(update={"status": RunStatus.SUCCEEDED, "finished_at": datetime.now(UTC)})
+    repos.runs.update(org.id, done)
+    assert repos.runs.get(org.id, run.id).status is RunStatus.SUCCEEDED
 
 
-def test_run_missing(repos: Repositories) -> None:
+def test_run_scoped_to_org(repos: Repositories) -> None:
+    org_a, org_b = _org(repos, "A"), _org(repos, "B")
+    run = repos.runs.create(_run(org_a.id))
     with pytest.raises(NotFoundError):
-        repos.runs.get("nope")
+        repos.runs.get(org_b.id, run.id)
     with pytest.raises(NotFoundError):
-        repos.runs.update(_run())
+        repos.runs.update(org_b.id, run)
 
 
-def test_raw_records_roundtrip(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    raws = [
-        RawRecord(source=SourceType.CSV, source_record_id=str(i), smiles="C", extra={"k": i})
-        for i in range(3)
-    ]
-    assert repos.raw_records.add_many(run.id, raws) == 3
-    assert repos.raw_records.list_for_run(run.id) == raws
-
-
-def test_raw_records_require_existing_run(repos: Repositories) -> None:
-    with pytest.raises(StorageError):
-        repos.raw_records.add_many(
-            "missing", [RawRecord(source=SourceType.CSV, source_record_id="1")]
-        )
-
-
-def test_dataset_roundtrip_preserves_order(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    records = [_record("B" * 27, "2"), _record("A" * 27, "1")]
+def test_dataset_roundtrip_and_listing(repos: Repositories) -> None:
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    records = [_record(dataset_id, "A" * 27, "1"), _record(dataset_id, "B" * 27, "2")]
     ds = repos.datasets.create(
-        Dataset(run_id=run.id, name="demo", source=SourceType.PUBCHEM, record_count=2), records
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="demo",
+            source=SourceType.PUBCHEM,
+            record_count=2,
+        ),
+        records,
     )
-    fetched = repos.datasets.get(ds.id)
+    fetched = repos.datasets.get(org.id, ds.id)
     assert fetched.dataset == ds
-    assert fetched.records == records
-    assert [d.id for d in repos.datasets.list()] == [ds.id]
+    assert len(fetched.records) == 2
+    assert [d.id for d in repos.datasets.list_for_org(org.id)] == [ds.id]
 
 
-def test_dataset_rejects_duplicate_keys_atomically(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    ds = Dataset(run_id=run.id, name="demo", source=SourceType.PUBCHEM, record_count=2)
-    with pytest.raises(StorageError):
-        repos.datasets.create(ds, [_record("A" * 27), _record("A" * 27)])
-    assert repos.datasets.list() == []
+def test_dataset_scoped_to_org(repos: Repositories) -> None:
+    org_a, org_b = _org(repos, "A"), _org(repos, "B")
+    run = repos.runs.create(_run(org_a.id))
+    dataset_id = uuid.uuid4()
+    ds = repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org_a.id,
+            run_id=run.id,
+            name="d",
+            source=SourceType.PUBCHEM,
+            record_count=0,
+        ),
+        [],
+    )
+    with pytest.raises(NotFoundError):
+        repos.datasets.get(org_b.id, ds.id)
+    assert repos.datasets.list_for_org(org_b.id) == []
 
 
 def test_dataset_rejects_record_without_key(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    ds = Dataset(run_id=run.id, name="demo", source=SourceType.PUBCHEM, record_count=1)
-    bad = _record("A" * 27).model_copy(update={"record_key": None})
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    bad = _record(dataset_id, "A" * 27).model_copy(update={"record_key": None})
     with pytest.raises(StorageError, match="record_key"):
-        repos.datasets.create(ds, [bad])
+        repos.datasets.create(
+            Dataset(
+                id=dataset_id,
+                org_id=org.id,
+                run_id=run.id,
+                name="d",
+                source=SourceType.PUBCHEM,
+                record_count=1,
+            ),
+            [bad],
+        )
 
 
-def test_dataset_missing(repos: Repositories) -> None:
+def test_filter_records_by_molecular_weight(repos: Repositories) -> None:
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    light = _record(dataset_id, "A" * 27, "1").model_copy(update={"molecular_weight": 50.0})
+    heavy = _record(dataset_id, "B" * 27, "2").model_copy(update={"molecular_weight": 500.0})
+    repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="d",
+            source=SourceType.PUBCHEM,
+            record_count=2,
+        ),
+        [light, heavy],
+    )
+    result = repos.datasets.filter_records(org.id, dataset_id, DatasetFilter(mw_min=100))
+    assert [r.source_record_id for r in result] == ["2"]
+
+
+def test_delete_org_data_removes_everything(repos: Repositories) -> None:
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    records = [_record(dataset_id, "A" * 27)]
+    repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="d",
+            source=SourceType.PUBCHEM,
+            record_count=1,
+        ),
+        records,
+    )
+    repos.reports.save(
+        org.id,
+        QualityReport(
+            run_id=run.id,
+            dataset_id=dataset_id,
+            total_records=1,
+            accepted_records=1,
+            rejected_records=0,
+            duplicate_records=0,
+            warning_count=0,
+            error_count=0,
+            pass_rate=1.0,
+        ),
+    )
+    repos.features.save_many(
+        org.id,
+        [FeatureVector(record_id=records[0].id, descriptors={"mw": 1.0}, fingerprint_bits=[1])],
+    )
+    repos.enrichments.save_many(
+        org.id,
+        [
+            EnrichmentResult(
+                record_id=records[0].id,
+                status="enriched",
+                model_id="genmol",
+                candidates=[GeneratedCandidate(smiles="C", score=0.5, scoring_method="QED")],
+            )
+        ],
+    )
+    deleted = repos.datasets.delete_org_data(org.id)
+    assert deleted == 1
+    assert repos.datasets.list_for_org(org.id) == []
     with pytest.raises(NotFoundError):
-        repos.datasets.get("nope")
+        repos.datasets.get(org.id, dataset_id)
 
 
 def test_quality_report_roundtrip(repos: Repositories) -> None:
-    run = repos.runs.create(_run())
-    ds = repos.datasets.create(
-        Dataset(run_id=run.id, name="d", source=SourceType.PUBCHEM, record_count=0), []
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="d",
+            source=SourceType.PUBCHEM,
+            record_count=0,
+        ),
+        [],
     )
     report = QualityReport(
         run_id=run.id,
-        dataset_id=ds.id,
+        dataset_id=dataset_id,
         total_records=2,
         accepted_records=1,
         rejected_records=1,
@@ -124,13 +234,13 @@ def test_quality_report_roundtrip(repos: Repositories) -> None:
         ],
         pass_rate=0.5,
     )
-    repos.reports.save(report)
-    assert repos.reports.get_for_dataset(ds.id) == report
+    repos.reports.save(org.id, report)
+    assert repos.reports.get_for_dataset(org.id, dataset_id) == report
 
 
 def test_quality_report_requires_dataset(repos: Repositories) -> None:
     report = QualityReport(
-        run_id="r",
+        run_id=uuid.uuid4(),
         total_records=0,
         accepted_records=0,
         rejected_records=0,
@@ -140,6 +250,17 @@ def test_quality_report_requires_dataset(repos: Repositories) -> None:
         pass_rate=0.0,
     )
     with pytest.raises(StorageError):
-        repos.reports.save(report)
+        repos.reports.save(uuid.uuid4(), report)
+
+
+def test_api_key_repository_lifecycle(repos: Repositories) -> None:
+    org = _org(repos)
+    record = repos.api_keys.create(org.id, "ddl_live_abc", "hashed")
+    assert repos.api_keys.get_by_prefix("ddl_live_abc") == record
+    repos.api_keys.touch_last_used(record.id)
+    fetched = repos.api_keys.get_by_prefix("ddl_live_abc")
+    assert fetched is not None and fetched.last_used_at is not None
+    repos.api_keys.revoke(org.id, record.id)
+    assert repos.api_keys.get_by_prefix("ddl_live_abc").revoked_at is not None  # type: ignore[union-attr]
     with pytest.raises(NotFoundError):
-        repos.reports.get_for_dataset("nope")
+        repos.api_keys.revoke(uuid.uuid4(), record.id)

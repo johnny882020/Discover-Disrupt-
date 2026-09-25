@@ -5,23 +5,15 @@ from dndlabs.validation.issues import error, parse_number, warning
 
 #: Multiplier converting a (lower-cased, micro-sign-normalized) unit to nM.
 _TO_NANOMOLAR: dict[str, float] = {
-    "mm": 1e6,
-    "um": 1e3,
-    "nm": 1.0,
-    "pm": 1e-3,
-    "mol/l": 1e9,
-    "mmol/l": 1e6,
-    "umol/l": 1e3,
-    "nmol/l": 1.0,
-    "pmol/l": 1e-3,
-}
+    "mm": 1e6, "um": 1e3, "nm": 1.0, "pm": 1e-3,
+    "mol/l": 1e9, "mmol/l": 1e6, "umol/l": 1e3, "nmol/l": 1.0, "pmol/l": 1e-3,
+}  # fmt: skip
+
+_VALID_RELATIONS = frozenset({"=", "<", ">", "<=", ">="})
 
 
 def nanomolar_factor(unit: str) -> float | None:
     """Return the factor converting ``unit`` to nM.
-
-    ``M`` (molar) is only accepted upper-case because a bare lower-case ``m``
-    is ambiguous. Micro may be written ``u``, ``µ`` (U+00B5) or ``μ`` (U+03BC).
 
     Args:
         unit: Unit as written in the source.
@@ -36,7 +28,7 @@ def nanomolar_factor(unit: str) -> float | None:
 
 
 class UnitNormalizationRule:
-    """Converts activity values to nanomolar.
+    """Converts activity values to nanomolar and validates the relation operator.
 
     Attributes:
         name: Rule name used in reports.
@@ -55,6 +47,12 @@ class UnitNormalizationRule:
             The record with ``activity_value_nm`` set, plus any issues.
         """
         issues: list[ValidationIssue] = []
+        relation = raw.activity_relation or "="
+        if relation not in _VALID_RELATIONS:
+            issues.append(
+                error(self.name, record, f"unsupported relation {relation!r}", "activity_relation")
+            )
+            relation = "="
         try:
             value = parse_number(raw.activity_value)
         except ValueError:
@@ -92,5 +90,7 @@ class UnitNormalizationRule:
                 )
             )
             return RuleOutcome(record=record, issues=issues)
-        normalized = record.model_copy(update={"activity_value_nm": value * factor})
+        normalized = record.model_copy(
+            update={"activity_value_nm": value * factor, "activity_relation": relation}
+        )
         return RuleOutcome(record=normalized, issues=issues)

@@ -1,1 +1,1 @@
-"""Pipeline orchestration: ingest -> validate -> store -> export."""
+"""Pipeline orchestration: ingest -> validate -> filter/featurize -> enrich -> store."""

@@ -9,9 +9,6 @@ from dndlabs.validation.issues import warning
 class DuplicateRule:
     """Drops records whose ``record_key`` (InChIKey) was already seen.
 
-    The first occurrence wins; later ones are reported as warnings and removed
-    from the dataset.
-
     Attributes:
         name: Rule name used in reports.
     """

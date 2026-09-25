@@ -1,8 +1,10 @@
+import uuid
+
 import pytest
-from pydantic import ValidationError as PydanticValidationError
+from pydantic import ValidationError
 
 from dndlabs.core.schemas import (
-    IdentifierType,
+    NormalizedRecord,
     PipelineRun,
     QualityReport,
     RawRecord,
@@ -13,50 +15,35 @@ from dndlabs.core.schemas import (
 
 
 def test_pubchem_spec_requires_identifiers() -> None:
-    with pytest.raises(PydanticValidationError):
+    with pytest.raises(ValidationError):
         SourceSpec(source=SourceType.PUBCHEM)
 
 
-def test_pubchem_cid_spec_rejects_non_numeric() -> None:
-    with pytest.raises(PydanticValidationError, match="positive integers"):
-        SourceSpec(source=SourceType.PUBCHEM, identifiers=["2244", "aspirin"])
-
-
-def test_pubchem_name_spec_accepts_names() -> None:
-    spec = SourceSpec(
-        source=SourceType.PUBCHEM, identifiers=["aspirin"], identifier_type=IdentifierType.NAME
-    )
-    assert spec.identifiers == ["aspirin"]
-
-
-@pytest.mark.parametrize("source", [SourceType.CSV, SourceType.JSON])
-def test_file_sources_require_path(source: SourceType) -> None:
-    with pytest.raises(PydanticValidationError, match="requires a path"):
-        SourceSpec(source=source)
-    assert SourceSpec(source=source, path="x").path == "x"
+def test_chembl_spec_requires_no_extra_fields_but_needs_no_validation() -> None:
+    spec = SourceSpec(source=SourceType.CHEMBL, chembl_target="CHEMBL204")
+    assert spec.chembl_target == "CHEMBL204"
 
 
 def test_contracts_forbid_unknown_fields() -> None:
-    with pytest.raises(PydanticValidationError):
+    with pytest.raises(ValidationError):
         RawRecord(source=SourceType.CSV, source_record_id="1", bogus="x")  # type: ignore[call-arg]
 
 
 def test_pipeline_run_defaults() -> None:
-    run = PipelineRun(spec=SourceSpec(source=SourceType.CSV, path="a.csv"))
+    org_id = uuid.uuid4()
+    run = PipelineRun(org_id=org_id, spec=SourceSpec(source=SourceType.CSV, csv_path="a.csv"))
     assert run.status is RunStatus.PENDING
-    assert len(run.id) == 36
     assert run.created_at.tzinfo is not None
 
 
 def test_quality_report_pass_rate_bounds() -> None:
-    with pytest.raises(PydanticValidationError):
+    with pytest.raises(ValidationError):
         QualityReport(
-            run_id="r",
-            total_records=1,
-            accepted_records=1,
-            rejected_records=0,
-            duplicate_records=0,
-            warning_count=0,
-            error_count=0,
-            pass_rate=1.5,
-        )
+            run_id=uuid.uuid4(), total_records=1, accepted_records=1, rejected_records=0,
+            duplicate_records=0, warning_count=0, error_count=0, pass_rate=1.5,
+        )  # fmt: skip
+
+
+def test_normalized_record_requires_dataset_id() -> None:
+    with pytest.raises(ValidationError):
+        NormalizedRecord(source=SourceType.CSV, source_record_id="1")  # type: ignore[call-arg]

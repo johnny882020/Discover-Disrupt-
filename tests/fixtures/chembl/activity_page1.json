@@ -1,0 +1,7 @@
+{
+  "activities": [
+    {"activity_id": 1, "molecule_chembl_id": "CHEMBL25", "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O", "standard_type": "IC50", "standard_value": "1500", "standard_units": "nM", "standard_relation": "=", "target_chembl_id": "CHEMBL204"},
+    {"activity_id": 2, "molecule_chembl_id": "CHEMBL521", "canonical_smiles": "CC(C)Cc1ccc(cc1)C(C)C(=O)O", "standard_type": "IC50", "standard_value": "2500", "standard_units": "nM", "standard_relation": "=", "target_chembl_id": "CHEMBL204"}
+  ],
+  "page_meta": {"limit": 2, "offset": 0, "total_count": 3, "next": "/chembl/api/data/activity.json?limit=2&offset=2&target_chembl_id=CHEMBL204"}
+}

@@ -1,6 +1,6 @@
 """Plain-text rendering of results for the terminal."""
 
-from dndlabs.core.schemas import Dataset, PipelineRun, QualityReport, RunResult
+from dndlabs.core.schemas import Dataset, PipelineRun, QualityReport
 
 
 def format_report(report: QualityReport, max_issues: int = 10) -> str:
@@ -56,24 +56,6 @@ def format_run(run: PipelineRun) -> str:
     if run.error:
         lines.append(f"  error    {run.error}")
     return "\n".join(lines)
-
-
-def format_result(result: RunResult) -> str:
-    """Render the outcome of a completed run.
-
-    Args:
-        result: The run result.
-
-    Returns:
-        Multi-line text.
-    """
-    lines = [
-        format_run(result.run),
-        f"  records  {result.dataset.record_count}",
-    ]
-    if result.export_path:
-        lines.append(f"  export   {result.export_path}")
-    return "\n".join([*lines, "", format_report(result.report)])
 
 
 def format_datasets(datasets: list[Dataset]) -> str:
