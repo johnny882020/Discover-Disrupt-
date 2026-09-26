@@ -1,16 +1,15 @@
 import { screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
-import { setStoredApiKey } from "../../src/api/client";
 import { server } from "../../src/mocks/server";
 import { Dashboard } from "../../src/screens/Dashboard";
-import { renderWithProviders, SEEDED_API_KEY } from "../test-utils";
+import { renderWithProviders, signInWithSeededKey } from "../test-utils";
 
 const BASE = "*/api/v1";
 
 describe("Dashboard", () => {
   beforeEach(() => {
-    setStoredApiKey(SEEDED_API_KEY);
+    signInWithSeededKey();
   });
 
   it("shows a loading state before data arrives", () => {

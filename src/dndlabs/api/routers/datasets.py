@@ -111,7 +111,16 @@ def get_quality_report(dataset_id: uuid.UUID, org: CurrentOrg, services: Service
     return services.repositories.reports.get_for_dataset(org.org_id, dataset_id)
 
 
-@router.get("/{dataset_id}/export")
+@router.get(
+    "/{dataset_id}/export",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "The dataset file, as an attachment.",
+            "content": {media: {} for media in _MEDIA_TYPES.values()},
+        }
+    },
+)
 def export_dataset(
     dataset_id: uuid.UUID,
     org: CurrentOrg,

@@ -24,6 +24,20 @@ def test_bootstrap_org(cli_env: Path) -> None:
     assert len(org_id) == 36
 
 
+def test_invite_admin_prints_a_single_use_link(cli_env: Path) -> None:
+    org_id, _ = _bootstrap(cli_env)
+    result = runner.invoke(app, ["invite-admin", org_id, "Ada@Acme.com"])
+    assert result.exit_code == 0, result.output
+    assert "email    ada@acme.com" in result.output
+    assert re.search(r"link\s+\S+/invite#token=ddl_inv_\S+", result.output)
+
+
+def test_invite_admin_for_unknown_org_fails_cleanly(cli_env: Path) -> None:
+    result = runner.invoke(app, ["invite-admin", "00000000-0000-0000-0000-00000000abcd", "a@b.co"])
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
 def test_run_csv_then_query_commands(cli_env: Path) -> None:
     org_id, _ = _bootstrap(cli_env)
     csv_path = cli_env / "lab.csv"

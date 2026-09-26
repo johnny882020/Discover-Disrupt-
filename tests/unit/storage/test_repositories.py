@@ -1,7 +1,9 @@
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
+from tests.account_repository_checks import ALL_CHECKS
 
 from dndlabs.core.exceptions import NotFoundError, StorageError
 from dndlabs.core.protocols import Repositories
@@ -277,3 +279,8 @@ def test_api_key_repository_lifecycle(repos: Repositories) -> None:
     assert repos.api_keys.get_by_prefix("ddl_live_abc").revoked_at is not None  # type: ignore[union-attr]
     with pytest.raises(NotFoundError):
         repos.api_keys.revoke(uuid.uuid4(), record.id)
+
+
+@pytest.mark.parametrize("check", ALL_CHECKS, ids=lambda c: c.__name__)
+def test_account_repositories(repos: Repositories, check: Callable[[Repositories], None]) -> None:
+    check(repos)

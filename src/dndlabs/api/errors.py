@@ -1,9 +1,26 @@
-"""Mapping of domain exceptions to HTTP responses."""
+"""Mapping of domain exceptions to HTTP responses.
+
+Every 4xx message below is written for the client by the code that raises
+it; 500s never carry the exception's message.
+"""
+
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
-from dndlabs.core.exceptions import DndLabsError, IngestionError, InvalidApiKeyError, NotFoundError
+from dndlabs.core.exceptions import (
+    AccountLockedError,
+    ConflictError,
+    DndLabsError,
+    ForbiddenError,
+    IngestionError,
+    InvalidCredentialsError,
+    InvitationInvalidError,
+    NotAuthenticatedError,
+    NotFoundError,
+    PasswordPolicyError,
+)
 from dndlabs.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -15,12 +32,31 @@ async def _not_found(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unauthorized(_: Request, exc: Exception) -> JSONResponse:
-    """Return 401 for missing/invalid/revoked API keys."""
+    """Return 401 for a missing/invalid credential or a failed sign-in."""
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"detail": str(exc)},
-        headers={"WWW-Authenticate": "ApiKey"},
+        headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def _locked(_: Request, exc: Exception) -> JSONResponse:
+    """Return 429 with ``Retry-After`` for an account locked after failed sign-ins."""
+    retry_after = exc.retry_after_seconds if isinstance(exc, AccountLockedError) else 60
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": str(exc)},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def _status(code: int) -> Callable[[Request, Exception], Awaitable[JSONResponse]]:
+    """Build a handler returning ``code`` with the exception's (client-safe) message."""
+
+    async def handler(_: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=code, content={"detail": str(exc)})
+
+    return handler
 
 
 async def _bad_input(_: Request, exc: Exception) -> JSONResponse:
@@ -69,7 +105,13 @@ def register_error_handlers(app: FastAPI) -> None:
         app: The FastAPI application.
     """
     app.add_exception_handler(NotFoundError, _not_found)
-    app.add_exception_handler(InvalidApiKeyError, _unauthorized)
+    app.add_exception_handler(NotAuthenticatedError, _unauthorized)
+    app.add_exception_handler(InvalidCredentialsError, _unauthorized)
+    app.add_exception_handler(AccountLockedError, _locked)
+    app.add_exception_handler(ForbiddenError, _status(status.HTTP_403_FORBIDDEN))
+    app.add_exception_handler(ConflictError, _status(status.HTTP_409_CONFLICT))
+    app.add_exception_handler(InvitationInvalidError, _status(status.HTTP_400_BAD_REQUEST))
+    app.add_exception_handler(PasswordPolicyError, _status(status.HTTP_422_UNPROCESSABLE_CONTENT))
     app.add_exception_handler(IngestionError, _bad_input)
     app.add_exception_handler(DndLabsError, _internal)
     app.add_exception_handler(Exception, _unhandled)

@@ -2,14 +2,13 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
-import { setStoredApiKey } from "../../src/api/client";
 import { Dashboard } from "../../src/screens/Dashboard";
 import { RunTrigger } from "../../src/screens/RunTrigger";
-import { renderWithProviders, SEEDED_API_KEY } from "../test-utils";
+import { renderWithProviders, signInWithSeededKey } from "../test-utils";
 
 describe("RunTrigger screen", () => {
   beforeEach(() => {
-    setStoredApiKey(SEEDED_API_KEY);
+    signInWithSeededKey();
   });
 
   it("submits a CSV run and navigates to the new dataset", async () => {

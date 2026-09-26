@@ -100,13 +100,14 @@ jobs:
           cache: pip
       - name: Install API
         run: pip install .
-      - name: Migrate and bootstrap an org
+      - name: Migrate and generate the admin secret
+        # The tests provision their own orgs and invitations through the
+        # admin API with this per-run secret (shared with the API process).
         run: |
           dnd-pipeline init-db
-          key=$(dnd-pipeline bootstrap-org "E2E Org" | awk '/^api_key/ {print $2}')
-          test -n "$key"
-          echo "::add-mask::$key"
-          echo "PLAYWRIGHT_API_KEY=$key" >> "$GITHUB_ENV"
+          secret=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+          echo "::add-mask::$secret"
+          echo "DNDLABS_ADMIN_BOOTSTRAP_SECRET=$secret" >> "$GITHUB_ENV"
       - name: Start API and wait for readiness
         run: |
           nohup uvicorn dndlabs.api.app:create_app --factory --port 8000 > api.log 2>&1 &

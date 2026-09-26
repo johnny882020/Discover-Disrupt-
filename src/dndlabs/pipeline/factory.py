@@ -1,11 +1,12 @@
 """Composition root: builds concrete services from settings."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import Engine
 
-from dndlabs.auth.service import AuthService
+from dndlabs.auth.service import AuthPolicy, AuthService
 from dndlabs.core.config import Settings
 from dndlabs.core.protocols import EnrichmentClient, Repositories
 from dndlabs.enrichment.client import HttpGenMolClient, build_nim_client
@@ -124,11 +125,28 @@ def build_container(
         repositories=repositories,
         service=service,
         exporter=DatasetExporter(),
-        auth=AuthService(
-            repositories.organizations, repositories.api_keys, settings.free_tier_shared_password
-        ),
+        auth=AuthService(repositories, auth_policy(settings)),
         _engine=engine,
         _http_clients=tuple(http_clients),
+    )
+
+
+def auth_policy(settings: Settings) -> AuthPolicy:
+    """Build the user-authentication policy from settings.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        The policy.
+    """
+    return AuthPolicy(
+        session_ttl=timedelta(hours=settings.session_ttl_hours),
+        invitation_ttl=timedelta(hours=settings.invitation_ttl_hours),
+        max_login_attempts=settings.login_max_attempts,
+        lockout=timedelta(minutes=settings.login_lockout_minutes),
+        password_min_length=settings.password_min_length,
+        frontend_origin=settings.frontend_origin,
     )
 
 

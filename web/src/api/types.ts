@@ -21,11 +21,86 @@ export type Severity = "error" | "warning";
 /** Outcome of one enrichment attempt. */
 export type EnrichmentStatus = "enriched" | "skipped_no_key" | "failed";
 
-/** Result of authenticating a request with an API key. */
+/** What an authenticated principal may do within its organization. */
+export type Role = "admin" | "member";
+
+/** Which kind of credential authenticated a request. */
+export type PrincipalType = "api_key" | "user";
+
+/**
+ * Result of authenticating a request (`GET /auth/whoami`). Exactly one of
+ * `api_key_id` (principal `api_key`) or `user_id` + `session_id` (principal
+ * `user`) is set; API keys act with the `admin` role.
+ */
 export interface OrgContext {
   org_id: string;
   org_name: string;
-  api_key_id: string;
+  principal: PrincipalType;
+  role: Role;
+  api_key_id: string | null;
+  user_id: string | null;
+  session_id: string | null;
+  email: string | null;
+}
+
+/** A person who signs in to an organization. */
+export interface User {
+  id: string;
+  org_id: string;
+  email: string;
+  role: Role;
+  created_at: string;
+}
+
+/** Body of `POST /auth/login`. */
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+/** A new sign-in session: the bearer token is shown only in this response. */
+export interface SessionCreated {
+  token: string;
+  token_type: "bearer";
+  expires_at: string;
+  user: User;
+  org_name: string;
+}
+
+/** Body of `POST /auth/invitations`. */
+export interface InvitationCreate {
+  email: string;
+  role: Role;
+}
+
+/** A new invitation: the token and link are shown only in this response. */
+export interface InvitationCreated {
+  id: string;
+  email: string;
+  role: Role;
+  expires_at: string;
+  token: string;
+  accept_url: string;
+}
+
+/** What an invitation grants (`POST /auth/invitations/preview`). */
+export interface InvitationPreview {
+  email: string;
+  role: Role;
+  org_name: string;
+  expires_at: string;
+}
+
+/** Body of `POST /auth/invitations/accept`. */
+export interface InvitationAccept {
+  token: string;
+  password: string;
+}
+
+/** Body of `POST /auth/password`. */
+export interface PasswordChange {
+  current_password: string;
+  new_password: string;
 }
 
 /** What a pipeline run should ingest. */
@@ -156,9 +231,19 @@ export interface EnrichmentResponse {
   results: EnrichmentResult[];
 }
 
-/** Shape of an API error body: `{detail: string}`. */
+/** One entry of FastAPI's request-validation error list (HTTP 422). */
+export interface ValidationErrorItem {
+  loc: (string | number)[];
+  msg: string;
+  type: string;
+}
+
+/**
+ * Shape of an API error body. Domain errors (401/404/500) carry a string;
+ * request-validation errors (422) carry FastAPI's list of items.
+ */
 export interface ApiErrorBody {
-  detail: string;
+  detail: string | ValidationErrorItem[];
 }
 
 /** Response of `GET /health`. */

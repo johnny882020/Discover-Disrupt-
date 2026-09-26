@@ -28,7 +28,7 @@ def services() -> ApiServices:
     runner = PipelineService(
         DictProvider(good, broken), Validator(), repos, featurizer=RdkitFeaturizer()
     )
-    auth = AuthService(repos.organizations, repos.api_keys)
+    auth = AuthService(repos)
     return ApiServices(
         repositories=repos,
         service=runner,

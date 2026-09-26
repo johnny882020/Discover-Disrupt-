@@ -1,15 +1,18 @@
 """End-to-end smoke test against a running D&D Labs Platform deployment.
 
 Waits out a free-tier cold start, checks liveness and database readiness,
-bootstraps a throwaway organization, runs a CSV pipeline against the image's
-bundled sample, and checks the quality report, enrichment status, export and
-org isolation. Exits non-zero on the first failure.
+bootstraps a throwaway organization, invites a user who then signs out and
+back in, runs a CSV pipeline against the image's bundled sample, and checks
+the quality report, enrichment status, export and org isolation. Exits
+non-zero on the first failure.
 
 Usage:
     DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dndlabs-api.onrender.com
 """
 
+import secrets
 import time
+import uuid
 from typing import Annotated, Any
 
 import httpx
@@ -53,6 +56,48 @@ def _wait_until_awake(client: httpx.Client, deadline_seconds: float) -> dict[str
             time.sleep(5)
 
 
+def _check_user_sign_in(client: httpx.Client, org_id: str, admin_secret: str) -> None:
+    """Invite an admin, redeem the invitation, then sign out and back in."""
+    email = f"smoke-{uuid.uuid4().hex[:12]}@example.com"
+    password = secrets.token_urlsafe(18)
+    invitation = (
+        client.post(
+            f"/api/v1/admin/orgs/{org_id}/invitations",
+            json={"email": email},
+            headers={"X-Admin-Secret": admin_secret},
+        )
+        .raise_for_status()
+        .json()
+    )
+    session = (
+        client.post(
+            "/api/v1/auth/invitations/accept",
+            json={"token": invitation["token"], "password": password},
+        )
+        .raise_for_status()
+        .json()
+    )
+    bearer = {"Authorization": f"Bearer {session['token']}"}
+    client.post("/api/v1/auth/logout", headers=bearer).raise_for_status()
+    revoked = client.get("/api/v1/auth/whoami", headers=bearer)
+    _check(revoked.status_code == 401, f"signed-out token still works: {revoked.status_code}")
+    login = (
+        client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        .raise_for_status()
+        .json()
+    )
+    whoami = (
+        client.get("/api/v1/auth/whoami", headers={"Authorization": f"Bearer {login['token']}"})
+        .raise_for_status()
+        .json()
+    )
+    _check(
+        (whoami["org_id"], whoami["principal"], whoami["role"]) == (org_id, "user", "admin"),
+        f"user whoami: {whoami}",
+    )
+    typer.echo("  ok  user accounts: invite, accept, sign out, sign in")
+
+
 def main(
     base_url: Annotated[str, typer.Argument(help="API base URL.")],
     admin_secret: Annotated[
@@ -88,6 +133,8 @@ def main(
             whoami = client.get("/api/v1/auth/whoami", headers=headers).raise_for_status().json()
             _check(whoami["org_id"] == org["org_id"], "whoami org mismatch")
             typer.echo("  ok  whoami")
+
+            _check_user_sign_in(client, org["org_id"], admin_secret)
 
             # A run needs a server-side file path; write it via the container's
             # samples if present, otherwise this covers the invalid-input path.

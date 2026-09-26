@@ -90,6 +90,62 @@ class ApiKeyRow(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class UserRow(Base):
+    """A person who signs in to an organization."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(320), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    failed_login_count: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserSessionRow(Base):
+    """A sign-in session, stored by the SHA-256 digest of its bearer token."""
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InvitationRow(Base):
+    """A single-use invitation, stored by the SHA-256 digest of its token."""
+
+    __tablename__ = "user_invitations"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(320))
+    role: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class RunRow(Base):
     """A pipeline run."""
 

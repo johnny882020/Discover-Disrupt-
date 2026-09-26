@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import inspect, text
+from tests.conftest import HEAD_REVISION
 from tests.legacy_mvp import LEGACY_RUN_ID, apply_legacy_mvp_schema
 
 from dndlabs.core.exceptions import StorageError
@@ -29,7 +30,10 @@ def test_migrations_adopt_schema_created_without_alembic(tmp_path: Path) -> None
     run_migrations(url)
     engine = create_db_engine(url)
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0002"
+        assert (
+            conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == HEAD_REVISION
+        )
 
 
 def test_migrations_retire_legacy_mvp_schema_without_losing_its_data(tmp_path: Path) -> None:
@@ -43,7 +47,10 @@ def test_migrations_retire_legacy_mvp_schema_without_losing_its_data(tmp_path: P
     assert {t.name for t in Base.metadata.sorted_tables} <= tables
     assert "legacy_mvp_raw_records" in tables
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0002"
+        assert (
+            conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            == HEAD_REVISION
+        )
         legacy_ids = conn.execute(text("SELECT id FROM legacy_mvp_pipeline_runs")).scalars()
         assert list(legacy_ids) == [LEGACY_RUN_ID]
     SqlOrganizationRepository(SessionFactory(engine)).ping()

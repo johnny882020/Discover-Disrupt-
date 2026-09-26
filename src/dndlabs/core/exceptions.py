@@ -33,8 +33,46 @@ class AuthError(DndLabsError):
     """Raised when authentication or key management fails."""
 
 
-class InvalidApiKeyError(AuthError):
+class NotAuthenticatedError(AuthError):
+    """Raised when a request carries no valid credential (API key or session token)."""
+
+
+class InvalidApiKeyError(NotAuthenticatedError):
     """Raised when a request presents a missing, malformed or revoked API key."""
+
+
+class InvalidCredentialsError(AuthError):
+    """Raised when a sign-in presents an unknown email or a wrong password."""
+
+
+class AccountLockedError(AuthError):
+    """Raised when sign-in is refused because of too many recent failures."""
+
+    def __init__(self, message: str, retry_after_seconds: int) -> None:
+        """Create the error.
+
+        Args:
+            message: Client-safe message.
+            retry_after_seconds: Seconds until sign-in may be retried.
+        """
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class InvitationInvalidError(AuthError):
+    """Raised when an invitation token is unknown, expired or already used."""
+
+
+class PasswordPolicyError(AuthError):
+    """Raised when a new password does not meet the password policy."""
+
+
+class ForbiddenError(AuthError):
+    """Raised when an authenticated caller lacks the role or credential type required."""
+
+
+class ConflictError(AuthError):
+    """Raised when an account for the requested email already exists."""
 
 
 class PipelineError(DndLabsError):
