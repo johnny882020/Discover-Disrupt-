@@ -11,6 +11,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -146,6 +147,38 @@ class InvitationRow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UploadRow(Base):
+    """An uploaded file, stored in the database (hosted disks are ephemeral)."""
+
+    __tablename__ = "uploads"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    format: Mapped[str] = mapped_column(String(8))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MappingTemplateRow(Base):
+    """A saved column mapping for uploads, unique by name within an organization."""
+
+    __tablename__ = "mapping_templates"
+    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_mapping_templates_org_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    mapping: Mapped[dict[str, str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class RunRow(Base):

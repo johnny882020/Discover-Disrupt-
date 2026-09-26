@@ -51,7 +51,7 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 | POST | `/auth/password-reset/accept` | none | `{"token", "password"}` → `SessionCreated`; sets the password, clears any lock, ends all other sessions |
 | GET | `/auth/whoami` | any | `OrgContext`: `org_id`, `org_name`, `principal` (`api_key`/`user`), `role`, and `api_key_id` or `user_id` + `session_id` + `email` |
 | POST | `/auth/keys/revoke` | API key | Revoke the calling key (204) |
-| DELETE | `/orgs/me/data` | admin | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org, its keys and its user accounts are kept. |
+| DELETE | `/orgs/me/data` | admin | Privacy: delete all of the calling org's runs, datasets, records, reports and uploaded files (204). The org, its keys, its user accounts and its saved column mappings are kept. |
 
 Invitation and session tokens travel in request bodies and the
 `Authorization` header, never in a URL the API receives.
@@ -67,16 +67,48 @@ Invitation and session tokens travel in request bodies and the
 `POST /pipelines/run` body (`SourceSpec`):
 
 ```json
+{"source": "upload", "upload_id": "…", "column_mapping": {"Compound ID": "source_record_id", "Structure": "smiles", "IC50 (nM)": "activity_value"}}
 {"source": "pubchem", "identifiers": ["2244", "3672"]}
 {"source": "chembl", "chembl_target": "CHEMBL204"}
 {"source": "csv", "csv_path": "/app/samples/lab_export.csv"}
 {"source": "json", "json_path": "/app/samples/upload.json"}
 ```
 
-`csv_path`/`json_path` are read from the **API server's** filesystem, not
-the caller's. Returns `202` with a `PipelineRun` (`status: "pending"`);
+`upload_id` comes from `POST /uploads` (below). `csv_path`/`json_path` are
+read from the **API server's** filesystem, not the caller's, and are meant
+for operators. Every body may also carry `dataset_name`. Returns `202` with a `PipelineRun` (`status: "pending"`);
 `dataset_id` is `null` until the run finishes — poll
 `GET /pipelines/runs/{id}` (the frontend does this automatically).
+
+## Uploads and column mappings
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/uploads` | Multipart field `file` (CSV, TSV, XLSX or SDF) → `UploadPreview` (201) |
+| GET | `/uploads/{id}/preview` | `UploadPreview` for an earlier upload |
+| GET | `/mapping-templates` | The org's saved column mappings (`MappingTemplate[]`, by name) |
+| POST | `/mapping-templates` | `{"name", "mapping"}` → `MappingTemplate` (201); replaces a template of the same name |
+| DELETE | `/mapping-templates/{id}` | Delete a saved mapping (204) |
+
+`UploadPreview` carries the stored `upload` (`id`, `filename`, `format`,
+`size_bytes`, `sha256`), its `columns`, the first 20 `rows`, `row_count`,
+a `suggested_mapping` and the `template` it came from, if any. The
+suggestion comes from the saved template whose columns best match the file's
+headers; otherwise from known header names (e.g. `Canonical SMILES`,
+`IC50 (nM)`), then from column contents (SMILES, InChI, InChIKey).
+
+A `column_mapping` assigns each column one role: `source_record_id`, `name`,
+`smiles`, `inchi`, `inchikey`, `molecular_formula`, `molecular_weight`,
+`target`, `assay_type`, `activity_value`, `activity_unit`,
+`activity_relation` or `ignore`. It must include `smiles` or `inchi`, and a
+role (other than `ignore`) may be used once. Unmapped columns are kept in
+each record's `extra`; `ignore`d ones are dropped.
+
+Files are limited to 25 MiB and 100,000 rows by default
+(`DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS`). An SDF's structures
+become a `smiles` column, each molecule's title line a `name` column, and
+its data fields further columns. Excel files use the first worksheet, with the first
+non-empty row as headers.
 
 ## Datasets
 
@@ -113,8 +145,8 @@ logged server-side only, never returned to the client.
 | `400` | Invitation or reset token unknown, expired, already used or revoked |
 | `401` | Missing, invalid, expired or revoked credential; wrong email or password (always `invalid email or password`); wrong admin secret on `/admin/*`. Carries `WWW-Authenticate: Bearer` |
 | `403` | Authenticated but not allowed: managing members, invitations or org data without the `admin` role, removing yourself, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
-| `404` | Unknown run/dataset, or one that belongs to a different org |
+| `404` | Unknown run, dataset, upload or mapping template, or one that belongs to a different org |
 | `409` | Invitation for an email that is already a member of the org, redemption for an email that already has an account, or a change that would leave the org without an admin |
-| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, an invalid email), or a password that fails the policy |
+| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, a column mapping without a structure column, an invalid email), a password that fails the policy, or an uploaded file that is empty, too large, of an unsupported type or unreadable |
 | `429` | Sign-in locked after repeated failures; retry after the `Retry-After` seconds |
 | `500` | Internal error (e.g. storage failure); detail is logged, not returned |

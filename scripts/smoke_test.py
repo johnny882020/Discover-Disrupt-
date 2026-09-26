@@ -2,8 +2,9 @@
 
 Waits out a free-tier cold start, checks liveness and database readiness,
 bootstraps a throwaway organization, invites a user who then signs out and
-back in, runs a CSV pipeline against the image's bundled sample, and checks
-the quality report, enrichment status, export and org isolation. Exits
+back in, uploads a small CSV and runs it with the suggested column mapping,
+runs a CSV pipeline against the image's bundled sample, and checks the
+quality report, enrichment status, export and org isolation. Exits
 non-zero on the first failure.
 
 Usage:
@@ -98,6 +99,43 @@ def _check_user_sign_in(client: httpx.Client, org_id: str, admin_secret: str) ->
     typer.echo("  ok  user accounts: invite, accept, sign out, sign in")
 
 
+UPLOAD_CSV = (
+    "Compound ID,Structure,IC50 (nM)\n"
+    "SMOKE-1,CC(=O)Oc1ccccc1C(=O)O,120\n"
+    "SMOKE-2,Cn1cnc2c1c(=O)n(C)c(=O)n2C,45\n"
+)
+
+
+def _check_upload_run(client: httpx.Client, headers: dict[str, str], timeout: float) -> None:
+    """Upload a CSV, accept the suggested mapping, and run it to completion."""
+    preview = (
+        client.post(
+            "/api/v1/uploads",
+            files={"file": ("smoke.csv", UPLOAD_CSV.encode(), "text/csv")},
+            headers=headers,
+        )
+        .raise_for_status()
+        .json()
+    )
+    mapping = preview["suggested_mapping"]
+    _check(preview["row_count"] == 2, f"upload preview rows: {preview['row_count']}")
+    _check(mapping.get("Structure") == "smiles", f"suggested mapping: {mapping}")
+    response = client.post(
+        "/api/v1/pipelines/run",
+        json={
+            "source": "upload",
+            "upload_id": preview["upload"]["id"],
+            "column_mapping": mapping,
+            "dataset_name": "smoke-upload",
+        },
+        headers=headers,
+    )
+    _check(response.status_code == 202, f"upload run: {response.status_code} {response.text}")
+    run = _wait_for_run(client, headers, response.json()["id"], timeout)
+    _check(run["status"] == "succeeded", f"upload run failed: {run['error']}")
+    typer.echo("  ok  upload: preview, suggested mapping, run")
+
+
 def main(
     base_url: Annotated[str, typer.Argument(help="API base URL.")],
     admin_secret: Annotated[
@@ -135,6 +173,7 @@ def main(
             typer.echo("  ok  whoami")
 
             _check_user_sign_in(client, org["org_id"], admin_secret)
+            _check_upload_run(client, headers, timeout)
 
             # A run needs a server-side file path; write it via the container's
             # samples if present, otherwise this covers the invalid-input path.

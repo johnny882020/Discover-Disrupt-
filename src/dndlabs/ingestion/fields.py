@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-from dndlabs.core.schemas import RawRecord, SourceType
+from dndlabs.core.schemas import ColumnRole, RawRecord, SourceType
 
 #: Canonical ``RawRecord`` field -> accepted source aliases (lower-case).
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -82,6 +82,43 @@ def build_raw_record(source: SourceType, row: Mapping[str, Any], fallback_id: st
             extra[column] = cleaned
         elif fields.get(field) is None:
             fields[field] = _coerce(field, cleaned)
+    record_id = fields.pop("source_record_id", None)
+    return RawRecord.model_validate(
+        {
+            **fields,
+            "source": source,
+            "source_record_id": str(record_id) if record_id is not None else fallback_id,
+            "extra": extra,
+        }
+    )
+
+
+def build_mapped_record(
+    source: SourceType, row: Mapping[str, Any], mapping: Mapping[str, ColumnRole], fallback_id: str
+) -> RawRecord:
+    """Build a ``RawRecord`` from a row using an explicit column mapping.
+
+    Mapped columns fill their ``RawRecord`` field; ``ignore`` columns are
+    dropped; unmapped columns land in ``extra``.
+
+    Args:
+        source: Source the row came from.
+        row: Column name -> value.
+        mapping: Column name -> role.
+        fallback_id: Record id to use when no column is mapped to one.
+
+    Returns:
+        The raw record.
+    """
+    fields: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for column, value in row.items():
+        cleaned = _clean(value)
+        role = mapping.get(column)
+        if role is None:
+            extra[column] = cleaned
+        elif role is not ColumnRole.IGNORE:
+            fields[role.value] = _coerce(role.value, cleaned)
     record_id = fields.pop("source_record_id", None)
     return RawRecord.model_validate(
         {

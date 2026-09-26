@@ -16,6 +16,7 @@ from dndlabs.ingestion.csv_connector import CsvConnector
 from dndlabs.ingestion.json_connector import JsonConnector
 from dndlabs.ingestion.pubchem import PubChemConnector, build_pubchem_client
 from dndlabs.ingestion.registry import ConnectorRegistry
+from dndlabs.ingestion.uploads import UploadConnector, UploadLimits, UploadService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
@@ -34,6 +35,7 @@ class Container:
         service: Pipeline service.
         exporter: Dataset exporter.
         auth: Auth service.
+        uploads: Upload service.
     """
 
     settings: Settings
@@ -41,6 +43,7 @@ class Container:
     service: PipelineService
     exporter: DatasetExporter
     auth: AuthService
+    uploads: UploadService
     _engine: Engine
     _http_clients: tuple[httpx.Client, ...]
 
@@ -95,6 +98,9 @@ def build_container(
     else:
         enrichment_client = NullEnrichmentClient()
 
+    upload_limits = UploadLimits(
+        max_bytes=settings.upload_max_bytes, max_rows=settings.upload_max_rows
+    )
     connectors = ConnectorRegistry(
         [
             PubChemConnector(
@@ -110,6 +116,7 @@ def build_container(
                 backoff_seconds=settings.chembl_backoff_seconds,
             ),
             CsvConnector(),
+            UploadConnector(repositories.uploads, upload_limits),
             JsonConnector(),
         ]
     )
@@ -126,6 +133,7 @@ def build_container(
         service=service,
         exporter=DatasetExporter(),
         auth=AuthService(repositories, auth_policy(settings)),
+        uploads=UploadService(repositories.uploads, repositories.mapping_templates, upload_limits),
         _engine=engine,
         _http_clients=tuple(http_clients),
     )

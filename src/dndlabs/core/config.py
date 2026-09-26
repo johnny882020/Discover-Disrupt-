@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = Field(default=15, ge=1)
     password_min_length: int = Field(default=12, ge=8, le=64)
 
+    upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
+    upload_max_rows: int = Field(default=100_000, ge=1)
+
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)
     pubchem_batch_size: int = Field(default=100, ge=1, le=500)

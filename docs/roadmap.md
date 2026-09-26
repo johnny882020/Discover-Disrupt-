@@ -22,10 +22,6 @@ plan; the rest of `docs/` describes what is built.
 
 | Gap | Consequence for users |
 |---|---|
-| Runs read CSV/JSON from a server-side path; there is no browser upload | "Clean *my* lab export" — the core use case — is out of reach for most users |
-| Structures are shown as SMILES text | Chemists cannot check structures visually |
-| Fixed CSV header aliases, no column mapping | Real lab exports with unfamiliar headers fail |
-| No password reset or member management | Locked-out users and no way to offboard people |
 | Export is a flat CSV/JSONL | ML teams still split, filter and convert by hand |
 | No predictions beyond RDKit descriptors (GenMol needs a paid key) | "Is this compound worth pursuing?" goes unanswered |
 
@@ -48,15 +44,15 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 
 ## Releases
 
-### R1 — Core workflow *(in progress)*
+### R1 — Core workflow *(done)*
 
 | Feature | Status |
 |---|---|
 | Chemical standardization (salts, charges, functional groups) in validation; salt forms de-duplicate | Done |
 | Account management: admin-issued password-reset links, remove members, change roles, revoke pending invitations | Done |
 | Structure depiction with RDKit.js, with a text fallback | Done |
-| Browser upload (CSV, TSV, XLSX, SDF) stored per organization | Planned |
-| Column-mapping step with auto-detected roles and reusable templates | Planned |
+| Browser upload (CSV, TSV, XLSX, SDF) stored per organization | Done |
+| Column-mapping step with auto-detected roles and reusable templates | Done |
 
 ### R2 — Trust and flow
 
@@ -109,10 +105,10 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 - **Model worker** — a separate service holding PyTorch, ADMET-AI and
   Chemprop (about 2 GB RAM, a paid instance). Required from R3; R1 and R2
   run on the current free tier.
-- **Schema** — new Alembic revisions for uploads, mapping templates,
-  predictions, dataset versions, trained models and invitation purposes.
-- **Contracts** — new protocols (`UploadStore`, `PropertyPredictor`,
-  `JobQueue`) with in-memory fakes, documented in
+- **Schema** — new Alembic revisions for predictions, dataset versions and
+  trained models.
+- **Contracts** — new protocols (`PropertyPredictor`, `JobQueue`) with
+  in-memory fakes, documented in
   [architecture.md](architecture.md).
 
 ## Success measures

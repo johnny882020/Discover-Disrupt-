@@ -15,14 +15,14 @@
  * (see `playwright.config.ts`) and:
  * - DNDLABS_ADMIN_BOOTSTRAP_SECRET: that API's admin bootstrap secret.
  * - E2E_API_URL (optional): the API base URL; defaults to the local API.
- * - E2E_CSV_PATH (optional): CSV path readable by the API server; defaults
- *   to the bundled fixture, relative to the repo root the API runs from.
  */
+import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 const ADMIN_SECRET = process.env.DNDLABS_ADMIN_BOOTSTRAP_SECRET ?? "";
 const API_URL = process.env.E2E_API_URL ?? "http://localhost:8000/api/v1";
-const CSV_PATH = process.env.E2E_CSV_PATH ?? "tests/fixtures/lab_export_malformed.csv";
+/** A lab export with 5 rows: 3 valid, one invalid SMILES, one missing structure. */
+const LAB_EXPORT = path.resolve(import.meta.dirname, "../../tests/fixtures/lab_export_malformed.csv");
 const PASSWORD = "e2e correct horse battery";
 
 interface ProvisionedOrg {
@@ -109,12 +109,17 @@ test.describe("full pipeline workflow", () => {
     await expect(page.getByRole("heading", { name: /dashboard/i })).toBeVisible();
     await expect(page.getByText(org.email)).toBeVisible();
 
-    // Trigger a CSV pipeline run.
+    // Upload a lab export, check the suggested column mapping, and run it.
     await page.getByRole("link", { name: /new pipeline run/i }).click();
     await expect(page.getByRole("heading", { name: /new pipeline run/i })).toBeVisible();
-    await page.getByLabel(/source/i).selectOption("csv");
+    await page.getByLabel(/csv, tsv, excel/i).setInputFiles(LAB_EXPORT);
+    await expect(page.getByText("lab_export_malformed.csv")).toBeVisible();
+    await expect(page.getByText(/5 rows · 7 columns/)).toBeVisible();
+    await expect(page.getByLabel("Role for column smiles")).toHaveValue("smiles");
+    await expect(page.getByLabel("Role for column compound_id")).toHaveValue("source_record_id");
+    await page.getByRole("checkbox", { name: /save this mapping/i }).check();
+    await page.getByLabel("Mapping name").fill(`Lab export ${Date.now()}`);
     await page.getByLabel(/dataset name/i).fill(datasetName);
-    await page.getByLabel(/csv path/i).fill(CSV_PATH);
     await page.getByRole("button", { name: /start run/i }).click();
 
     // The run redirects to its new dataset's detail page.

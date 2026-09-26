@@ -10,6 +10,7 @@ from dndlabs.auth.service import AuthService
 from dndlabs.core.config import Settings
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import OrgContext
+from dndlabs.ingestion.uploads import UploadService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 
@@ -23,6 +24,7 @@ class ApiServices:
         service: Pipeline service.
         exporter: Dataset exporter.
         auth: Auth service.
+        uploads: Upload service.
         settings: Application settings.
     """
 
@@ -30,6 +32,7 @@ class ApiServices:
     service: PipelineService
     exporter: DatasetExporter
     auth: AuthService
+    uploads: UploadService
     settings: Settings
 
 

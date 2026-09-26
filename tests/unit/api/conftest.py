@@ -9,6 +9,7 @@ from dndlabs.api.dependencies import ApiServices
 from dndlabs.auth.service import AuthService
 from dndlabs.core.config import Settings
 from dndlabs.core.schemas import ApiKeyCreated, Organization, RawRecord, SourceType
+from dndlabs.ingestion.uploads import UploadConnector, UploadService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
@@ -26,7 +27,10 @@ def services() -> ApiServices:
     )
     broken = StaticConnector(SourceType.JSON, [], error="cannot parse JSON")
     runner = PipelineService(
-        DictProvider(good, broken), Validator(), repos, featurizer=RdkitFeaturizer()
+        DictProvider(good, broken, UploadConnector(repos.uploads)),
+        Validator(),
+        repos,
+        featurizer=RdkitFeaturizer(),
     )
     auth = AuthService(repos)
     return ApiServices(
@@ -34,6 +38,7 @@ def services() -> ApiServices:
         service=runner,
         exporter=DatasetExporter(),
         auth=auth,
+        uploads=UploadService(repos.uploads, repos.mapping_templates),
         settings=Settings(
             admin_bootstrap_secret="test-admin-secret", frontend_origin="http://localhost:5173"
         ),

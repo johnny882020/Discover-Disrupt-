@@ -7,7 +7,7 @@
  */
 
 /** Supported ingestion sources. */
-export type SourceType = "pubchem" | "chembl" | "csv" | "json";
+export type SourceType = "pubchem" | "chembl" | "csv" | "json" | "upload";
 
 /** Supported model-ready export formats. */
 export type ExportFormat = "csv" | "jsonl";
@@ -147,6 +147,8 @@ export interface SourceSpec {
   csv_path: string | null;
   json_path: string | null;
   chembl_target: string | null;
+  upload_id: string | null;
+  column_mapping: ColumnMapping | null;
   dataset_name: string | null;
 }
 
@@ -157,7 +159,70 @@ export interface RunPipelineRequest {
   csv_path?: string;
   json_path?: string;
   chembl_target?: string;
+  upload_id?: string;
+  column_mapping?: ColumnMapping;
   dataset_name?: string;
+}
+
+/**
+ * What a column of an uploaded table holds: a record field, or `ignore`.
+ * Columns without a role are kept on each record as extra data.
+ */
+export type ColumnRole =
+  | "source_record_id"
+  | "name"
+  | "smiles"
+  | "inchi"
+  | "inchikey"
+  | "molecular_formula"
+  | "molecular_weight"
+  | "target"
+  | "assay_type"
+  | "activity_value"
+  | "activity_unit"
+  | "activity_relation"
+  | "ignore";
+
+/** Column header -> role. */
+export type ColumnMapping = Record<string, ColumnRole>;
+
+/** File formats accepted for upload. */
+export type UploadFormat = "csv" | "tsv" | "xlsx" | "sdf";
+
+/** Metadata of an uploaded file. */
+export interface Upload {
+  id: string;
+  org_id: string;
+  filename: string;
+  format: UploadFormat;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+}
+
+/** A saved, reusable column mapping. */
+export interface MappingTemplate {
+  id: string;
+  org_id: string;
+  name: string;
+  mapping: ColumnMapping;
+  created_at: string;
+}
+
+/** Body of `POST /mapping-templates`. */
+export interface MappingTemplateCreate {
+  name: string;
+  mapping: ColumnMapping;
+}
+
+/** An uploaded table's columns, first rows and suggested column mapping. */
+export interface UploadPreview {
+  upload: Upload;
+  columns: string[];
+  rows: Record<string, string>[];
+  row_count: number;
+  suggested_mapping: ColumnMapping;
+  template: MappingTemplate | null;
 }
 
 /** Metadata of a pipeline run. */

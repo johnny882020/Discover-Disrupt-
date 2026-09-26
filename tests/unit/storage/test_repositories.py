@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from tests.account_repository_checks import ALL_CHECKS
+from tests.upload_repository_checks import UPLOAD_CHECKS
 
 from dndlabs.core.exceptions import NotFoundError, StorageError
 from dndlabs.core.protocols import Repositories
@@ -283,4 +284,9 @@ def test_api_key_repository_lifecycle(repos: Repositories) -> None:
 
 @pytest.mark.parametrize("check", ALL_CHECKS, ids=lambda c: c.__name__)
 def test_account_repositories(repos: Repositories, check: Callable[[Repositories], None]) -> None:
+    check(repos)
+
+
+@pytest.mark.parametrize("check", UPLOAD_CHECKS, ids=lambda c: c.__name__)
+def test_upload_repositories(repos: Repositories, check: Callable[[Repositories], None]) -> None:
     check(repos)

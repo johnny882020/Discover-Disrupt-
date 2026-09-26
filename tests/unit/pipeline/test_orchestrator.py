@@ -97,3 +97,35 @@ async def test_failure_recording_error_does_not_mask_original(
 
 async def test_enrichment_enabled_reflects_client() -> None:
     assert _service().enrichment_enabled() is False
+
+
+async def test_upload_run_reads_the_orgs_file_with_the_run_mapping() -> None:
+    from dndlabs.core.exceptions import NotFoundError
+    from dndlabs.core.schemas import ColumnRole
+    from dndlabs.ingestion.uploads import UploadConnector, UploadService
+
+    repos = fake_repositories()
+    uploads = UploadService(repos.uploads, repos.mapping_templates)
+    upload = uploads.store(ORG_ID, "lab.csv", b"id,structure\nA-1,CCO\nA-2,C1CC(\n").upload
+    service = PipelineService(
+        connectors=DictProvider(UploadConnector(repos.uploads)),
+        validator=Validator(),
+        repositories=repos,
+    )
+    spec = SourceSpec(
+        source=SourceType.UPLOAD,
+        upload_id=upload.id,
+        column_mapping={"id": ColumnRole.SOURCE_RECORD_ID, "structure": ColumnRole.SMILES},
+    )
+
+    finished = await service.execute(ORG_ID, service.submit(ORG_ID, spec).id)
+
+    assert finished.status is RunStatus.SUCCEEDED
+    dataset = repos.datasets.get(ORG_ID, finished.dataset_id)  # type: ignore[arg-type]
+    assert [r.source_record_id for r in dataset.records] == ["A-1"]
+    assert dataset.dataset.source is SourceType.UPLOAD
+    report = repos.reports.get_for_dataset(ORG_ID, finished.dataset_id)  # type: ignore[arg-type]
+    assert report.rejected_records == 1
+
+    with pytest.raises(NotFoundError):  # another org's upload is refused before a run exists
+        service.submit(uuid.uuid4(), spec)

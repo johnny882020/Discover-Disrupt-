@@ -60,6 +60,7 @@ default, is listed in [`.env.example`](../.env.example).
 |---|---|---|
 | `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment runs but marks every record `skipped_no_key`; see [nvidia-nim.md](nvidia-nim.md) |
 | `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL: it is the CORS origin and the base of invitation links |
+| `DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS` | API service env | Optional; defaults 25 MiB and 100,000 rows per uploaded file |
 | `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_PASSWORD_RESET_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 24 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
 | `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build; changing this requires a rebuild, not a restart |
 
@@ -73,7 +74,8 @@ default, is listed in [`.env.example`](../.env.example).
 | Invitation or reset link says "invalid, expired or already used" | Links work once and expire (invitations 72 h, resets 24 h); revoked or superseded links stop working — ask an admin (Team page) for a new one |
 | `401` on every API call from a script | Missing/wrong `X-API-Key`, or the key was revoked — issue a new key |
 | Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set; confirm the hosted base URL first — see [nvidia-nim.md](nvidia-nim.md) |
-| CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
+| Upload rejected with `422` | The file is empty, over the size or row limit, not CSV/TSV/XLSX/SDF, or unreadable (e.g. ragged CSV rows); the message says which |
+| CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's — users should upload the file instead |
 | First request is slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site never sleeps. |
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
 | `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. |
@@ -117,7 +119,7 @@ cd web && npm ci && npm run dev   # frontend on :5173, mock API by default
 | `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit .` (project runtime dependencies) |
 | `frontend` | `eslint`, `tsc --noEmit` (source, tests, e2e and configs), `vitest`, `vite build`, `npm audit --audit-level=high` |
 | `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
-| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → pipeline run → report → export; team management (invite, password reset, removal); and API-key sign-in. Uploads the Playwright report and API log on failure. |
+| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → file upload and column mapping → pipeline run → report → export; team management (invite, password reset, removal); and API-key sign-in. Uploads the Playwright report and API log on failure. |
 
 The dependency scans block merges. `.github/dependabot.yml` opens weekly
 update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
@@ -126,8 +128,8 @@ disclosed vulnerability arrives as a fix PR rather than only as a red build.
 `.github/workflows/smoke.yml` is a manual `workflow_dispatch` that runs
 `scripts/smoke_test.py` against a deployed URL: it waits out a cold start,
 then checks liveness, **readiness**, org bootstrap, user sign-in (invite →
-accept → sign out → sign in), a CSV pipeline run, export and org
-isolation. It reads the admin secret from the
+accept → sign out → sign in), a file upload run with the suggested column
+mapping, a CSV pipeline run, export and org isolation. It reads the admin secret from the
 `DNDLABS_ADMIN_BOOTSTRAP_SECRET` repository secret (Settings → Secrets and
 variables → Actions) — never a workflow input, which GitHub shows unmasked.
 Run the same check locally:
@@ -147,6 +149,10 @@ DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dnd
 - **Sign-in throttling** is per account, not per client IP — see
   [Auth](architecture.md#auth).
 - **Sources:** UniProt and PDB are planned, not implemented.
+- **Uploads** are stored in PostgreSQL and count toward the database's
+  size (1 GB on Render's free tier). Runs execute inside the API process,
+  so a large upload competes with API requests for the free instance's
+  memory.
 - **Dependencies:** no Python lockfile — `pip install` resolves unpinned
   floor versions (the frontend is pinned by `package-lock.json`).
 - **Security scanning:** dependency audits (`pip-audit`, `npm audit`) cover

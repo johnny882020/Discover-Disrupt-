@@ -27,3 +27,25 @@ def test_first_non_empty_alias_wins() -> None:
     )
     assert record.smiles == "CC"
     assert record.activity_value == "True"
+
+
+def test_build_mapped_record_applies_roles_ignores_and_keeps_extras() -> None:
+    from dndlabs.core.schemas import ColumnRole, SourceType
+    from dndlabs.ingestion.fields import build_mapped_record
+
+    record = build_mapped_record(
+        SourceType.UPLOAD,
+        {"Struct": " CCO ", "Potency": "12", "Unit": "nM", "Batch": "B7", "Junk": "x", "ID": ""},
+        {
+            "Struct": ColumnRole.SMILES,
+            "Potency": ColumnRole.ACTIVITY_VALUE,
+            "Unit": ColumnRole.ACTIVITY_UNIT,
+            "Junk": ColumnRole.IGNORE,
+            "ID": ColumnRole.SOURCE_RECORD_ID,
+        },
+        fallback_id="row-3",
+    )
+    assert record.smiles == "CCO"
+    assert (record.activity_value, record.activity_unit) == ("12", "nM")
+    assert record.extra == {"Batch": "B7"}
+    assert record.source_record_id == "row-3"  # the id column was empty
