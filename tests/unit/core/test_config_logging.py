@@ -36,6 +36,18 @@ def test_json_formatter_redacts_secrets() -> None:
     assert "supersecretvalue" not in json.dumps(line)
 
 
+def test_json_formatter_redacts_passwords_and_tokens() -> None:
+    record = logging.LogRecord("x", logging.INFO, "f", 1, "hello", None, None)
+    record.password = "correct horse battery"
+    record.new_password = "another long passphrase"
+    record.token = "ddl_sess_secretsecretsecret"
+    line = json.loads(JsonFormatter().format(record))
+    assert line["password"] == line["new_password"] == "…"
+    assert line["token"] == "ddl_…"
+    assert "secretsecret" not in json.dumps(line)
+    assert "horse" not in json.dumps(line)
+
+
 def test_json_formatter_redacts_bearer_tokens() -> None:
     record = logging.LogRecord(
         "x", logging.INFO, "f", 1, "Authorization: Bearer abc123xyz", None, None

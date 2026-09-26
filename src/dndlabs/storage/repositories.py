@@ -9,10 +9,19 @@ request context, never from a request body or query string.
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult, Result
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from dndlabs.core.exceptions import NotFoundError, StorageError
+from dndlabs.core.exceptions import (
+    ConflictError,
+    InvitationInvalidError,
+    NotFoundError,
+    StorageError,
+)
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     ApiKeyRecord,
@@ -21,13 +30,18 @@ from dndlabs.core.schemas import (
     DatasetWithRecords,
     EnrichmentResult,
     FeatureVector,
+    Invitation,
     NormalizedRecord,
     Organization,
     PipelineRun,
     QualityReport,
+    Role,
     RunStatus,
     SourceSpec,
     SourceType,
+    User,
+    UserCredentials,
+    UserSession,
 )
 from dndlabs.storage.database import SessionFactory
 from dndlabs.storage.models import (
@@ -35,10 +49,13 @@ from dndlabs.storage.models import (
     DatasetRow,
     EnrichmentResultRow,
     FeatureVectorRow,
+    InvitationRow,
     NormalizedRecordRow,
     OrganizationRow,
     QualityReportRow,
     RunRow,
+    UserRow,
+    UserSessionRow,
     ValidationIssueRow,
 )
 
@@ -211,6 +228,402 @@ def _key_from_row(row: ApiKeyRow) -> ApiKeyRecord:
         last_used_at=_as_utc(row.last_used_at) if row.last_used_at else None,
         revoked_at=_as_utc(row.revoked_at) if row.revoked_at else None,
     )
+
+
+_EMAIL_TAKEN = "an account with this email already exists"
+
+
+class SqlUserRepository:
+    """Stores user accounts and their sign-in state."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def create(self, user: User, password_hash: str) -> User:
+        """Insert a new user.
+
+        Args:
+            user: The user to store.
+            password_hash: Argon2 hash of the password.
+
+        Returns:
+            The stored user.
+
+        Raises:
+            ConflictError: If an account with this email already exists.
+        """
+        with self._sessions.transaction() as session:
+            _insert_user(session, user, password_hash)
+        return user
+
+    def get_credentials(self, email: str) -> UserCredentials | None:
+        """Look up a user and their sign-in state by normalized email.
+
+        Args:
+            email: Normalized email address.
+
+        Returns:
+            The credentials, or ``None``.
+        """
+        with self._sessions.transaction() as session:
+            row = session.scalars(select(UserRow).where(UserRow.email == email)).first()
+            return _credentials_from_row(row) if row else None
+
+    def get(self, org_id: uuid.UUID, user_id: uuid.UUID) -> UserCredentials:
+        """Fetch a user of ``org_id`` with their sign-in state.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+
+        Returns:
+            The credentials.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        with self._sessions.transaction() as session:
+            row = _user_row(session, org_id, user_id)
+            return _credentials_from_row(row)
+
+    def email_exists(self, email: str) -> bool:
+        """Whether any account uses ``email``.
+
+        Args:
+            email: Normalized email address.
+
+        Returns:
+            True if an account exists.
+        """
+        with self._sessions.transaction() as session:
+            return (
+                session.scalars(select(UserRow.id).where(UserRow.email == email)).first()
+                is not None
+            )
+
+    def record_login_failure(
+        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
+    ) -> None:
+        """Count a failed sign-in, locking the account once ``max_attempts`` is reached.
+
+        Args:
+            user_id: User identifier.
+            max_attempts: Failures that trigger a lock.
+            lock_until: When a lock triggered by this failure expires.
+        """
+        with self._sessions.transaction() as session:
+            session.execute(
+                update(UserRow)
+                .where(UserRow.id == user_id)
+                .values(failed_login_count=UserRow.failed_login_count + 1)
+            )
+            count = session.scalars(
+                select(UserRow.failed_login_count).where(UserRow.id == user_id)
+            ).first()
+            if count is not None and count >= max_attempts:
+                session.execute(
+                    update(UserRow)
+                    .where(UserRow.id == user_id)
+                    .values(failed_login_count=0, locked_until=lock_until)
+                )
+
+    def record_login_success(self, user_id: uuid.UUID) -> None:
+        """Reset the failure counter and any lock.
+
+        Args:
+            user_id: User identifier.
+        """
+        with self._sessions.transaction() as session:
+            session.execute(
+                update(UserRow)
+                .where(UserRow.id == user_id)
+                .values(failed_login_count=0, locked_until=None)
+            )
+
+    def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
+        """Replace a user's password hash.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+            password_hash: New Argon2 hash.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        with self._sessions.transaction() as session:
+            row = _user_row(session, org_id, user_id)
+            row.password_hash = password_hash
+            row.password_changed_at = datetime.now(UTC)
+
+
+def _user_row(session: Session, org_id: uuid.UUID, user_id: uuid.UUID) -> UserRow:
+    """Fetch a user row scoped to ``org_id``, or raise ``NotFoundError``."""
+    row = session.scalars(
+        select(UserRow).where(UserRow.id == user_id, UserRow.org_id == org_id)
+    ).first()
+    if row is None:
+        raise NotFoundError(f"user {user_id} not found for org {org_id}")
+    return row
+
+
+def _insert_user(session: Session, user: User, password_hash: str) -> None:
+    """Insert a user row, translating a duplicate email into ``ConflictError``."""
+    if session.scalars(select(UserRow.id).where(UserRow.email == user.email)).first():
+        raise ConflictError(_EMAIL_TAKEN)
+    session.add(
+        UserRow(
+            id=user.id,
+            org_id=user.org_id,
+            email=user.email,
+            password_hash=password_hash,
+            role=user.role.value,
+            created_at=user.created_at,
+            password_changed_at=user.created_at,
+            failed_login_count=0,
+        )
+    )
+    try:
+        session.flush()
+    except IntegrityError as exc:  # a concurrent insert won the unique index
+        raise ConflictError(_EMAIL_TAKEN) from exc
+
+
+def _credentials_from_row(row: UserRow) -> UserCredentials:
+    """Convert a user row to its credentials contract."""
+    return UserCredentials(
+        user=User(
+            id=row.id,
+            org_id=row.org_id,
+            email=row.email,
+            role=Role(row.role),
+            created_at=_as_utc(row.created_at),
+        ),
+        password_hash=row.password_hash,
+        failed_login_count=row.failed_login_count,
+        locked_until=_as_utc(row.locked_until) if row.locked_until else None,
+    )
+
+
+class SqlSessionRepository:
+    """Stores sign-in sessions by token digest."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def create(self, session: UserSession, token_hash: str) -> UserSession:
+        """Store a new session.
+
+        Args:
+            session: The session metadata.
+            token_hash: SHA-256 hex digest of the bearer token.
+
+        Returns:
+            The stored session.
+        """
+        with self._sessions.transaction() as db:
+            db.add(
+                UserSessionRow(
+                    id=session.id,
+                    user_id=session.user_id,
+                    org_id=session.org_id,
+                    token_hash=token_hash,
+                    created_at=session.created_at,
+                    expires_at=session.expires_at,
+                )
+            )
+        return session
+
+    def get_by_token_hash(self, token_hash: str) -> UserSession | None:
+        """Look up a session by its token digest.
+
+        Args:
+            token_hash: SHA-256 hex digest of the presented token.
+
+        Returns:
+            The session, or ``None``.
+        """
+        with self._sessions.transaction() as db:
+            row = db.scalars(
+                select(UserSessionRow).where(UserSessionRow.token_hash == token_hash)
+            ).first()
+            if row is None:
+                return None
+            return UserSession(
+                id=row.id,
+                user_id=row.user_id,
+                org_id=row.org_id,
+                created_at=_as_utc(row.created_at),
+                expires_at=_as_utc(row.expires_at),
+                revoked_at=_as_utc(row.revoked_at) if row.revoked_at else None,
+            )
+
+    def revoke(self, org_id: uuid.UUID, session_id: uuid.UUID) -> None:
+        """Revoke one session of ``org_id`` (no-op if already revoked).
+
+        Args:
+            org_id: Owning organization (enforced).
+            session_id: Session to revoke.
+        """
+        with self._sessions.transaction() as db:
+            db.execute(
+                update(UserSessionRow)
+                .where(
+                    UserSessionRow.id == session_id,
+                    UserSessionRow.org_id == org_id,
+                    UserSessionRow.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(UTC))
+            )
+
+    def revoke_all_for_user(
+        self, org_id: uuid.UUID, user_id: uuid.UUID, except_session_id: uuid.UUID | None = None
+    ) -> int:
+        """Revoke every active session of a user.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User whose sessions to revoke.
+            except_session_id: A session to keep.
+
+        Returns:
+            Number of sessions revoked.
+        """
+        statement = (
+            update(UserSessionRow)
+            .where(
+                UserSessionRow.org_id == org_id,
+                UserSessionRow.user_id == user_id,
+                UserSessionRow.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+        if except_session_id is not None:
+            statement = statement.where(UserSessionRow.id != except_session_id)
+        with self._sessions.transaction() as db:
+            return _rowcount(db.execute(statement))
+
+    def delete_expired(self, before: datetime) -> int:
+        """Delete sessions that expired before ``before``.
+
+        Args:
+            before: Cut-off time.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        with self._sessions.transaction() as db:
+            return _rowcount(
+                db.execute(delete(UserSessionRow).where(UserSessionRow.expires_at < before))
+            )
+
+
+class SqlInvitationRepository:
+    """Stores invitations by token digest."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def create(self, invitation: Invitation, token_hash: str) -> Invitation:
+        """Store a new invitation.
+
+        Args:
+            invitation: The invitation metadata.
+            token_hash: SHA-256 hex digest of the invitation token.
+
+        Returns:
+            The stored invitation.
+        """
+        with self._sessions.transaction() as db:
+            db.add(
+                InvitationRow(
+                    id=invitation.id,
+                    org_id=invitation.org_id,
+                    email=invitation.email,
+                    role=invitation.role.value,
+                    token_hash=token_hash,
+                    created_by=invitation.created_by,
+                    created_at=invitation.created_at,
+                    expires_at=invitation.expires_at,
+                )
+            )
+        return invitation
+
+    def get_by_token_hash(self, token_hash: str) -> Invitation | None:
+        """Look up an invitation by its token digest.
+
+        Args:
+            token_hash: SHA-256 hex digest of the presented token.
+
+        Returns:
+            The invitation, or ``None``.
+        """
+        with self._sessions.transaction() as db:
+            row = db.scalars(
+                select(InvitationRow).where(InvitationRow.token_hash == token_hash)
+            ).first()
+            if row is None:
+                return None
+            return Invitation(
+                id=row.id,
+                org_id=row.org_id,
+                email=row.email,
+                role=Role(row.role),
+                created_by=row.created_by,
+                created_at=_as_utc(row.created_at),
+                expires_at=_as_utc(row.expires_at),
+                accepted_at=_as_utc(row.accepted_at) if row.accepted_at else None,
+            )
+
+    def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
+        """Mark an invitation used and create its user, in one transaction.
+
+        Args:
+            invitation: The invitation being redeemed.
+            user: The user to create.
+            password_hash: Argon2 hash of the chosen password.
+
+        Returns:
+            The created user.
+
+        Raises:
+            InvitationInvalidError: If the invitation was already accepted.
+            ConflictError: If an account with this email already exists.
+        """
+        with self._sessions.transaction() as db:
+            claimed = db.execute(
+                update(InvitationRow)
+                .where(
+                    InvitationRow.id == invitation.id,
+                    InvitationRow.org_id == invitation.org_id,
+                    InvitationRow.accepted_at.is_(None),
+                )
+                .values(accepted_at=datetime.now(UTC))
+            )
+            if _rowcount(claimed) != 1:
+                raise InvitationInvalidError("invitation is invalid, expired or already used")
+            _insert_user(db, user, password_hash)
+        return user
+
+
+def _rowcount(result: Result[Any]) -> int:
+    """Rows affected by an UPDATE/DELETE (DML statements return a ``CursorResult``)."""
+    return cast(CursorResult[Any], result).rowcount
 
 
 class SqlRunRepository:
@@ -732,6 +1145,9 @@ def build_sql_repositories(engine: object) -> Repositories:
     return Repositories(
         organizations=SqlOrganizationRepository(sessions),
         api_keys=SqlApiKeyRepository(sessions),
+        users=SqlUserRepository(sessions),
+        sessions=SqlSessionRepository(sessions),
+        invitations=SqlInvitationRepository(sessions),
         runs=SqlRunRepository(sessions),
         datasets=SqlDatasetRepository(sessions),
         reports=SqlQualityReportRepository(sessions),

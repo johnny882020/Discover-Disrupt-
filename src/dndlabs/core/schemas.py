@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 def new_id() -> uuid.UUID:
@@ -81,12 +81,167 @@ class ApiKeyRecord(_Contract):
     revoked_at: datetime | None = None
 
 
+class Role(StrEnum):
+    """What an authenticated principal may do within its organization."""
+
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class PrincipalType(StrEnum):
+    """Which kind of credential authenticated a request."""
+
+    API_KEY = "api_key"
+    USER = "user"
+
+
 class OrgContext(_Contract):
-    """Result of authenticating a request. Injected by the auth dependency."""
+    """Result of authenticating a request. Injected by the auth dependency.
+
+    Exactly one of ``api_key_id`` (``principal="api_key"``) or ``user_id`` +
+    ``session_id`` (``principal="user"``) is set. API keys act with the
+    ``admin`` role.
+    """
 
     org_id: uuid.UUID
     org_name: str
-    api_key_id: uuid.UUID
+    principal: PrincipalType
+    role: Role
+    api_key_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    email: str | None = None
+
+
+def normalize_email(email: str) -> str:
+    """Canonicalize an email address for storage and lookup.
+
+    Args:
+        email: A syntactically valid address.
+
+    Returns:
+        The address, stripped and lowercased, so sign-in is case-insensitive.
+    """
+    return email.strip().lower()
+
+
+class _EmailContract(_Contract):
+    """Base for contracts carrying an ``email``, normalized on input."""
+
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _normalize(cls, email: str) -> str:
+        """Store and compare addresses case-insensitively."""
+        return normalize_email(email)
+
+
+class User(_EmailContract):
+    """A person who signs in to an organization with an email and password."""
+
+    id: uuid.UUID = Field(default_factory=new_id)
+    org_id: uuid.UUID
+    role: Role = Role.MEMBER
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UserCredentials(_Contract):
+    """A user plus the secret state sign-in needs. Internal to auth; never returned by the API."""
+
+    user: User
+    password_hash: str
+    failed_login_count: int = 0
+    locked_until: datetime | None = None
+
+
+class UserSession(_Contract):
+    """Persisted view of a sign-in session (the token's hash only, never the token)."""
+
+    id: uuid.UUID = Field(default_factory=new_id)
+    user_id: uuid.UUID
+    org_id: uuid.UUID
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+
+
+class Invitation(_EmailContract):
+    """Persisted view of an invitation to join an organization (token hash only)."""
+
+    id: uuid.UUID = Field(default_factory=new_id)
+    org_id: uuid.UUID
+    role: Role
+    created_by: uuid.UUID | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    accepted_at: datetime | None = None
+
+
+class LoginRequest(_EmailContract):
+    """Sign-in with an email and password."""
+
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class SessionCreated(_Contract):
+    """One-time reveal of a new session token, returned on sign-in or invitation acceptance."""
+
+    token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: datetime
+    user: User
+    org_name: str
+
+
+class InvitationCreate(_EmailContract):
+    """Invite someone to the caller's organization."""
+
+    role: Role = Role.MEMBER
+
+
+class InvitationCreated(_Contract):
+    """One-time reveal of an invitation token and the link that redeems it."""
+
+    id: uuid.UUID
+    email: str
+    role: Role
+    expires_at: datetime
+    token: str
+    accept_url: str
+
+
+class AdminInvitationCreate(_EmailContract):
+    """Operator bootstrap: invite an organization's first admin."""
+
+
+class InvitationToken(_Contract):
+    """An invitation token, sent in a request body (never in a URL)."""
+
+    token: str = Field(min_length=1, max_length=256)
+
+
+class InvitationPreview(_Contract):
+    """What an invitation grants, shown before the invitee chooses a password."""
+
+    email: str
+    role: Role
+    org_name: str
+    expires_at: datetime
+
+
+class InvitationAccept(_Contract):
+    """Redeem an invitation by choosing a password."""
+
+    token: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class PasswordChange(_Contract):
+    """Change the signed-in user's password."""
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=1, max_length=1024)
 
 
 # --------------------------------------------------------------------------

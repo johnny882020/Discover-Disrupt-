@@ -1,9 +1,8 @@
 import { screen } from "@testing-library/react";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
-import { setStoredApiKey } from "../../src/api/client";
 import { DatasetDetail } from "../../src/screens/DatasetDetail";
-import { renderWithProviders, SEEDED_API_KEY } from "../test-utils";
+import { renderWithProviders, signInWithSeededKey } from "../test-utils";
 
 function renderForDataset(datasetId: string) {
   return renderWithProviders(
@@ -16,7 +15,7 @@ function renderForDataset(datasetId: string) {
 
 describe("DatasetDetail screen", () => {
   beforeEach(() => {
-    setStoredApiKey(SEEDED_API_KEY);
+    signInWithSeededKey();
   });
 
   it("renders dataset metadata and records", async () => {

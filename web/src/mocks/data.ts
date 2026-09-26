@@ -1,32 +1,103 @@
 /**
- * Seed data for the MSW mock server: a couple of fake orgs, API keys,
- * datasets, records, and pipeline runs, kept in memory for the lifetime of
- * the tab (or the test process).
+ * Seed data for the MSW mock server: two fake orgs with API keys, user
+ * accounts and a pending invitation, plus datasets, records and pipeline
+ * runs, kept in memory for the lifetime of the tab (or the test process).
  */
 import type {
   Dataset,
   EnrichmentResult,
+  InvitationPreview,
   NormalizedRecord,
   OrgContext,
   PipelineRun,
   QualityReport,
+  User,
   ValidationIssue,
 } from "../api/types";
 
+const ACME: Pick<OrgContext, "org_id" | "org_name"> = {
+  org_id: "11111111-1111-1111-1111-111111111111",
+  org_name: "Acme Therapeutics",
+};
+const HELIX: Pick<OrgContext, "org_id" | "org_name"> = {
+  org_id: "22222222-2222-2222-2222-222222222222",
+  org_name: "Helix Biosciences",
+};
+
+function apiKeyContext(org: Pick<OrgContext, "org_id" | "org_name">, keyId: string): OrgContext {
+  return {
+    ...org,
+    principal: "api_key",
+    role: "admin",
+    api_key_id: keyId,
+    user_id: null,
+    session_id: null,
+    email: null,
+  };
+}
+
+/** Organization API keys the mock API accepts (`X-API-Key`). */
 export const SEED_API_KEYS: Record<string, OrgContext> = {
-  "dnd_live_acme0000000000000000000000": {
-    org_id: "11111111-1111-1111-1111-111111111111",
-    org_name: "Acme Therapeutics",
-    api_key_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  ddl_live_acme0000000000000000000000: apiKeyContext(ACME, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+  ddl_live_helix0000000000000000000000: apiKeyContext(HELIX, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+};
+
+/** A user account the mock API accepts at `POST /auth/login`. */
+export interface SeedUser {
+  user: User;
+  password: string;
+  org_name: string;
+}
+
+/** User accounts, keyed by (lowercase) email. */
+export const SEED_USERS: Record<string, SeedUser> = {
+  "ada@acme.example": {
+    user: {
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      org_id: ACME.org_id,
+      email: "ada@acme.example",
+      role: "admin",
+      created_at: "2026-09-01T09:00:00Z",
+    },
+    password: "correct horse battery",
+    org_name: ACME.org_name,
   },
-  "dnd_live_helix0000000000000000000000": {
-    org_id: "22222222-2222-2222-2222-222222222222",
-    org_name: "Helix Biosciences",
-    api_key_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  "bob@acme.example": {
+    user: {
+      id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      org_id: ACME.org_id,
+      email: "bob@acme.example",
+      role: "member",
+      created_at: "2026-09-02T09:00:00Z",
+    },
+    password: "a member's passphrase",
+    org_name: ACME.org_name,
   },
 };
 
-const ACME_ORG = SEED_API_KEYS["dnd_live_acme0000000000000000000000"].org_id;
+/** A pending invitation and the org it joins. */
+export interface PendingInvitation {
+  org_id: string;
+  preview: InvitationPreview;
+}
+
+/** Pending invitations, keyed by token. */
+export const invitationsStore: Record<string, PendingInvitation> = {
+  ddl_inv_welcome000000000000000000000: {
+    org_id: ACME.org_id,
+    preview: {
+      email: "cleo@acme.example",
+      role: "member",
+      org_name: ACME.org_name,
+      expires_at: "2099-01-01T00:00:00Z",
+    },
+  },
+};
+
+/** Active sign-in sessions, keyed by bearer token. */
+export const sessionsStore: Record<string, OrgContext> = {};
+
+const ACME_ORG = ACME.org_id;
 
 function makeRecord(
   datasetId: string,

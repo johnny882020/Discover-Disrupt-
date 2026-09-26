@@ -8,6 +8,7 @@ tenants. See docs/architecture.md.
 import uuid
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from dndlabs.core.schemas import (
@@ -19,6 +20,7 @@ from dndlabs.core.schemas import (
     EnrichmentResult,
     ExportFormat,
     FeatureVector,
+    Invitation,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -27,6 +29,9 @@ from dndlabs.core.schemas import (
     RuleOutcome,
     SourceSpec,
     SourceType,
+    User,
+    UserCredentials,
+    UserSession,
 )
 
 
@@ -201,6 +206,17 @@ class ApiKeyRepository(Protocol):
         """
         ...
 
+    def get_hash(self, prefix: str) -> str | None:
+        """Fetch the stored hash for a prefix, for verification inside auth only.
+
+        Args:
+            prefix: Non-secret lookup prefix.
+
+        Returns:
+            The Argon2 hash, or ``None`` if no such prefix exists.
+        """
+        ...
+
     def touch_last_used(self, key_id: uuid.UUID) -> None:
         """Record that a key was just used.
 
@@ -218,6 +234,213 @@ class ApiKeyRepository(Protocol):
 
         Raises:
             NotFoundError: If the key does not exist for this org.
+        """
+        ...
+
+
+class UserRepository(Protocol):
+    """Persistence of user accounts.
+
+    Emails are globally unique (sign-in is by email alone), so lookups by
+    email are the one intentionally unscoped read; every other method takes
+    ``org_id``.
+    """
+
+    def create(self, user: User, password_hash: str) -> User:
+        """Insert a new user.
+
+        Args:
+            user: The user to store (``email`` already normalized).
+            password_hash: Argon2 hash of the user's password.
+
+        Returns:
+            The stored user.
+
+        Raises:
+            ConflictError: If an account with this email already exists.
+        """
+        ...
+
+    def get_credentials(self, email: str) -> UserCredentials | None:
+        """Look up a user and their sign-in state by normalized email.
+
+        Args:
+            email: Normalized email address.
+
+        Returns:
+            The credentials, or ``None`` if no account uses this email.
+        """
+        ...
+
+    def get(self, org_id: uuid.UUID, user_id: uuid.UUID) -> UserCredentials:
+        """Fetch a user of ``org_id`` with their sign-in state.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+
+        Returns:
+            The credentials.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        ...
+
+    def email_exists(self, email: str) -> bool:
+        """Whether any account uses ``email``.
+
+        Args:
+            email: Normalized email address.
+
+        Returns:
+            True if an account exists.
+        """
+        ...
+
+    def record_login_failure(
+        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
+    ) -> None:
+        """Count a failed sign-in, locking the account once ``max_attempts`` is reached.
+
+        The increment happens in the database, so concurrent failures are
+        all counted.
+
+        Args:
+            user_id: User identifier.
+            max_attempts: Failures that trigger a lock.
+            lock_until: When a lock triggered by this failure expires.
+        """
+        ...
+
+    def record_login_success(self, user_id: uuid.UUID) -> None:
+        """Reset the failure counter and any lock after a successful sign-in.
+
+        Args:
+            user_id: User identifier.
+        """
+        ...
+
+    def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
+        """Replace a user's password hash.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+            password_hash: New Argon2 hash.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        ...
+
+
+class SessionRepository(Protocol):
+    """Persistence of sign-in sessions, stored by token hash."""
+
+    def create(self, session: UserSession, token_hash: str) -> UserSession:
+        """Store a new session.
+
+        Args:
+            session: The session metadata.
+            token_hash: SHA-256 hex digest of the bearer token.
+
+        Returns:
+            The stored session.
+        """
+        ...
+
+    def get_by_token_hash(self, token_hash: str) -> UserSession | None:
+        """Look up a session by its token hash.
+
+        Args:
+            token_hash: SHA-256 hex digest of the presented token.
+
+        Returns:
+            The session (possibly expired or revoked), or ``None``.
+        """
+        ...
+
+    def revoke(self, org_id: uuid.UUID, session_id: uuid.UUID) -> None:
+        """Revoke one session of ``org_id``. Revoking an already-revoked session is a no-op.
+
+        Args:
+            org_id: Owning organization (enforced).
+            session_id: Session to revoke.
+        """
+        ...
+
+    def revoke_all_for_user(
+        self, org_id: uuid.UUID, user_id: uuid.UUID, except_session_id: uuid.UUID | None = None
+    ) -> int:
+        """Revoke every active session of a user.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User whose sessions to revoke.
+            except_session_id: A session to keep (the caller's own).
+
+        Returns:
+            Number of sessions revoked.
+        """
+        ...
+
+    def delete_expired(self, before: datetime) -> int:
+        """Delete sessions that expired before ``before`` (housekeeping).
+
+        Args:
+            before: Cut-off time.
+
+        Returns:
+            Number of sessions deleted.
+        """
+        ...
+
+
+class InvitationRepository(Protocol):
+    """Persistence of invitations, stored by token hash."""
+
+    def create(self, invitation: Invitation, token_hash: str) -> Invitation:
+        """Store a new invitation.
+
+        Args:
+            invitation: The invitation metadata.
+            token_hash: SHA-256 hex digest of the invitation token.
+
+        Returns:
+            The stored invitation.
+        """
+        ...
+
+    def get_by_token_hash(self, token_hash: str) -> Invitation | None:
+        """Look up an invitation by its token hash.
+
+        Args:
+            token_hash: SHA-256 hex digest of the presented token.
+
+        Returns:
+            The invitation (possibly expired or accepted), or ``None``.
+        """
+        ...
+
+    def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
+        """Redeem an invitation: mark it used and create its user, in one transaction.
+
+        Either both happen or neither does, so a failed redemption leaves
+        the invitation usable and a concurrent redemption cannot create two
+        accounts.
+
+        Args:
+            invitation: The (valid, unexpired) invitation being redeemed.
+            user: The user to create, in ``invitation.org_id``.
+            password_hash: Argon2 hash of the chosen password.
+
+        Returns:
+            The created user.
+
+        Raises:
+            InvitationInvalidError: If the invitation was already accepted.
+            ConflictError: If an account with this email already exists.
         """
         ...
 
@@ -427,6 +650,9 @@ class Repositories:
 
     organizations: OrganizationRepository
     api_keys: ApiKeyRepository
+    users: UserRepository
+    sessions: SessionRepository
+    invitations: InvitationRepository
     runs: RunRepository
     datasets: DatasetRepository
     reports: QualityReportRepository

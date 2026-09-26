@@ -71,6 +71,18 @@ def bootstrap_org(name: str) -> None:
         typer.echo("Save this key now — it will not be shown again.")
 
 
+@app.command("invite-admin")
+def invite_admin(org_id: str, email: str) -> None:
+    """Invite an organization's admin and print the single-use sign-up link (shown once)."""
+    with _container() as container:
+        org = container.repositories.organizations.get(uuid.UUID(org_id))
+        invitation = container.auth.invite_admin(org, email)
+        typer.echo(f"email    {invitation.email}")
+        typer.echo(f"expires  {invitation.expires_at.isoformat()}")
+        typer.echo(f"link     {invitation.accept_url}")
+        typer.echo("Send this link to the invitee; it works once and will not be shown again.")
+
+
 @app.command()
 def run(
     org_id: Annotated[str, typer.Option(help="Organization UUID.")],

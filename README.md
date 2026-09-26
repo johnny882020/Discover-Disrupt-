@@ -5,8 +5,9 @@ Multi-tenant data infrastructure for AI-native drug discovery.
 D&D Labs ingests chemical/biological data from external sources and lab
 exports, validates and normalizes it into standardized, model-ready
 datasets, and optionally enriches accepted compounds with AI-generated
-candidate analogs via NVIDIA BioNeMo. Every organization's data is isolated
-behind its own API key.
+candidate analogs via NVIDIA BioNeMo. Every organization's data is isolated:
+people sign in with their own email and password (joining by invitation),
+and programs use per-organization API keys.
 
 ```text
 Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready data
@@ -34,19 +35,22 @@ docker compose up --build
 - API: `http://localhost:8000` (interactive docs at `/docs`)
 - Frontend: `http://localhost:5173`
 
-Sign in immediately with the shared free-tier credential
-(`DNDLABS_FREE_TIER_SHARED_PASSWORD`, default `freetier2026`) — see
-[Auth](docs/architecture.md#auth) for what this is and its limits — or
-bootstrap a real, isolated organization:
+Create an organization, then invite its first admin:
 
 ```bash
 curl -X POST localhost:8000/api/v1/admin/orgs \
   -H "X-Admin-Secret: dev-admin-secret" \
   -H "content-type: application/json" -d '{"name": "Acme Pharma"}'
-# -> {"raw_key": "ddl_live_...", ...} — shown once, save it now
+# -> {"org_id": "...", "raw_key": "ddl_live_...", ...} — API key, shown once
+
+curl -X POST localhost:8000/api/v1/admin/orgs/<org_id>/invitations \
+  -H "X-Admin-Secret: dev-admin-secret" \
+  -H "content-type: application/json" -d '{"email": "you@acme.com"}'
+# -> {"accept_url": "http://localhost:5173/invite#token=ddl_inv_...", ...}
 ```
 
-Paste the key into the frontend, or drive the API directly:
+Open the `accept_url`, choose a password, and you are signed in; invite
+teammates from the **Team** page. Programs use the API key instead:
 
 ```bash
 KEY="ddl_live_..."
@@ -65,11 +69,13 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 dnd-pipeline init-db
 dnd-pipeline bootstrap-org "Acme Pharma"      # prints org_id and api_key
+dnd-pipeline invite-admin <org_id> you@acme.com   # prints a one-time sign-up link
 dnd-pipeline run --org-id <org_id> --source pubchem --ids 2244,3672
 
 uvicorn dndlabs.api.app:create_app --factory --reload   # API, locally
 
 cd web && npm ci && npm run dev              # frontend at :5173, mocked API by default
+                                             # (mock sign-in: ada@acme.example / correct horse battery)
 ```
 
 Render deployment: [docs/deployment.md](docs/deployment.md).
@@ -91,10 +97,10 @@ Full list: [`.env.example`](.env.example). The variables that matter most:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DNDLABS_DATABASE_URL` | `sqlite:///./dndlabs.db` | `postgresql+psycopg://…` in Docker/Render |
-| `DNDLABS_ADMIN_BOOTSTRAP_SECRET` | `change-me-in-production` | Guards `POST /admin/orgs` |
-| `DNDLABS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin |
+| `DNDLABS_ADMIN_BOOTSTRAP_SECRET` | `change-me-in-production` | Guards the operator endpoints (`/admin/*`: orgs, keys, first-admin invitations) |
+| `DNDLABS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin and base URL of invitation links |
+| `DNDLABS_SESSION_TTL_HOURS` | `12` | Sign-in session lifetime; see [Auth](docs/architecture.md#auth) for the other account settings |
 | `DNDLABS_NVIDIA_NIM_API_KEY` | unset | Enrichment runs but marks every record `skipped_no_key` when unset |
-| `DNDLABS_FREE_TIER_SHARED_PASSWORD` | `freetier2026` | **Temporary, insecure.** Single shared login, no database dependency. Clear it before onboarding real customers — see [Auth](docs/architecture.md#auth) |
 
 ## Development
 
@@ -106,7 +112,7 @@ ruff check . && ruff format --check . && mypy src/ --strict
 
 cd web && npm run lint && npm run typecheck && npm test -- --run && npm run build
 VITE_API_BASE_URL=http://localhost:8000/api/v1 npm run build   # e2e targets the production build
-PLAYWRIGHT_API_KEY=<org key> npx playwright test               # needs the API running on :8000
+DNDLABS_ADMIN_BOOTSTRAP_SECRET=<API's secret> npx playwright test   # needs the API running on :8000
 ```
 
 Coding standards and layering rules: [CLAUDE.md](CLAUDE.md).
@@ -131,10 +137,12 @@ for pip, npm, GitHub Actions and Docker base images.
 - **NVIDIA enrichment**: request/response contract verified from NVIDIA's
   own source; the hosted base URL is not confirmed against a live endpoint
   — see [docs/nvidia-nim.md](docs/nvidia-nim.md).
-- **No self-service signup**: an operator bootstraps each organization via
-  the admin-secret-protected endpoint.
-- **`DNDLABS_FREE_TIER_SHARED_PASSWORD`** trades tenant isolation for
-  operational simplicity while enabled — see
+- **Accounts are invitation-only, with no email delivery**: an operator
+  creates each organization and invites its first admin, and invitation
+  links are handed over manually.
+- **No password reset or account removal yet**: a user who forgets their
+  password cannot recover the account, and members cannot be removed.
+- **Sign-in throttling is per account**, not per client IP — see
   [Auth](docs/architecture.md#auth).
 - UniProt and PDB connectors are stubs (`ingestion/registry.py`); calling
   them raises `ConnectorNotFoundError`.

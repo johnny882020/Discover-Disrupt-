@@ -2,8 +2,14 @@
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 
-from dndlabs.core.exceptions import IngestionError, NotFoundError
+from dndlabs.core.exceptions import (
+    ConflictError,
+    IngestionError,
+    InvitationInvalidError,
+    NotFoundError,
+)
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     ApiKeyRecord,
@@ -12,6 +18,7 @@ from dndlabs.core.schemas import (
     DatasetWithRecords,
     EnrichmentResult,
     FeatureVector,
+    Invitation,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -19,6 +26,9 @@ from dndlabs.core.schemas import (
     RawRecord,
     SourceSpec,
     SourceType,
+    User,
+    UserCredentials,
+    UserSession,
 )
 
 
@@ -73,6 +83,107 @@ def _now():  # type: ignore[no-untyped-def]
     from dndlabs.core.schemas import utcnow
 
     return utcnow()
+
+
+class FakeUsers:
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, UserCredentials] = {}
+
+    def create(self, user: User, password_hash: str) -> User:
+        if self.email_exists(user.email):
+            raise ConflictError("an account with this email already exists")
+        self.items[user.id] = UserCredentials(user=user, password_hash=password_hash)
+        return user
+
+    def get_credentials(self, email: str) -> UserCredentials | None:
+        return next((c for c in self.items.values() if c.user.email == email), None)
+
+    def get(self, org_id: uuid.UUID, user_id: uuid.UUID) -> UserCredentials:
+        found = self.items.get(user_id)
+        if found is None or found.user.org_id != org_id:
+            raise NotFoundError(f"user {user_id} not found for org {org_id}")
+        return found
+
+    def email_exists(self, email: str) -> bool:
+        return self.get_credentials(email) is not None
+
+    def record_login_failure(
+        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
+    ) -> None:
+        creds = self.items[user_id]
+        count = creds.failed_login_count + 1
+        update: dict[str, object] = {"failed_login_count": count}
+        if count >= max_attempts:
+            update = {"failed_login_count": 0, "locked_until": lock_until}
+        self.items[user_id] = creds.model_copy(update=update)
+
+    def record_login_success(self, user_id: uuid.UUID) -> None:
+        self.items[user_id] = self.items[user_id].model_copy(
+            update={"failed_login_count": 0, "locked_until": None}
+        )
+
+    def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
+        creds = self.get(org_id, user_id)
+        self.items[user_id] = creds.model_copy(update={"password_hash": password_hash})
+
+
+class FakeSessions:
+    def __init__(self) -> None:
+        self.items: dict[str, UserSession] = {}
+
+    def create(self, session: UserSession, token_hash: str) -> UserSession:
+        self.items[token_hash] = session
+        return session
+
+    def get_by_token_hash(self, token_hash: str) -> UserSession | None:
+        return self.items.get(token_hash)
+
+    def revoke(self, org_id: uuid.UUID, session_id: uuid.UUID) -> None:
+        for digest, s in self.items.items():
+            if s.id == session_id and s.org_id == org_id and s.revoked_at is None:
+                self.items[digest] = s.model_copy(update={"revoked_at": _now()})
+
+    def revoke_all_for_user(
+        self, org_id: uuid.UUID, user_id: uuid.UUID, except_session_id: uuid.UUID | None = None
+    ) -> int:
+        revoked = 0
+        for digest, s in self.items.items():
+            if (
+                s.org_id == org_id
+                and s.user_id == user_id
+                and s.id != except_session_id
+                and s.revoked_at is None
+            ):
+                self.items[digest] = s.model_copy(update={"revoked_at": _now()})
+                revoked += 1
+        return revoked
+
+    def delete_expired(self, before: datetime) -> int:
+        expired = [d for d, s in self.items.items() if s.expires_at < before]
+        for digest in expired:
+            del self.items[digest]
+        return len(expired)
+
+
+class FakeInvitations:
+    def __init__(self, users: FakeUsers) -> None:
+        self.items: dict[str, Invitation] = {}
+        self._users = users
+
+    def create(self, invitation: Invitation, token_hash: str) -> Invitation:
+        self.items[token_hash] = invitation
+        return invitation
+
+    def get_by_token_hash(self, token_hash: str) -> Invitation | None:
+        return self.items.get(token_hash)
+
+    def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
+        digest = next(d for d, i in self.items.items() if i.id == invitation.id)
+        if self.items[digest].accepted_at is not None:
+            raise InvitationInvalidError("invitation is invalid, expired or already used")
+        created = self._users.create(user, password_hash)
+        self.items[digest] = self.items[digest].model_copy(update={"accepted_at": _now()})
+        return created
 
 
 class FakeRuns:
@@ -178,9 +289,13 @@ class FakeEnrichments:
 
 
 def fake_repositories() -> Repositories:
+    users = FakeUsers()
     return Repositories(
         organizations=FakeOrganizations(),
         api_keys=FakeApiKeys(),
+        users=users,
+        sessions=FakeSessions(),
+        invitations=FakeInvitations(users),
         runs=FakeRuns(),
         datasets=FakeDatasets(),
         reports=FakeReports(),

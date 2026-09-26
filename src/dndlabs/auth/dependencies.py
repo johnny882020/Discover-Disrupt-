@@ -1,31 +1,56 @@
-"""FastAPI dependency that authenticates a request via ``X-API-Key``."""
+"""FastAPI dependencies that authenticate a request.
 
-from fastapi import Header, Request
+A request authenticates with either an API key (``X-API-Key``) or a
+sign-in session (``Authorization: Bearer <token>``). Both schemes are
+declared to OpenAPI, so ``/docs`` offers them under "Authorize".
+"""
+
+import secrets
+from typing import Annotated
+
+from fastapi import Depends, Header, Request
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from dndlabs.auth.service import AuthService
-from dndlabs.core.exceptions import InvalidApiKeyError
+from dndlabs.core.exceptions import InvalidApiKeyError, NotAuthenticatedError
 from dndlabs.core.schemas import OrgContext
 
+_api_key_scheme = APIKeyHeader(
+    name="X-API-Key", auto_error=False, description="Organization API key (programmatic access)."
+)
+_bearer_scheme = HTTPBearer(
+    auto_error=False, description="Session token from POST /auth/login (web app users)."
+)
 
-async def get_current_org(
-    request: Request, x_api_key: str | None = Header(default=None)
+
+def get_current_org(
+    request: Request,
+    api_key: Annotated[str | None, Depends(_api_key_scheme)],
+    bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
 ) -> OrgContext:
     """Resolve the authenticated organization for a request.
 
+    An API key takes precedence when both credentials are sent. A plain
+    ``def`` on purpose: verification does blocking work (Argon2, database),
+    so FastAPI runs it in its threadpool rather than on the event loop.
+
     Args:
         request: The incoming request (used to reach app-level services).
-        x_api_key: The ``X-API-Key`` header value.
+        api_key: The ``X-API-Key`` header value, if any.
+        bearer: The ``Authorization: Bearer`` credentials, if any.
 
     Returns:
         The authenticated org context.
 
     Raises:
-        InvalidApiKeyError: If the key is missing or invalid.
+        NotAuthenticatedError: If no valid credential is presented.
     """
-    if x_api_key is None:
-        raise InvalidApiKeyError("missing API key")
     auth_service: AuthService = request.app.state.services.auth
-    return auth_service.resolve(x_api_key)
+    if api_key is not None:
+        return auth_service.resolve_api_key(api_key)
+    if bearer is not None:
+        return auth_service.resolve_session(bearer.credentials)
+    raise NotAuthenticatedError("missing credentials: send X-API-Key or Authorization: Bearer")
 
 
 def require_admin_secret(
@@ -41,5 +66,5 @@ def require_admin_secret(
         InvalidApiKeyError: If the secret is missing or does not match.
     """
     expected = request.app.state.services.settings.admin_bootstrap_secret
-    if not x_admin_secret or x_admin_secret != expected:
+    if not x_admin_secret or not secrets.compare_digest(x_admin_secret.encode(), expected.encode()):
         raise InvalidApiKeyError("missing or invalid admin secret")

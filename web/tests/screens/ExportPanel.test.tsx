@@ -2,13 +2,12 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setStoredApiKey } from "../../src/api/client";
 import { ExportPanel } from "../../src/screens/ExportPanel";
-import { renderWithProviders, SEEDED_API_KEY } from "../test-utils";
+import { renderWithProviders, signInWithSeededKey } from "../test-utils";
 
 describe("ExportPanel screen", () => {
   beforeEach(() => {
-    setStoredApiKey(SEEDED_API_KEY);
+    signInWithSeededKey();
     URL.createObjectURL = URL.createObjectURL ?? (() => "blob:mock");
     URL.revokeObjectURL = URL.revokeObjectURL ?? (() => undefined);
   });

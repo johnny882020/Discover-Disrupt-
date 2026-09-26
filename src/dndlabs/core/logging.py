@@ -8,13 +8,18 @@ from datetime import UTC, datetime
 from typing import Any
 
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
+# Values under these keys keep a 4-character hint (e.g. a key's type prefix).
 _SECRET_KEYS = {"api_key", "raw_key", "hashed_key", "nvidia_nim_api_key", "admin_bootstrap_secret",
-                "authorization", "x-api-key"}  # fmt: skip
+                "authorization", "x-api-key", "x-admin-secret", "token", "token_hash"}  # fmt: skip
+# Values under these keys are redacted entirely: even a prefix of a password leaks it.
+_PASSWORD_KEYS = {"password", "current_password", "new_password", "password_hash"}
 _BEARER_RE = re.compile(r"(Bearer\s+)\S+", re.IGNORECASE)
 
 
 def _redact(key: str, value: Any) -> Any:
     """Redact a value whose key name suggests it holds a secret."""
+    if isinstance(value, str) and key.lower() in _PASSWORD_KEYS:
+        return "…"
     if isinstance(value, str) and key.lower() in _SECRET_KEYS:
         return f"{value[:4]}…" if len(value) > 8 else "…"
     if isinstance(value, str):

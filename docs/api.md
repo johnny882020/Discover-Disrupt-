@@ -1,9 +1,23 @@
 # API Reference
 
 Base URL: `http://localhost:8000` locally, `https://dndlabs-api.onrender.com`
-on Render. All routes are under `/api/v1` except `/health` and `/` (also
-mirrored at the bare root). Interactive docs: `/docs`. Auth header on every
-`/api/v1/*` route except `/api/v1/admin/*`: `X-API-Key: <key>`.
+on Render. All routes are under `/api/v1` except `/` and `/health` (also
+mirrored at `/api/v1/health`). Interactive docs: `/docs` (its **Authorize**
+button accepts either credential).
+
+## Authentication
+
+Every `/api/v1/*` route except health, `/admin/*`, sign-in and invitation
+redemption requires one of:
+
+| Header | Credential | Obtained from |
+|---|---|---|
+| `X-API-Key: ddl_live_…` | Organization API key (acts as `admin`) | `POST /admin/orgs`, `POST /admin/orgs/{org_id}/keys` |
+| `Authorization: Bearer ddl_sess_…` | User session token (the user's role) | `POST /auth/login`, `POST /auth/invitations/accept` |
+
+If both are sent, the API key is used. Tokens and keys are returned once and
+never again. See [architecture.md#auth](architecture.md#auth) for the
+security model.
 
 ## Admin (bootstrap, not customer-facing)
 
@@ -13,14 +27,24 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 |---|---|---|
 | POST | `/admin/orgs` | `{"name": "Acme"}` → creates an org, returns `ApiKeyCreated` (the raw key, shown once) |
 | POST | `/admin/orgs/{org_id}/keys` | Issue an additional key for an existing org |
+| POST | `/admin/orgs/{org_id}/invitations` | `{"email": "ada@acme.com"}` → invite the org's first **admin**; returns `InvitationCreated` (`token`, `accept_url`, shown once) |
 
-## Auth (self-service)
+## Sign-in and accounts
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/auth/whoami` | Resolve the calling key's org — used by the frontend's key-entry screen |
-| POST | `/auth/keys/revoke` | Revoke the calling key (204) |
-| DELETE | `/orgs/me/data` | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org and its keys are kept. |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/auth/login` | none | `{"email", "password"}` → `SessionCreated` (`token`, `expires_at`, `user`, `org_name`) |
+| POST | `/auth/logout` | session | End the calling session (204) |
+| POST | `/auth/password` | session | `{"current_password", "new_password"}` → 204; ends the user's other sessions |
+| POST | `/auth/invitations` | admin | `{"email", "role": "member"\|"admin"}` → `InvitationCreated` (201) |
+| POST | `/auth/invitations/preview` | none | `{"token"}` → `InvitationPreview` (`email`, `role`, `org_name`, `expires_at`); does not redeem |
+| POST | `/auth/invitations/accept` | none | `{"token", "password"}` → `SessionCreated` (201); creates the account |
+| GET | `/auth/whoami` | any | `OrgContext`: `org_id`, `org_name`, `principal` (`api_key`/`user`), `role`, and `api_key_id` or `user_id` + `session_id` + `email` |
+| POST | `/auth/keys/revoke` | API key | Revoke the calling key (204) |
+| DELETE | `/orgs/me/data` | any | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org, its keys and its user accounts are kept. |
+
+Invitation and session tokens travel in request bodies and the
+`Authorization` header, never in a URL the API receives.
 
 ## Pipelines
 
@@ -76,7 +100,11 @@ logged server-side only, never returned to the client.
 
 | Status | Meaning |
 |---|---|
-| `401` | Missing, invalid or revoked API key (or wrong admin secret on `/admin/*`) |
+| `400` | Invitation token unknown, expired or already used |
+| `401` | Missing, invalid, expired or revoked credential; wrong email or password (always `invalid email or password`); wrong admin secret on `/admin/*`. Carries `WWW-Authenticate: Bearer` |
+| `403` | Authenticated but not allowed: inviting without the `admin` role, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
 | `404` | Unknown run/dataset, or one that belongs to a different org |
-| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs) |
+| `409` | Invitation for an email that is already a member of the org, or redemption for an email that already has an account |
+| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, an invalid email), or a password that fails the policy |
+| `429` | Sign-in locked after repeated failures; retry after the `Retry-After` seconds |
 | `500` | Internal error (e.g. storage failure); detail is logged, not returned |

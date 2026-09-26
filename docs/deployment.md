@@ -16,39 +16,60 @@
 2. **Apply.** The API's first build takes a few minutes (mostly RDKit).
 3. Retrieve the generated admin secret: `dndlabs-api` → Environment →
    `DNDLABS_ADMIN_BOOTSTRAP_SECRET`.
-4. Bootstrap the first organization:
+4. Confirm the database is migrated: `GET /api/v1/health/ready` returns
+   `{"status": "ok", "database": "ok"}`.
+5. Onboard the first organization — create it, then invite its admin:
    ```bash
-   curl -X POST https://dndlabs-api.onrender.com/api/v1/admin/orgs \
-     -H "X-Admin-Secret: <the generated secret>" \
+   API=https://dndlabs-api.onrender.com/api/v1
+   SECRET=<the generated secret>
+   curl -X POST $API/admin/orgs -H "X-Admin-Secret: $SECRET" \
      -H "content-type: application/json" -d '{"name": "Your Org"}'
-   # -> {"raw_key": "ddl_live_...", ...}  — shown once, save it now
+   # -> {"org_id": "...", "raw_key": "ddl_live_...", ...}  API key, shown once
+   curl -X POST $API/admin/orgs/<org_id>/invitations -H "X-Admin-Secret: $SECRET" \
+     -H "content-type: application/json" -d '{"email": "admin@yourorg.com"}'
+   # -> {"accept_url": "https://dndlabs-web.onrender.com/invite#token=ddl_inv_...", ...}
    ```
-5. Open `https://dndlabs-web.onrender.com`, enter the key.
+6. Send the `accept_url` to the admin over a trusted channel. It works once
+   and expires after 72 hours. Opening it, they choose their own password
+   and are signed in. From the web app's **Team** page they then invite
+   the rest of their organization; nobody else needs the admin secret.
 
-For a quick smoke check instead of step 4, sign in with the shared
-credential (`DNDLABS_FREE_TIER_SHARED_PASSWORD`, default `freetier2026`) —
-it authenticates with no database lookup, so it works before migrations
-have even run. Temporary and insecure; see [Auth](architecture.md#auth).
+Keep the API key for programmatic access, or discard it — web users never
+need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
+
+### Upgrading from the shared-password release
+
+Earlier releases offered a shared login (`DNDLABS_FREE_TIER_SHARED_PASSWORD`)
+that authenticated everyone as one fixed organization. It no longer exists:
+- The code ignores the variable. Delete it from `dndlabs-api` → Environment;
+  removing a variable from `render.yaml` does not remove it from an existing
+  service.
+- Migration `0003` deletes that organization and its data on the first
+  deploy.
+- Onboard real users by invitation (step 5).
 
 ### Configuration
 
 | Variable | Where | Notes |
 |---|---|---|
 | `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment runs but marks every record `skipped_no_key`; see [nvidia-nim.md](nvidia-nim.md) |
-| `DNDLABS_FREE_TIER_SHARED_PASSWORD` | API service env | Default `freetier2026`. Clear it once real org keys are in use; see [Auth](architecture.md#auth) |
-| `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL (CORS) |
+| `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL: it is the CORS origin and the base of invitation links |
+| `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
 | `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build; changing this requires a rebuild, not a restart |
 
 ### Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `401` on every request | Missing/wrong `X-API-Key`, or the key was revoked — bootstrap a new org or issue a new key |
+| Sent back to sign-in with "Your session has ended" | The session expired (12 h), was signed out elsewhere, or the password was changed on another device — sign in again |
+| `401 invalid email or password` | Wrong email or password. After 5 failures the account locks for 15 minutes (`429`); an admin cannot unlock it early |
+| Invitation link says "invalid, expired or already used" | Links work once and expire after 72 h — ask an admin (Team page) for a new one |
+| `401` on every API call from a script | Missing/wrong `X-API-Key`, or the key was revoked — issue a new key |
 | Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set; confirm the hosted base URL first — see [nvidia-nim.md](nvidia-nim.md) |
 | CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
 | First request is slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site never sleeps. |
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
-| `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema-alembic-head-0002)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. `DNDLABS_FREE_TIER_SHARED_PASSWORD` keeps working throughout, since it never touches the database. |
+| `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. |
 
 ## Docker Compose (local)
 

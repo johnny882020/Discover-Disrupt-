@@ -21,15 +21,11 @@ class Settings(BaseSettings):
     admin_bootstrap_secret: str = "change-me-in-production"
     frontend_origin: str = "http://localhost:5173"
 
-    free_tier_shared_password: str | None = Field(
-        default="freetier2026",
-        description=(
-            "Temporary, insecure shared credential: authenticates as one fixed "
-            "org with no per-org key and no database lookup. Set to an empty "
-            "string to disable. Replace with real per-org keys before "
-            "onboarding real customers."
-        ),
-    )
+    session_ttl_hours: int = Field(default=12, ge=1, le=720)
+    invitation_ttl_hours: int = Field(default=72, ge=1, le=720)
+    login_max_attempts: int = Field(default=5, ge=1)
+    login_lockout_minutes: int = Field(default=15, ge=1)
+    password_min_length: int = Field(default=12, ge=8, le=64)
 
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)

@@ -5,7 +5,9 @@ import secrets
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
-_hasher = PasswordHasher()
+#: Argon2id hasher shared by API keys and user passwords (argon2-cffi
+#: defaults: the RFC 9106 low-memory profile, 64 MiB, t=3).
+password_hasher = PasswordHasher()
 
 #: Prefix identifying a live D&D Labs key (vs. e.g. a future "test" env).
 KEY_PREFIX = "ddl_live_"
@@ -35,7 +37,7 @@ def hash_key(raw_key: str) -> str:
     Returns:
         An Argon2 hash safe to persist.
     """
-    return _hasher.hash(raw_key)
+    return password_hasher.hash(raw_key)
 
 
 def verify_key(raw_key: str, hashed_key: str) -> bool:
@@ -49,7 +51,7 @@ def verify_key(raw_key: str, hashed_key: str) -> bool:
         True if the key matches.
     """
     try:
-        return _hasher.verify(hashed_key, raw_key)
+        return password_hasher.verify(hashed_key, raw_key)
     except VerifyMismatchError:
         return False
 
