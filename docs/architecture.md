@@ -91,9 +91,7 @@ class Connector(Protocol):
 class OrgScopedConnector(Protocol):  # reads org-owned input, e.g. an upload
     source: SourceType
 
-    def fetch_for_org(
-        self, org_id: uuid.UUID, spec: SourceSpec
-    ) -> AsyncIterator[RawRecord]: ...
+    def fetch_for_org(self, org_id: uuid.UUID, spec: SourceSpec) -> AsyncIterator[RawRecord]: ...
 
 
 class ValidationRule(Protocol):
