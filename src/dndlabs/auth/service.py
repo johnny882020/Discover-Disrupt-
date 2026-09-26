@@ -116,7 +116,7 @@ class AuthService:
                 self._organizations.create(
                     Organization(id=FREE_TIER_ORG_ID, name=FREE_TIER_ORG_NAME)
                 )
-            except Exception:  # noqa: BLE001 - best-effort provisioning, see docstring
+            except Exception:
                 logger.warning("free_tier_org_create_failed", exc_info=True)
-        except Exception:  # noqa: BLE001 - storage unavailable; auth still succeeds
+        except Exception:
             logger.warning("free_tier_org_lookup_failed", exc_info=True)
