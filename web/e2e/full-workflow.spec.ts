@@ -75,7 +75,9 @@ async function signIn(page: Page, email: string, password: string): Promise<void
 
 async function signOut(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByLabel("Email")).toBeVisible();
+  // Wait for the sign-in screen itself: an "Email" field alone is ambiguous,
+  // since the Team page's invite form has one too.
+  await expect(page.getByText("Sign in to your organization.")).toBeVisible();
 }
 
 test.describe("full pipeline workflow", () => {
