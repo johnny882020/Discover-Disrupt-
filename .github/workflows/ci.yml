@@ -7,6 +7,19 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      # Production runs on Postgres; migration tests must too (SQLite alone
+      # missed the legacy-schema bug — see tests/integration/test_migrations_postgres.py).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DNDLABS_TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -45,6 +58,10 @@ jobs:
         run: |
           docker run --rm --entrypoint python dndlabs-api:ci \
             -c "import dndlabs; print(dndlabs.__version__)"
+      - name: Build local-dev web image
+        run: docker build -t dndlabs-web:ci web
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
 
   frontend:
     runs-on: ubuntu-latest
