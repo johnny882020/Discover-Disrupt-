@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -60,3 +61,33 @@ def test_configure_logging(json_output: bool) -> None:
     assert logging.getLogger().level == logging.DEBUG
     assert get_logger("dndlabs.test").name == "dndlabs.test"
     configure_logging("INFO")
+
+
+def _env_example() -> dict[str, str]:
+    path = Path(__file__).parents[3] / ".env.example"
+    pairs = (
+        line.split("=", 1)
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+    return {key: value for key, value in pairs}
+
+
+def test_env_example_documents_exactly_the_settings() -> None:
+    documented = set(_env_example())
+    settings = {f"DNDLABS_{name.upper()}" for name in Settings.model_fields}
+    assert documented - settings == set(), "variables the code does not read"
+    assert settings - documented == set(), "settings missing from .env.example"
+
+
+def test_env_example_values_are_the_real_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in _env_example().items():
+        monkeypatch.setenv(key, value)
+    from_example = Settings(_env_file=None)  # type: ignore[call-arg]
+    defaults = Settings.model_construct()
+    for name in Settings.model_fields:
+        documented, default = getattr(from_example, name), getattr(defaults, name)
+        if default is None:  # optional secret: an empty value means "unset"
+            assert not documented, name
+        else:
+            assert documented == default, name

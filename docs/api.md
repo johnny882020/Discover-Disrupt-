@@ -57,16 +57,16 @@ the caller's. Returns `202` with a `PipelineRun` (`status: "pending"`);
 
 `EnrichmentResult.status` is one of `enriched`, `skipped_no_key`, `failed`.
 
-## Health
+## Service and health (no auth)
 
-`GET /health` (also `/api/v1/health`) → `{"status": "ok"}`, no auth. Pure
-liveness: never touches the database, so a broken or unmigrated database
-does not fail this check. This is the path Render's `healthCheckPath` uses.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Service name, version, documentation links and endpoint list (`ServiceInfo`); browsers sending `Accept: text/html` get an HTML landing page |
+| GET | `/health`, `/api/v1/health` | Liveness: `{"status": "ok"}`. Never touches the database — this is Render's `healthCheckPath` |
+| GET | `/api/v1/health/ready` | Readiness: `{"status": "ok", "database": "ok"}`, or `503` with `{"status": "unavailable", "database": "unavailable"}` when the database is unreachable or unmigrated |
 
-`GET /api/v1/health/ready` → `{"status": "ok", "database": "ok"}`, or
-`503` with `{"status": "unavailable", "database": "unavailable"}` if a
-trivial query against the database fails. No auth. Use this, not `/health`,
-to determine whether the database is actually reachable and migrated.
+Use `/api/v1/health/ready`, not `/health`, to check that the database is
+reachable and migrated.
 
 ## Errors
 

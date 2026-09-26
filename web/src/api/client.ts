@@ -51,6 +51,24 @@ export function clearStoredApiKey(): void {
   }
 }
 
+/**
+ * Turn an error body's `detail` into a human-readable message. FastAPI's
+ * 422 list is joined from each item's `msg`, minus pydantic's
+ * "Value error, " prefix.
+ */
+export function formatErrorDetail(detail: ApiErrorBody["detail"] | undefined): string | null {
+  if (typeof detail === "string") {
+    return detail || null;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => item.msg.replace(/^Value error, /, ""))
+      .filter((msg) => msg.length > 0);
+    return messages.length > 0 ? messages.join("; ") : null;
+  }
+  return null;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
   body?: unknown;
@@ -80,10 +98,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (!response.ok) {
     let detail = `Request failed with status ${response.status}`;
     try {
-      const body = (await response.json()) as ApiErrorBody;
-      if (body.detail) {
-        detail = body.detail;
-      }
+      const body = (await response.json()) as Partial<ApiErrorBody>;
+      detail = formatErrorDetail(body.detail) ?? detail;
     } catch {
       // Response body wasn't JSON; fall back to the generic message.
     }

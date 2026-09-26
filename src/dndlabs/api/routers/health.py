@@ -40,7 +40,15 @@ def health() -> HealthResponse:
     return HealthResponse()
 
 
-@router.get("/health/ready")
+@router.get(
+    "/health/ready",
+    responses={
+        503: {
+            "model": ReadinessResponse,
+            "description": "Database unreachable or not migrated.",
+        }
+    },
+)
 def readiness(services: Services, response: Response) -> ReadinessResponse:
     """Readiness probe: liveness plus a real database check.
 

@@ -99,7 +99,7 @@ Full list: [`.env.example`](.env.example). The variables that matter most:
 ## Development
 
 ```bash
-pytest --cov=dndlabs                       # backend: 194 tests, 97% coverage
+pytest --cov=dndlabs                       # backend tests + coverage
 DNDLABS_TEST_POSTGRES_URL=postgresql+psycopg://… pytest tests/integration  # migrations on real Postgres
 DNDLABS_LIVE_TESTS=1 pytest -m live        # against the real external APIs (opt-in)
 ruff check . && ruff format --check . && mypy src/ --strict

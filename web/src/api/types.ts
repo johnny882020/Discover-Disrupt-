@@ -156,9 +156,19 @@ export interface EnrichmentResponse {
   results: EnrichmentResult[];
 }
 
-/** Shape of an API error body: `{detail: string}`. */
+/** One entry of FastAPI's request-validation error list (HTTP 422). */
+export interface ValidationErrorItem {
+  loc: (string | number)[];
+  msg: string;
+  type: string;
+}
+
+/**
+ * Shape of an API error body. Domain errors (401/404/500) carry a string;
+ * request-validation errors (422) carry FastAPI's list of items.
+ */
 export interface ApiErrorBody {
-  detail: string;
+  detail: string | ValidationErrorItem[];
 }
 
 /** Response of `GET /health`. */
