@@ -62,16 +62,18 @@ automatically via `docker/entrypoint.sh`), and the frontend dev server
 
 ## CI
 
-`.github/workflows/ci.yml` runs three jobs on every push and PR:
+`.github/workflows/ci.yml` gates every push and PR on four jobs:
 
 | Job | Checks |
 |---|---|
-| `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit` (informational) |
+| `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit .` (project runtime dependencies) |
+| `frontend` | `eslint`, `tsc --noEmit` (source, tests, e2e and configs), `vitest`, `vite build`, `npm audit --audit-level=high` |
 | `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
-| `frontend` | `eslint`, `tsc --noEmit`, `vitest`, `vite build`, `npm audit --audit-level=high` (informational) |
+| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → bootstrap an org → API → production frontend build → Playwright (`web/e2e/`). Uploads the Playwright report and API log on failure. |
 
-The dependency scans are informational, not merge-blocking, until their
-current findings are triaged — see README's Known limitations.
+The dependency scans block merges. `.github/dependabot.yml` opens weekly
+update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
+disclosed vulnerability arrives as a fix PR rather than only as a red build.
 
 `.github/workflows/smoke.yml` is a manual `workflow_dispatch` that runs
 `scripts/smoke_test.py` against a deployed URL: it waits out a cold start,

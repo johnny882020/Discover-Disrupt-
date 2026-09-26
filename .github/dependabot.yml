@@ -1,0 +1,31 @@
+# Automated dependency-update PRs. CI blocks merges on known vulnerabilities
+# (pip-audit, npm audit), so these PRs are how a newly disclosed CVE gets fixed.
+# Minor/patch updates are grouped per ecosystem to keep PR volume low; majors
+# arrive individually, since they need review.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directories: [/docker, /web]
+    schedule:
+      interval: weekly
