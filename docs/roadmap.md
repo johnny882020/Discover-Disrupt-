@@ -54,7 +54,7 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 |---|---|
 | Chemical standardization (salts, charges, functional groups) in validation; salt forms de-duplicate | Done |
 | Account management: admin-issued password-reset links, remove members, change roles, revoke pending invitations | Done |
-| Structure depiction with RDKit.js, with a text fallback | Planned |
+| Structure depiction with RDKit.js, with a text fallback | Done |
 | Browser upload (CSV, TSV, XLSX, SDF) stored per organization | Planned |
 | Column-mapping step with auto-detected roles and reusable templates | Planned |
 

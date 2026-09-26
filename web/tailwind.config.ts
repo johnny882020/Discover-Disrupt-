@@ -2,7 +2,15 @@ import type { Config } from "tailwindcss";
 
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: ["class", '[data-theme="dark"]'],
+  // Same rule as design-system/tokens.css: follow the OS colour scheme, unless
+  // <html data-theme="light|dark"> forces one.
+  darkMode: [
+    "variant",
+    [
+      '@media (prefers-color-scheme: dark) { &:not([data-theme="light"] *) }',
+      '&:is([data-theme="dark"] *)',
+    ],
+  ],
   theme: {
     extend: {
       colors: {

@@ -399,6 +399,18 @@ session token or an API key — in memory and `sessionStorage` (never
 - The query cache is cleared whenever the identity changes, so one org's
   data is never shown to another.
 
+**Structures.** `design-system/MoleculeView.tsx` draws 2D structures in the
+browser with RDKit.js (RDKit compiled to WebAssembly, BSD-3). The module
+(about 2.4 MB gzipped) is loaded lazily the first time a structure is shown,
+by `chem/rdkit.ts`, and depictions are cached by SMILES and size. The
+drawing is an SVG `<img>`, so it cannot run script. Until RDKit.js has
+loaded — or if it cannot load or parse the SMILES — the SMILES text is shown
+instead.
+
+**Theme.** Light and dark follow the operating system's colour scheme;
+`<html data-theme="light|dark">` forces one. The Tailwind `dark:` variant
+and the tokens in `design-system/tokens.css` use the same rule.
+
 **Development and tests.** The app is built against a mock server (MSW)
 that mirrors the real API contract, auth included, so it can be developed
 without a backend. Its Playwright e2e test runs it against the real backend.

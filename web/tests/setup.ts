@@ -8,8 +8,9 @@ beforeAll(() => {
 
 afterEach(() => {
   server.resetHandlers();
-  sessionStorage.clear();
-  localStorage.clear();
+  // Absent in files that opt into the Node environment (`@vitest-environment node`).
+  globalThis.sessionStorage?.clear();
+  globalThis.localStorage?.clear();
 });
 
 afterAll(() => {

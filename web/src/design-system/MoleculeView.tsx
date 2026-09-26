@@ -1,16 +1,67 @@
 /**
- * Renders a compound's structure.
+ * Renders a compound's 2D structure with RDKit.js.
  *
- * TODO(follow-up): this is a v1 placeholder that renders the SMILES string
- * as monospace text. The plan calls for an actual 2D structure rendering
- * via RDKit.js compiled to WASM; wiring that renderer (loading the WASM
- * module, drawing to a <canvas>/SVG, handling load failures) is a
- * documented follow-up and is deliberately out of scope for this pass.
+ * The SMILES text is shown while RDKit.js loads, and permanently if it
+ * cannot load or cannot parse the SMILES — the structure is never hidden.
+ * The depiction is an `<img>` (an SVG data URL), so drawn content can never
+ * run script; in dark mode it is inverted, with hues rotated back, so bonds
+ * stay visible and heteroatom colours stay recognizable.
  */
-export function MoleculeView({ smiles }: { smiles: string | null }): React.JSX.Element {
+import { useEffect, useState } from "react";
+import { depictSvg, loadRDKit, type DepictionSize } from "../chem/rdkit";
+
+const SIZES: Record<"sm" | "md" | "lg", DepictionSize> = {
+  sm: { width: 160, height: 100 },
+  md: { width: 260, height: 180 },
+  lg: { width: 420, height: 300 },
+};
+
+interface MoleculeViewProps {
+  smiles: string | null;
+  size?: keyof typeof SIZES;
+}
+
+export function MoleculeView({ smiles, size = "sm" }: MoleculeViewProps): React.JSX.Element {
+  const dims = SIZES[size];
+  const [svg, setSvg] = useState<{ smiles: string; markup: string } | null>(null);
+
+  useEffect(() => {
+    if (!smiles) {
+      return;
+    }
+    let cancelled = false;
+    loadRDKit()
+      .then((rdkit) => {
+        const markup = depictSvg(rdkit, smiles, dims);
+        if (!cancelled && markup) {
+          setSvg({ smiles, markup });
+        }
+      })
+      .catch(() => {
+        // RDKit.js unavailable: the SMILES text fallback stays in place.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [smiles, dims]);
+
   if (!smiles) {
     return <span className="text-xs text-ink/40 dark:text-paper/40">No structure</span>;
   }
+
+  if (svg?.smiles === smiles) {
+    return (
+      <img
+        src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.markup)}`}
+        alt={smiles}
+        title={smiles}
+        width={dims.width}
+        height={dims.height}
+        className="dark:[filter:invert(1)_hue-rotate(180deg)]"
+      />
+    );
+  }
+
   return (
     <span
       title={smiles}
