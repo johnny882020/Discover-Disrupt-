@@ -106,6 +106,7 @@ def build_container(
                 chembl_http,
                 page_size=settings.chembl_page_size,
                 max_retries=settings.chembl_max_retries,
+                backoff_seconds=settings.chembl_backoff_seconds,
             ),
             CsvConnector(),
             JsonConnector(),
@@ -123,7 +124,9 @@ def build_container(
         repositories=repositories,
         service=service,
         exporter=DatasetExporter(),
-        auth=AuthService(repositories.organizations, repositories.api_keys),
+        auth=AuthService(
+            repositories.organizations, repositories.api_keys, settings.free_tier_shared_password
+        ),
         _engine=engine,
         _http_clients=tuple(http_clients),
     )

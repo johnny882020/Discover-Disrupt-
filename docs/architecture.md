@@ -114,6 +114,16 @@ only an Argon2 hash and a short lookup `prefix` are stored. Every other
 endpoint requires `X-API-Key: <raw_key>`, resolved by `AuthService.resolve`
 into an `OrgContext` that every downstream call is scoped by.
 
+**Free-tier shared password (temporary, insecure).** When
+`DNDLABS_FREE_TIER_SHARED_PASSWORD` is set (default `freetier2026`), any
+`X-API-Key` equal to it authenticates as one fixed, shared identity
+(`AuthService.FREE_TIER_ORG_ID`) with no per-org key and — deliberately — no
+database lookup, so it authenticates even if the database is unreachable or
+unmigrated. It cannot be revoked. This exists only to unblock a single-operator
+free-tier deployment before real customer onboarding; every caller who knows
+the password shares one identity and one dataset. Clear the variable (empty
+string) to disable it once real per-org keys are in use.
+
 ## Validation
 
 Record rules run in this order. Each receives the record as the previous
@@ -197,7 +207,21 @@ on PostgreSQL and JSON/TEXT-backed on SQLite, so the same models and
 migration run identically against Postgres (Docker/Render) and SQLite
 (local dev, tests). `dnd-pipeline init-db` applies migrations; it also
 adopts a schema created earlier by `DNDLABS_AUTO_CREATE_SCHEMA=true` (dev
-convenience) by stamping revision `0001` before upgrading.
+convenience) by stamping revision `0001` before upgrading — this shortcut
+logs a `WARNING` (`migration_stamp_shortcut`) so a schema that doesn't
+actually match revision `0001` is visible in logs, not silent.
+
+**Readiness vs. liveness.** `GET /health` never touches the database (see
+`docs/api.md`); `GET /api/v1/health/ready` does, via
+`OrganizationRepository.ping()`. This distinction exists because of a real
+incident: the database had no tables at all while `/health` kept reporting
+`ok`, and there was no way to tell from the outside. Use `/health/ready` to
+check that first, before digging through logs.
+
+**Connection pooling.** `storage/database.py`'s `create_db_engine` sets
+`pool_size=3, max_overflow=2, pool_recycle=300` for Postgres — conservative
+on purpose, since Render's free Postgres plan caps total connections low
+and a single worker never needs more even under load.
 
 ## Frontend
 

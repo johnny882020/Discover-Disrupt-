@@ -12,9 +12,20 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from dndlabs.core.exceptions import StorageError
+from dndlabs.core.logging import get_logger
 from dndlabs.storage.models import Base
 
+logger = get_logger(__name__)
+
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# Conservative for Render's free Postgres plan, which caps total connections
+# in the low double digits; a single worker should never need more than
+# this even under load, and pool_recycle avoids relying solely on
+# pool_pre_ping to detect connections the server has idle-closed.
+_POSTGRES_POOL_SIZE = 3
+_POSTGRES_MAX_OVERFLOW = 2
+_POSTGRES_POOL_RECYCLE_SECONDS = 300
 
 
 def create_db_engine(url: str) -> Engine:
@@ -33,7 +44,13 @@ def create_db_engine(url: str) -> Engine:
         engine = create_engine(url, **kwargs)
         event.listen(engine, "connect", _enable_sqlite_fks)
         return engine
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=_POSTGRES_POOL_SIZE,
+        max_overflow=_POSTGRES_MAX_OVERFLOW,
+        pool_recycle=_POSTGRES_POOL_RECYCLE_SECONDS,
+    )
 
 
 def _enable_sqlite_fks(dbapi_connection: object, _record: object) -> None:
@@ -66,6 +83,16 @@ def run_migrations(url: str) -> None:
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     try:
         if _created_without_alembic(url):
+            logger.warning(
+                "migration_stamp_shortcut",
+                extra={
+                    "detail": (
+                        "schema exists without alembic_version; stamping 0001 "
+                        "and skipping migrations 0001 would otherwise apply — "
+                        "verify the schema actually matches revision 0001"
+                    )
+                },
+            )
             command.stamp(config, "0001")
         command.upgrade(config, "head")
     except SQLAlchemyError as exc:

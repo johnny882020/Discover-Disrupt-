@@ -86,3 +86,11 @@ one config value, so correcting it is a one-place change.
 | `DNDLABS_NVIDIA_NIM_BASE_URL` | `https://health.api.nvidia.com/v1/biology/nvidia/genmol` | Unverified — see above |
 | `DNDLABS_NVIDIA_NIM_NUM_CANDIDATES` | `5` | Candidates generated per seed molecule |
 | `DNDLABS_NVIDIA_NIM_SCORING` | `QED` | Oracle GenMol optimizes for |
+
+**No retry on failure (by design).** Unlike the PubChem/ChEMBL connectors,
+`HttpGenMolClient` does not retry a failed call — a transient NIM error
+marks that record `status: "failed"` immediately and the pipeline moves on.
+Enrichment is a best-effort, per-record add-on to an already-valid dataset,
+not something a run should stall or fail on; if this needs to change for
+production volumes, add the same backoff pattern already used by the
+ingestion connectors.

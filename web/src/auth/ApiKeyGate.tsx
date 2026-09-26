@@ -6,7 +6,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../api/client";
 import { Button } from "../design-system/Button";
 import { Card } from "../design-system/Card";
-import { useApiKey } from "./ApiKeyContext";
+import { useApiKey } from "./useApiKey";
 
 export function ApiKeyGate({ children }: { children: ReactNode }): React.JSX.Element {
   const { apiKey, org, login } = useApiKey();

@@ -30,11 +30,35 @@ async def _bad_input(_: Request, exc: Exception) -> JSONResponse:
     )
 
 
+_GENERIC_500_DETAIL = "internal server error"
+
+
 async def _internal(_: Request, exc: Exception) -> JSONResponse:
-    """Return 500 for other domain errors, logging them."""
-    logger.error("request failed", extra={"error": str(exc), "type": type(exc).__name__})
+    """Return 500 for other domain errors, logging full detail server-side only.
+
+    The exception's message (e.g. a wrapped ``psycopg`` error) is never put
+    in the response body — an earlier version of this handler did that, and
+    a real incident showed a raw database error surfacing verbatim in a
+    client-visible 500.
+    """
+    logger.error("request_failed", extra={"error": str(exc), "type": type(exc).__name__})
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": str(exc)}
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": _GENERIC_500_DETAIL}
+    )
+
+
+async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
+    """Return 500 for any exception that isn't a ``DndLabsError``.
+
+    This is a safety net, not a load-bearing path: every DB-touching code
+    path should already go through ``storage.database.SessionFactory``,
+    which converts ``SQLAlchemyError`` into ``StorageError`` (handled by
+    ``_internal`` above). This exists so an unanticipated bug still returns a
+    clean, logged 500 instead of depending on Starlette's default behavior.
+    """
+    logger.error("unhandled_exception", extra={"type": type(exc).__name__}, exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": _GENERIC_500_DETAIL}
     )
 
 
@@ -48,3 +72,4 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InvalidApiKeyError, _unauthorized)
     app.add_exception_handler(IngestionError, _bad_input)
     app.add_exception_handler(DndLabsError, _internal)
+    app.add_exception_handler(Exception, _unhandled)

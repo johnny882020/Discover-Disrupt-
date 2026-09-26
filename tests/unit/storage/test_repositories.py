@@ -21,6 +21,8 @@ from dndlabs.core.schemas import (
     SourceType,
     ValidationIssue,
 )
+from dndlabs.storage.database import create_db_engine
+from dndlabs.storage.repositories import build_sql_repositories
 
 
 def _org(repos: Repositories, name: str = "Acme") -> Organization:
@@ -48,6 +50,17 @@ def test_organization_roundtrip(repos: Repositories) -> None:
     assert repos.organizations.get(org.id) == org
     with pytest.raises(NotFoundError):
         repos.organizations.get(uuid.uuid4())
+
+
+def test_ping_succeeds_against_a_migrated_database(repos: Repositories) -> None:
+    repos.organizations.ping()  # must not raise
+
+
+def test_ping_fails_against_a_database_with_no_schema() -> None:
+    # No create_schema() call: mirrors an unmigrated database.
+    unmigrated = build_sql_repositories(create_db_engine("sqlite:///:memory:"))
+    with pytest.raises(StorageError):
+        unmigrated.organizations.ping()
 
 
 def test_run_create_get_update(repos: Repositories) -> None:

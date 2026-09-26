@@ -161,6 +161,18 @@ class OrganizationRepository(Protocol):
         """
         ...
 
+    def ping(self) -> None:
+        """Verify storage is reachable and migrated.
+
+        Used only by the readiness probe (``GET /api/v1/health/ready``), not
+        by any business logic.
+
+        Raises:
+            StorageError: If the database is unreachable or the schema is
+                missing/incomplete (e.g. migrations have not run).
+        """
+        ...
+
 
 class ApiKeyRepository(Protocol):
     """Persistence of API keys."""

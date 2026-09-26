@@ -44,7 +44,11 @@ docker compose up --build
 - API: <http://localhost:8000> (docs at `/docs`)
 - Frontend: <http://localhost:5173>
 
-Bootstrap your first organization:
+Fastest path: open <http://localhost:5173> and enter the shared password
+`freetier2026` (see `DNDLABS_FREE_TIER_SHARED_PASSWORD` below — **temporary
+and insecure**, replace with real per-org keys before onboarding customers).
+
+Or bootstrap a real, isolated organization:
 
 ```bash
 curl -X POST localhost:8000/api/v1/admin/orgs \
@@ -107,6 +111,7 @@ ones:
 | `DNDLABS_ADMIN_BOOTSTRAP_SECRET` | `change-me-in-production` | Guards `POST /admin/orgs` |
 | `DNDLABS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin |
 | `DNDLABS_NVIDIA_NIM_API_KEY` | unset | Enrichment runs but marks every record `skipped_no_key` when unset |
+| `DNDLABS_FREE_TIER_SHARED_PASSWORD` | `freetier2026` | **Temporary, insecure.** One password authenticates as one shared identity, no per-org key needed. Clear it once real org keys are in use — see [docs/architecture.md](docs/architecture.md#auth) |
 
 Frontend build-time: `VITE_API_BASE_URL` (see `web/.env.example`).
 
@@ -142,3 +147,19 @@ docker/  docs/  scripts/
 - UniProt and PDB connectors are documented stubs (`ingestion/registry.py`).
 - `PRIVACY_POLICY.md` is a draft pending legal review — see the file for
   what it does and doesn't cover.
+- **No dependency lockfile**: `pip install -e ".[dev]"` and `npm ci` (against
+  `package-lock.json`, so the frontend *is* pinned) install unpinned
+  backend floor versions; a `requirements`/`uv.lock`-style pin for the
+  backend is worth adding for fully reproducible CI installs.
+- **Dependency scanning is informational, not gating**: `pip-audit` and
+  `npm audit --audit-level=high` run in CI (`continue-on-error: true`).
+  Current known findings — `cryptography`/`pip`/`setuptools` transitive
+  versions on the backend, `react-router` (moderate open-redirect) and
+  `vite`/`esbuild` dev-server tooling on the frontend — need a deliberate,
+  tested upgrade (`react-router` in particular is a breaking major-version
+  bump) before promoting these scans to a hard gate.
+- **No code-level SAST** (e.g. `bandit`): dependency scanning covers known-
+  vulnerable packages, not custom code patterns.
+- **Playwright e2e runs manually only**, not gated in CI — it needs a real
+  Postgres and a built frontend in the CI runner, which isn't set up yet.
+- No Dependabot/Renovate config for automated dependency-update PRs.
