@@ -216,12 +216,18 @@ left it.
 |---|---|---|---|
 | 1 | `schema` | No SMILES or InChI; molecular weight not numeric or ≤ 0 | — |
 | 2 | `compound_identity` | Unparsable SMILES/InChI; SMILES and InChI describe different compounds | Supplied InChIKey/formula disagrees with the structure (computed value used) |
-| 3 | `unit_normalization` | Value not numeric or negative; missing/unsupported unit; unsupported relation operator | Unit given without a value |
+| 3 | `standardization` | — | Structure changed by standardization (salts/solvents stripped, charges neutralized; the submitted SMILES is kept in the message); multi-component structure (mixture) |
+| 4 | `unit_normalization` | Value not numeric or negative; missing/unsupported unit; unsupported relation operator | Unit given without a value |
+
+`standardization` applies the [ChEMBL Structure
+Pipeline](https://github.com/chembl/ChEMBL_Structure_Pipeline) (MIT) and
+replaces the structure with its standardized parent, recomputing
+identifiers, formula and molecular weight.
 
 The dataset-level `duplicates` rule then keeps the first record per
 `record_key` and drops the rest with a warning. `record_key` is the
-InChIKey RDKit computes from the structure, so duplicates are caught across
-sources and SMILES spellings. `activity_value_nm` is normalized to
+InChIKey of the standardized parent, so duplicates are caught across
+sources, SMILES spellings and salt forms. `activity_value_nm` is normalized to
 nanomolar; accepted units are `M`, `mM`, `uM`/`µM`/`μM`, `nM`, `pM` and
 `mol/L` variants (case-insensitive except molar, which must be `M`).
 

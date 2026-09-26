@@ -4,6 +4,7 @@ RDKit ships only partial type information; confining it to this module keeps
 ``mypy --strict`` meaningful everywhere else.
 """
 
+from chembl_structure_pipeline import standardizer  # type: ignore[import-untyped]
 from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, rdMolDescriptors
 
@@ -40,6 +41,26 @@ class Molecule:
     def formula(self) -> str:
         """Molecular formula in Hill order."""
         return str(rdMolDescriptors.CalcMolFormula(self._mol))
+
+    @property
+    def fragment_count(self) -> int:
+        """Number of disconnected components (e.g. 2 for a salt)."""
+        return len(Chem.GetMolFrags(self._mol))
+
+    def standardized_parent(self) -> "Molecule":
+        """Apply the ChEMBL Structure Pipeline and return the parent structure.
+
+        Standardizes the molecule (normalizes functional-group
+        representations, neutralizes charges where possible) and strips
+        salts and solvents. A structure made only of salt/solvent components
+        is returned standardized but otherwise unchanged.
+
+        Returns:
+            The standardized parent molecule.
+        """
+        standardized = standardizer.standardize_mol(self._mol)
+        parent, _excluded = standardizer.get_parent_mol(standardized)
+        return Molecule(parent)
 
     @property
     def average_weight(self) -> float:
