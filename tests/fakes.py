@@ -35,6 +35,9 @@ class FakeOrganizations:
             raise NotFoundError(f"organization {org_id} not found")
         return self.items[org_id]
 
+    def ping(self) -> None:
+        pass
+
 
 class FakeApiKeys:
     def __init__(self) -> None:

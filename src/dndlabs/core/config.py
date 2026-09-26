@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     chembl_timeout_seconds: float = Field(default=30.0, gt=0)
     chembl_page_size: int = Field(default=50, ge=1, le=1000)
     chembl_max_retries: int = Field(default=3, ge=0)
+    chembl_backoff_seconds: float = Field(default=0.5, ge=0)
 
     nvidia_nim_api_key: str | None = None
     nvidia_nim_base_url: str = "https://health.api.nvidia.com/v1/biology/nvidia/genmol"

@@ -23,6 +23,28 @@ jobs:
         run: mypy src/
       - name: Test
         run: pytest --cov=dndlabs --cov-report=term-missing
+      - name: Dependency vulnerability scan
+        # Informational for now: flags known-vulnerable dependencies without
+        # blocking merges on pre-existing, unreviewed findings. Promote to a
+        # hard gate once the current findings are triaged.
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build API image
+        run: docker build -f docker/Dockerfile.api -t dndlabs-api:ci .
+      - name: Smoke-test the built image
+        # Overrides the image's entrypoint (which runs migrations against
+        # DNDLABS_DATABASE_URL) so this only checks that the image itself is
+        # sound — a working Python env with the package importable.
+        run: |
+          docker run --rm --entrypoint python dndlabs-api:ci \
+            -c "import dndlabs; print(dndlabs.__version__)"
 
   frontend:
     runs-on: ubuntu-latest
@@ -46,3 +68,9 @@ jobs:
         run: npm test -- --run
       - name: Build
         run: npm run build
+      - name: Dependency vulnerability scan
+        # Informational for now, same rationale as the backend's pip-audit
+        # step: known findings (react-router, esbuild/vite dev tooling) need
+        # a deliberate, tested upgrade, not a blocking gate mid-pass.
+        continue-on-error: true
+        run: npm audit --audit-level=high

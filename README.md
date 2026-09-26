@@ -147,3 +147,19 @@ docker/  docs/  scripts/
 - UniProt and PDB connectors are documented stubs (`ingestion/registry.py`).
 - `PRIVACY_POLICY.md` is a draft pending legal review — see the file for
   what it does and doesn't cover.
+- **No dependency lockfile**: `pip install -e ".[dev]"` and `npm ci` (against
+  `package-lock.json`, so the frontend *is* pinned) install unpinned
+  backend floor versions; a `requirements`/`uv.lock`-style pin for the
+  backend is worth adding for fully reproducible CI installs.
+- **Dependency scanning is informational, not gating**: `pip-audit` and
+  `npm audit --audit-level=high` run in CI (`continue-on-error: true`).
+  Current known findings — `cryptography`/`pip`/`setuptools` transitive
+  versions on the backend, `react-router` (moderate open-redirect) and
+  `vite`/`esbuild` dev-server tooling on the frontend — need a deliberate,
+  tested upgrade (`react-router` in particular is a breaking major-version
+  bump) before promoting these scans to a hard gate.
+- **No code-level SAST** (e.g. `bandit`): dependency scanning covers known-
+  vulnerable packages, not custom code patterns.
+- **Playwright e2e runs manually only**, not gated in CI — it needs a real
+  Postgres and a built frontend in the CI runner, which isn't set up yet.
+- No Dependabot/Renovate config for automated dependency-update PRs.

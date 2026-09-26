@@ -59,15 +59,26 @@ frontend, which does this for you).
 
 ## Health
 
-`GET /health` (also `/api/v1/health`) → `{"status": "ok"}`, no auth.
+`GET /health` (also `/api/v1/health`) → `{"status": "ok"}`, no auth. Pure
+liveness — never touches the database, so a broken/unmigrated database does
+not fail this check. This is the path Render's `healthCheckPath` uses.
+
+`GET /api/v1/health/ready` → `{"status": "ok", "database": "ok"}`, or a
+`503` with `{"status": "unavailable", "database": "unavailable"}` if a
+trivial query against the database fails. No auth. Not used as the
+platform's liveness path; for manual or external-monitoring use, to
+distinguish "process is up" from "process is up and the database actually
+works" — the two were indistinguishable before this endpoint existed.
 
 ## Errors
 
-`{"detail": "<message>"}`.
+`{"detail": "<message>"}`. Every `500` response body is a fixed generic
+message (`"internal server error"`); the real exception is logged
+server-side only, never returned to the client.
 
 | Status | Meaning |
 |---|---|
 | `401` | Missing, invalid or revoked API key (or wrong admin secret on `/admin/*`) |
 | `404` | Unknown run/dataset, or one that belongs to a different org |
 | `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs) |
-| `500` | Internal error (e.g. storage failure) |
+| `500` | Internal error (e.g. storage failure); detail is logged, not returned |

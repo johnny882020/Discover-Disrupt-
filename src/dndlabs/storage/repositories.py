@@ -99,6 +99,16 @@ class SqlOrganizationRepository:
                 is_active=row.is_active,
             )
 
+    def ping(self) -> None:
+        """Verify storage is reachable and migrated.
+
+        Raises:
+            StorageError: If the database is unreachable, or the
+                ``organizations`` table is missing (schema not migrated).
+        """
+        with self._sessions.transaction() as session:
+            session.execute(select(OrganizationRow.id).limit(1))
+
 
 class SqlApiKeyRepository:
     """Stores hashed API keys."""

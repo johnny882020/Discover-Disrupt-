@@ -2,7 +2,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Link, Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import { ApiKeyGate } from "./auth/ApiKeyGate";
-import { ApiKeyProvider, useApiKey } from "./auth/ApiKeyContext";
+import { ApiKeyProvider } from "./auth/ApiKeyContext";
+import { useApiKey } from "./auth/useApiKey";
 import { Dashboard } from "./screens/Dashboard";
 import { DatasetDetail } from "./screens/DatasetDetail";
 import { ExportPanel } from "./screens/ExportPanel";

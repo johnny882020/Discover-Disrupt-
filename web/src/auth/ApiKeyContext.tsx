@@ -4,19 +4,10 @@
  * The key lives in memory for the lifetime of the provider plus
  * `sessionStorage` (never `localStorage`, so it doesn't outlive the tab).
  */
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { ApiError, apiClient, clearStoredApiKey, getStoredApiKey, setStoredApiKey } from "../api/client";
 import type { OrgContext } from "../api/types";
-
-interface ApiKeyState {
-  apiKey: string | null;
-  org: OrgContext | null;
-  /** Submits a candidate key to `/auth/whoami`; throws on failure. */
-  login: (key: string) => Promise<void>;
-  logout: () => void;
-}
-
-const ApiKeyContextInternal = createContext<ApiKeyState | undefined>(undefined);
+import { ApiKeyContextInternal, type ApiKeyState } from "./apiKeyContextValue";
 
 export function ApiKeyProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [apiKey, setApiKey] = useState<string | null>(() => getStoredApiKey());
@@ -45,12 +36,4 @@ export function ApiKeyProvider({ children }: { children: ReactNode }): React.JSX
   );
 
   return <ApiKeyContextInternal.Provider value={value}>{children}</ApiKeyContextInternal.Provider>;
-}
-
-export function useApiKey(): ApiKeyState {
-  const ctx = useContext(ApiKeyContextInternal);
-  if (!ctx) {
-    throw new Error("useApiKey must be used within an ApiKeyProvider.");
-  }
-  return ctx;
 }

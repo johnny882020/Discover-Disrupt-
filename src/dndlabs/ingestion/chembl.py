@@ -1,6 +1,7 @@
 """ChEMBL REST API connector: bioactivity data for a target."""
 
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -72,17 +73,28 @@ class ChemblConnector:
 
     source = SourceType.CHEMBL
 
-    def __init__(self, client: httpx.Client, page_size: int = 50, max_retries: int = 3) -> None:
+    def __init__(
+        self,
+        client: httpx.Client,
+        page_size: int = 50,
+        max_retries: int = 3,
+        backoff_seconds: float = 0.5,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         """Create the connector.
 
         Args:
             client: HTTP client whose ``base_url`` points at the ChEMBL API.
             page_size: Records requested per page.
             max_retries: Retries for transient failures, per page.
+            backoff_seconds: Initial retry delay, doubled after each attempt.
+            sleep: Sleep function (injectable for tests).
         """
         self._client = client
         self._page_size = page_size
         self._max_retries = max_retries
+        self._backoff = backoff_seconds
+        self._sleep = sleep
 
     async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
         """Fetch activities for ``spec.chembl_target``, paginating as needed.
@@ -117,6 +129,7 @@ class ChemblConnector:
 
     def _get_page(self, path: str) -> _ActivityResponse:
         """GET one page, with retries on transient errors."""
+        delay = self._backoff
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._client.get(path)
@@ -124,9 +137,13 @@ class ChemblConnector:
                 if attempt == self._max_retries:
                     raise IngestionError(f"ChEMBL unreachable: {exc}") from exc
                 logger.warning("chembl transport error, retrying", extra={"error": str(exc)})
+                self._sleep(delay)
+                delay *= 2
                 continue
             if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
                 logger.warning("chembl busy, retrying", extra={"status_code": response.status_code})
+                self._sleep(delay)
+                delay *= 2
                 continue
             if response.is_error:
                 raise IngestionError(

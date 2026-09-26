@@ -106,6 +106,7 @@ def build_container(
                 chembl_http,
                 page_size=settings.chembl_page_size,
                 max_retries=settings.chembl_max_retries,
+                backoff_seconds=settings.chembl_backoff_seconds,
             ),
             CsvConnector(),
             JsonConnector(),

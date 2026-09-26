@@ -26,7 +26,7 @@ services:
       - key: DNDLABS_NVIDIA_NIM_API_KEY
         sync: false  # set manually in the dashboard; enrichment is skipped cleanly if unset
       - key: DNDLABS_FREE_TIER_SHARED_PASSWORD
-        value: freetier2026  # temporary, insecure shared login; see docs/security.md. Clear to disable.
+        value: freetier2026  # temporary, insecure shared login; see docs/architecture.md#auth. Clear to disable.
 
   - type: web
     name: dndlabs-web

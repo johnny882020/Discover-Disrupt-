@@ -1,7 +1,10 @@
+import dataclasses
 import time
+import uuid
 
 from fastapi.testclient import TestClient
 
+from dndlabs.api.app import create_app
 from dndlabs.api.dependencies import ApiServices
 from dndlabs.core.exceptions import StorageError
 from dndlabs.core.schemas import ApiKeyCreated
@@ -26,6 +29,28 @@ def _run_csv(client: TestClient, headers: dict[str, str]) -> dict:  # type: igno
 def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/health").json() == {"status": "ok"}
+
+
+def test_readiness_ok(client: TestClient) -> None:
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "database": "ok"}
+
+
+def test_readiness_reports_503_when_storage_is_broken(services: ApiServices) -> None:
+    class BrokenOrganizations:
+        def ping(self) -> None:
+            raise StorageError('relation "organizations" does not exist')
+
+    broken_repos = dataclasses.replace(
+        services.repositories,
+        organizations=BrokenOrganizations(),  # type: ignore[arg-type]
+    )
+    broken_services = dataclasses.replace(services, repositories=broken_repos)
+    with TestClient(create_app(broken_services)) as broken_client:
+        response = broken_client.get("/api/v1/health/ready")
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
 
 
 def test_root_serves_html_to_browsers(client: TestClient) -> None:
@@ -57,6 +82,20 @@ def test_admin_bootstrap_creates_org_and_key(client: TestClient) -> None:
     key = ApiKeyCreated.model_validate(body)
     whoami = client.get("/api/v1/auth/whoami", headers={"X-API-Key": key.raw_key})
     assert whoami.json()["org_name"] == "Acme"
+
+
+def test_admin_issue_key_for_org_creates_second_working_key(client: TestClient) -> None:
+    org = client.post("/api/v1/admin/orgs", json={"name": "Acme"}, headers=ADMIN).json()
+    response = client.post(f"/api/v1/admin/orgs/{org['org_id']}/keys", headers=ADMIN)
+    assert response.status_code == 201
+    second_key = response.json()["raw_key"]
+    whoami = client.get("/api/v1/auth/whoami", headers={"X-API-Key": second_key})
+    assert whoami.json()["org_id"] == org["org_id"]
+
+
+def test_admin_issue_key_for_unknown_org_is_404(client: TestClient) -> None:
+    response = client.post(f"/api/v1/admin/orgs/{uuid.uuid4()}/keys", headers=ADMIN)
+    assert response.status_code == 404
 
 
 def test_missing_and_invalid_key_rejected(client: TestClient) -> None:
@@ -184,3 +223,23 @@ def test_storage_errors_are_500(
     services.repositories.datasets.list_for_org = boom  # type: ignore[method-assign]
     response = client.get("/api/v1/datasets", headers=auth_headers)
     assert response.status_code == 500
+    # The underlying database error message must never reach the client.
+    assert response.json() == {"detail": "internal server error"}
+    assert "database unavailable" not in response.text
+
+
+def test_unhandled_exception_is_500_and_never_leaks_its_message(
+    services: ApiServices, auth_headers: dict[str, str]
+) -> None:
+    def boom(org_id: object) -> list[object]:
+        raise RuntimeError("some unanticipated bug, not a DndLabsError")
+
+    services.repositories.datasets.list_for_org = boom  # type: ignore[method-assign]
+    # A base-Exception handler only runs through ServerErrorMiddleware for a
+    # real ASGI server; TestClient's default re-raises for debuggability, so
+    # opt out of that here to exercise the actual production behavior.
+    with TestClient(create_app(services), raise_server_exceptions=False) as unsafe_client:
+        response = unsafe_client.get("/api/v1/datasets", headers=auth_headers)
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}
+    assert "unanticipated bug" not in response.text
