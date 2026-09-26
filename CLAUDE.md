@@ -34,10 +34,10 @@ docker compose up --build                 # full stack locally
 - **Types:** annotate every signature; `mypy --strict` passes on `src/`. Frontend: `tsc --noEmit` under `strict`.
 - **Docs:** Google-style docstrings on every module, class and public function.
 - **Boundaries:** values crossing modules, the API or the database are Pydantic models from `core.schemas`, never raw dicts.
-- **Tenant isolation:** every org-scoped repository method takes `org_id` explicitly, derived server-side from the authenticated key — never accepted from a request body or query param.
+- **Tenant isolation:** every org-scoped repository method takes `org_id` explicitly, derived server-side from the authenticated principal (API key or user session) — never accepted from a request body or query param.
 - **Data access:** only through repositories; SQLAlchemy sessions stay inside `storage/`.
 - **Errors:** raise subclasses of `DndLabsError`; no bare `except:`. A bad record becomes a `ValidationIssue`, not an exception. A failed enrichment call becomes `status="failed"`, never raised into the pipeline. An exception's own message never reaches an API client (`api/errors.py` returns a fixed generic `500` body and logs the detail server-side) — don't put anything client-relevant in an exception message that isn't already a mapped 4xx.
-- **Logging:** `core.logging.get_logger`, never `print()`. It redacts secret-shaped fields and `Bearer` tokens — don't work around that.
+- **Logging:** `core.logging.get_logger`, never `print()`. It redacts secret-shaped fields (keys, tokens, passwords) and `Bearer` tokens — don't work around that, and never log a raw credential.
 - **Config:** `core.config.Settings` (`DNDLABS_*` env vars) only. No hardcoded values or committed secrets.
 - **Storage ordering:** a dataset's records must be persisted before any feature vector or enrichment result that references them (foreign key) — see `pipeline/orchestrator.py`'s stage order.
 - **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `web/tests/` mirrors `web/src/`.

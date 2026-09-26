@@ -80,6 +80,20 @@ cd web && npm ci && npm run dev              # frontend at :5173, mocked API by 
 
 Render deployment: [docs/deployment.md](docs/deployment.md).
 
+## Accounts and access
+
+| Who | Signs in with | Can |
+|---|---|---|
+| Operator | `X-Admin-Secret` (`DNDLABS_ADMIN_BOOTSTRAP_SECRET`) | Create organizations, issue API keys, invite each organization's first admin |
+| Org admin | Email + password | Everything a member can, plus invite colleagues (Team page) and delete the organization's data |
+| Org member | Email + password | Run pipelines; view, filter and export the organization's datasets |
+| Program | Org API key (`X-API-Key`) | The same as an org admin, over the API |
+
+People join only by invitation: the link they receive works once, expires
+after 72 hours, and is where they choose their password. Sessions last 12
+hours; five wrong passwords lock an account for 15 minutes. Details:
+[Auth](docs/architecture.md#auth).
+
 ## Validation, by example
 
 ```bash
@@ -144,8 +158,8 @@ for pip, npm, GitHub Actions and Docker base images.
   password cannot recover the account, and members cannot be removed.
 - **Sign-in throttling is per account**, not per client IP — see
   [Auth](docs/architecture.md#auth).
-- UniProt and PDB connectors are stubs (`ingestion/registry.py`); calling
-  them raises `ConnectorNotFoundError`.
+- UniProt and PDB are planned sources, not implemented; the API rejects
+  them as unknown sources.
 - No dependency lockfile — `pip install -e ".[dev]"` installs unpinned
   floor versions (the frontend *is* pinned, via `package-lock.json`).
 - No code-level SAST (e.g. `bandit`); dependency scanning covers known-

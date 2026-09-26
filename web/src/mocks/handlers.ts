@@ -404,6 +404,12 @@ export const handlers = [
     if (!org) {
       return HttpResponse.json(UNAUTHORIZED, { status: 401 });
     }
+    if (org.role !== "admin") {
+      return HttpResponse.json(
+        { detail: "only organization admins can delete the organization's data" },
+        { status: 403 },
+      );
+    }
     for (let i = datasetsStore.length - 1; i >= 0; i -= 1) {
       if (datasetsStore[i].org_id === org.org_id) {
         datasetsStore.splice(i, 1);
