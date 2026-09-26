@@ -27,12 +27,14 @@ jobs:
       - name: Run smoke test
         env:
           BASE_URL: ${{ inputs.base_url }}
-          # A repository secret, not a workflow input: dispatch inputs are
-          # shown unmasked in the run's UI and event payload.
-          DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${{ secrets.DNDLABS_ADMIN_BOOTSTRAP_SECRET }}
+          # API keys of two dedicated smoke-test organizations, as repository
+          # secrets (never workflow inputs, which GitHub shows unmasked). Not
+          # the admin secret: these keys reach only those organizations.
+          DNDLABS_SMOKE_API_KEY: ${{ secrets.DNDLABS_SMOKE_API_KEY }}
+          DNDLABS_SMOKE_ISOLATION_API_KEY: ${{ secrets.DNDLABS_SMOKE_ISOLATION_API_KEY }}
         run: |
-          if [ -z "$DNDLABS_ADMIN_BOOTSTRAP_SECRET" ]; then
-            echo "::error::Set the DNDLABS_ADMIN_BOOTSTRAP_SECRET repository secret (Settings → Secrets and variables → Actions)."
+          if [ -z "$DNDLABS_SMOKE_API_KEY" ] || [ -z "$DNDLABS_SMOKE_ISOLATION_API_KEY" ]; then
+            echo "::error::Set the DNDLABS_SMOKE_API_KEY and DNDLABS_SMOKE_ISOLATION_API_KEY repository secrets; see docs/deployment.md#smoke-test-on-demand."
             exit 1
           fi
           python scripts/smoke_test.py "$BASE_URL"

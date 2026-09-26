@@ -1,0 +1,45 @@
+name: Post-deploy check
+
+# Runs after every successful Render deploy of the API (Render reports
+# deploys to GitHub as deployment statuses), and on demand. Needs no
+# credentials and creates no data: see scripts/post_deploy_check.py.
+on:
+  deployment_status:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Base URL of the deployed API
+        required: true
+        default: https://dndlabs-api.onrender.com
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       endsWith(github.event.deployment.environment, 'dndlabs-api'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # For deployment_status events this checks out the deployed commit.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install API
+        run: pip install .
+      - name: Export the deployed commit's OpenAPI document
+        env:
+          DNDLABS_DATABASE_URL: "sqlite://"
+        run: |
+          python -c "import json; from dndlabs.api.app import create_app; print(json.dumps(create_app().openapi()))" > expected-openapi.json
+      - name: Check the deployment
+        env:
+          BASE_URL: ${{ inputs.base_url || 'https://dndlabs-api.onrender.com' }}
+        run: python scripts/post_deploy_check.py "$BASE_URL" --expected-spec expected-openapi.json

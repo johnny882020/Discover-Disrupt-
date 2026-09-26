@@ -1,11 +1,13 @@
 """Shared helpers for building ``RawRecord`` instances from flat source rows."""
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from dndlabs.core.schemas import ColumnRole, RawRecord, SourceType
 
-#: Canonical ``RawRecord`` field -> accepted source aliases (lower-case).
+#: Canonical ``RawRecord`` field -> accepted source aliases, in normalized form
+#: (see :func:`normalize_header`).
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "source_record_id": (
         "source_record_id", "compound_id", "id", "sample_id", "cid", "molecule_chembl_id",
@@ -29,6 +31,25 @@ IDENTIFIER_FIELDS = ("smiles", "inchi")
 NUMERIC_FIELDS = ("molecular_weight", "activity_value")
 
 
+_SEPARATORS = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_header(column: str) -> str:
+    """Normalize a column name for alias lookup.
+
+    Lower-cases it and turns every run of other characters into a single
+    underscore, so ``"Compound ID"``, ``"compound-id"`` and ``"COMPOUND_ID"``
+    all become ``"compound_id"``.
+
+    Args:
+        column: Source column or key name.
+
+    Returns:
+        The normalized name.
+    """
+    return _SEPARATORS.sub("_", column.lower()).strip("_")
+
+
 def canonical_field(column: str) -> str | None:
     """Map a source column name to a ``RawRecord`` field.
 
@@ -38,7 +59,7 @@ def canonical_field(column: str) -> str | None:
     Returns:
         The canonical field name, or ``None`` if the column is not recognised.
     """
-    return _ALIAS_TO_FIELD.get(column.strip().lower())
+    return _ALIAS_TO_FIELD.get(normalize_header(column))
 
 
 def _clean(value: Any) -> Any:

@@ -67,7 +67,7 @@ Invitation and session tokens travel in request bodies and the
 `POST /pipelines/run` body (`SourceSpec`):
 
 ```json
-{"source": "upload", "upload_id": "…", "column_mapping": {"Compound ID": "source_record_id", "Structure": "smiles", "IC50 (nM)": "activity_value"}}
+{"source": "upload", "upload_id": "…", "column_mapping": {"Compound ID": "source_record_id", "Structure": "smiles", "Activity": "activity_value", "Unit": "activity_unit"}}
 {"source": "pubchem", "identifiers": ["2244", "3672"]}
 {"source": "chembl", "chembl_target": "CHEMBL204"}
 {"source": "csv", "csv_path": "/app/samples/lab_export.csv"}
@@ -94,8 +94,10 @@ for operators. Every body may also carry `dataset_name`. Returns `202` with a `P
 `size_bytes`, `sha256`), its `columns`, the first 20 `rows`, `row_count`,
 a `suggested_mapping` and the `template` it came from, if any. The
 suggestion comes from the saved template whose columns best match the file's
-headers; otherwise from known header names (e.g. `Canonical SMILES`,
-`IC50 (nM)`), then from column contents (SMILES, InChI, InChIKey).
+headers; otherwise from known header names, matched regardless of case,
+spacing and punctuation (`Compound ID`, `Canonical SMILES`, `Activity
+Value`, `Units`, …), then from column contents (SMILES, InChI, InChIKey).
+Units are read from a unit column, not from a header such as `IC50 (nM)`.
 
 A `column_mapping` assigns each column one role: `source_record_id`, `name`,
 `smiles`, `inchi`, `inchikey`, `molecular_formula`, `molecular_weight`,
@@ -129,7 +131,7 @@ non-empty row as headers.
 |---|---|---|
 | GET | `/` | Service name, version, documentation links and endpoint list (`ServiceInfo`); browsers sending `Accept: text/html` get an HTML landing page |
 | GET | `/health`, `/api/v1/health` | Liveness: `{"status": "ok"}`. Never touches the database — this is Render's `healthCheckPath` |
-| GET | `/api/v1/health/ready` | Readiness: `{"status": "ok", "database": "ok"}`, or `503` with `{"status": "unavailable", "database": "unavailable"}` when the database is unreachable or unmigrated |
+| GET | `/api/v1/health/ready` | Readiness: `{"status": "ok", "database": "ok"}`, or `503` with `{"status": "unavailable", "database": "unavailable"}` when the database is unreachable or not at the deployed code's newest migration |
 
 Use `/api/v1/health/ready`, not `/health`, to check that the database is
 reachable and migrated.

@@ -40,5 +40,5 @@ docker compose up --build                 # full stack locally
 - **Logging:** `core.logging.get_logger`, never `print()`. It redacts secret-shaped fields (keys, tokens, passwords) and `Bearer` tokens — don't work around that, and never log a raw credential.
 - **Config:** `core.config.Settings` (`DNDLABS_*` env vars) only. No hardcoded values or committed secrets.
 - **Storage ordering:** a dataset's records must be persisted before any feature vector or enrichment result that references them (foreign key) — see `pipeline/orchestrator.py`'s stage order.
-- **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `web/tests/` mirrors `web/src/`.
+- **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `tests/scripts/` covers `scripts/`; `web/tests/` mirrors `web/src/`.
 - **Contracts:** changes to `core/schemas.py`, `core/protocols.py` or the DB schema update `docs/architecture.md` and get a new Alembic revision (never reuse a revision id — a reused `0001` once left production without its schema); NVIDIA contract changes update `docs/nvidia-nim.md`.

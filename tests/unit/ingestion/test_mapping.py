@@ -24,6 +24,16 @@ def test_known_header_aliases_are_mapped() -> None:
     }  # "Notes" stays unmapped (kept as extra data)
 
 
+def test_headers_with_spaces_and_punctuation_are_mapped() -> None:
+    table = _table(["Compound ID", "Canonical SMILES", "Activity Value", "Unit (text)"])
+    mapping, _ = suggest_mapping(table, [])
+    assert mapping == {
+        "Compound ID": ColumnRole.SOURCE_RECORD_ID,
+        "Canonical SMILES": ColumnRole.SMILES,
+        "Activity Value": ColumnRole.ACTIVITY_VALUE,
+    }
+
+
 def test_a_role_is_suggested_for_one_column_only() -> None:
     mapping, _ = suggest_mapping(_table(["smiles", "canonical_smiles"]), [])
     assert mapping == {"smiles": ColumnRole.SMILES}
