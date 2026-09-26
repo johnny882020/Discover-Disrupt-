@@ -2,12 +2,24 @@
 
 Multi-tenant data infrastructure for AI-native drug discovery.
 
-D&D Labs ingests chemical/biological data from external sources and lab
-exports, validates and normalizes it into standardized, model-ready
-datasets, and optionally enriches accepted compounds with AI-generated
-candidate analogs via NVIDIA BioNeMo. Every organization's data is isolated:
-people sign in with their own email and password (joining by invitation),
-and programs use per-organization API keys.
+**D&D Labs turns messy chemistry data into clean, model-ready datasets, so
+your scientists spend their time on discovery rather than data wrangling.**
+Bring in compounds and activity data from public sources like PubChem and
+ChEMBL, or upload your own lab exports as CSV or JSON. The platform checks
+every record automatically: that each structure is valid, that its
+identifiers agree, and that activity values use known units. It converts
+all activity values to one standard unit and removes duplicate compounds,
+even when different sources describe them differently. Nothing is silently
+discarded: a clear quality report explains every record that was rejected
+and why, so you can trust what goes into your models. Each accepted
+compound comes with ready-to-use molecular descriptors and fingerprints.
+Where AI enrichment is enabled, the platform can also suggest new candidate
+molecules similar to each compound, using NVIDIA's BioNeMo generative
+chemistry models. Download the results with one click in formats your
+machine-learning tools already understand. Your organization's data stays
+private to your organization. Your team signs in with individual,
+invitation-only accounts, and your software can connect directly through
+secure API keys.
 
 ```text
 Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready data
