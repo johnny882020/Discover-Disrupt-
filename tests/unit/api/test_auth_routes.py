@@ -161,6 +161,19 @@ def test_admin_user_invites_member_who_cannot_invite(client: TestClient) -> None
     assert duplicate.status_code == 409
 
 
+def test_only_admins_can_delete_org_data(client: TestClient) -> None:
+    session, _ = _bootstrap(client)
+    invite = client.post(
+        "/api/v1/auth/invitations", json={"email": "bob@acme.com"}, headers=_bearer(session)
+    ).json()
+    member = client.post(
+        "/api/v1/auth/invitations/accept", json={"token": invite["token"], "password": PASSWORD}
+    ).json()
+    denied = client.delete("/api/v1/orgs/me/data", headers=_bearer(member))
+    assert denied.status_code == 403
+    assert client.delete("/api/v1/orgs/me/data", headers=_bearer(session)).status_code == 204
+
+
 def test_session_cannot_revoke_keys_and_key_cannot_log_out(
     client: TestClient, org_key: ApiKeyCreated
 ) -> None:

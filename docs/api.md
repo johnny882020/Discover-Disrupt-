@@ -7,8 +7,9 @@ button accepts either credential).
 
 ## Authentication
 
-Every `/api/v1/*` route except health, `/admin/*`, sign-in and invitation
-redemption requires one of:
+Every `/api/v1/*` route requires one of the credentials below, except the
+health routes, `/admin/*` (which uses `X-Admin-Secret`), `POST /auth/login`,
+`POST /auth/invitations/preview` and `POST /auth/invitations/accept`:
 
 | Header | Credential | Obtained from |
 |---|---|---|
@@ -41,7 +42,7 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 | POST | `/auth/invitations/accept` | none | `{"token", "password"}` → `SessionCreated` (201); creates the account |
 | GET | `/auth/whoami` | any | `OrgContext`: `org_id`, `org_name`, `principal` (`api_key`/`user`), `role`, and `api_key_id` or `user_id` + `session_id` + `email` |
 | POST | `/auth/keys/revoke` | API key | Revoke the calling key (204) |
-| DELETE | `/orgs/me/data` | any | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org, its keys and its user accounts are kept. |
+| DELETE | `/orgs/me/data` | admin | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org, its keys and its user accounts are kept. |
 
 Invitation and session tokens travel in request bodies and the
 `Authorization` header, never in a URL the API receives.
@@ -102,7 +103,7 @@ logged server-side only, never returned to the client.
 |---|---|
 | `400` | Invitation token unknown, expired or already used |
 | `401` | Missing, invalid, expired or revoked credential; wrong email or password (always `invalid email or password`); wrong admin secret on `/admin/*`. Carries `WWW-Authenticate: Bearer` |
-| `403` | Authenticated but not allowed: inviting without the `admin` role, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
+| `403` | Authenticated but not allowed: inviting or deleting org data without the `admin` role, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
 | `404` | Unknown run/dataset, or one that belongs to a different org |
 | `409` | Invitation for an email that is already a member of the org, or redemption for an email that already has an account |
 | `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, an invalid email), or a password that fails the policy |

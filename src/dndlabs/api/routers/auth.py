@@ -3,6 +3,7 @@
 from fastapi import APIRouter, status
 
 from dndlabs.api.dependencies import CurrentOrg, Services
+from dndlabs.core.exceptions import ForbiddenError
 from dndlabs.core.schemas import (
     InvitationAccept,
     InvitationCreate,
@@ -12,6 +13,7 @@ from dndlabs.core.schemas import (
     LoginRequest,
     OrgContext,
     PasswordChange,
+    Role,
     SessionCreated,
 )
 
@@ -140,10 +142,16 @@ def delete_org_data(org: CurrentOrg, services: Services) -> None:
     This is the privacy deletion endpoint: it removes all rows scoped to the
     caller's ``org_id`` (runs, datasets, records, quality reports, feature
     vectors, enrichment results). The organization, its API keys and its
-    user accounts are kept, so the caller is not locked out.
+    user accounts are kept, so the caller is not locked out. Irreversible
+    and org-wide, so it requires the ``admin`` role.
 
     Args:
         org: The authenticated org context.
         services: Injected services.
+
+    Raises:
+        ForbiddenError: If the caller is not an admin.
     """
+    if org.role is not Role.ADMIN:
+        raise ForbiddenError("only organization admins can delete the organization's data")
     services.repositories.datasets.delete_org_data(org.org_id)

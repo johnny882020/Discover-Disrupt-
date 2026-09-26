@@ -26,7 +26,7 @@ explicitly in the PR that makes it.
 | Concrete classes are wired only in `pipeline/factory.py` | Composition root |
 | `api` and `cli` never touch SQLAlchemy | `Repositories` protocol bundle |
 | Values crossing a module boundary are Pydantic models | `core/schemas.py` |
-| Every repository method takes an explicit `org_id`, never inferred from a request body | Tenant isolation |
+| Every org-scoped repository method takes an explicit `org_id` from the authenticated principal, never from a request body | Tenant isolation |
 
 ## Pipeline run
 
@@ -111,14 +111,13 @@ Repositories (`OrganizationRepository`, `ApiKeyRepository`, `UserRepository`,
 `DatasetRepository`, `QualityReportRepository`, `FeatureRepository`,
 `EnrichmentRepository`) are bundled as `Repositories`. Every org-scoped
 method takes `org_id` explicitly — the entire tenant-isolation mechanism;
-there is no other check. The deliberate exceptions are lookups that
-*establish* identity before any org is known: an API key by prefix, a user
-by email (emails are globally unique), and a session or invitation by token
-hash. A lookup of a missing or wrong-org entity raises
-`NotFoundError`.
+there is no other check. A lookup of a missing or wrong-org entity raises
+`NotFoundError`. Two kinds of method are deliberately not org-scoped:
 
-`OrganizationRepository.ping()` is the exception: it exists only for the
-readiness probe (below), not for business logic.
+- lookups that *establish* identity before any org is known — an API key
+  by prefix, a user by email (emails are globally unique), a session or
+  invitation by token hash;
+- `OrganizationRepository.ping()`, used only by the readiness probe.
 
 ## Auth
 
@@ -203,7 +202,7 @@ cookies would break a cookie session.
   rate-limiting proxy before exposing it widely.
 
 **Authorization within an org:**
-- Inviting requires the `admin` role.
+- Inviting and deleting the organization's data require the `admin` role.
 - Sign-out and password change require a user session.
 - Key revocation requires an API key.
 - Every other endpoint is open to any authenticated principal of the org.
@@ -254,7 +253,7 @@ explicit or absent, never approximated.
 | ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...`, paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same backoff pattern as PubChem. |
 | CSV | `ingestion/csv_connector.py` | Delimiter sniffed (`,` `;` tab); header aliases case-insensitive; unknown columns go into `extra`. |
 | JSON | `ingestion/json_connector.py` | A top-level list, or `{"records": [...]}` with flat scalar values. |
-| UniProt, PDB | `ingestion/registry.py` | Stubs; requesting one raises `ConnectorNotFoundError`. |
+| UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
 ## Exceptions (`core/exceptions.py`)
 
@@ -325,7 +324,9 @@ the stamp.
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
-own vendored migration (`tests/fixtures/legacy_mvp_alembic/`).
+own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`
+upgrade and downgrade, and the account repositories' transactional
+behaviour (`tests/account_repository_checks.py`, shared by both dialects).
 
 ## Readiness vs. liveness
 
@@ -335,7 +336,7 @@ platform health check to gate restarts on.
 returns `503` if the database is unreachable or unmigrated. The two are
 deliberately different endpoints: a broken database must not restart an
 otherwise-healthy process, but it must be possible to detect from outside
-without reading logs. See [docs/api.md](api.md#health).
+without reading logs. See [docs/api.md](api.md#service-and-health-no-auth).
 
 ## Connection pooling
 

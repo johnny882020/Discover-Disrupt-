@@ -37,17 +37,6 @@
 Keep the API key for programmatic access, or discard it — web users never
 need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
 
-### Upgrading from the shared-password release
-
-Earlier releases offered a shared login (`DNDLABS_FREE_TIER_SHARED_PASSWORD`)
-that authenticated everyone as one fixed organization. It no longer exists:
-- The code ignores the variable. Delete it from `dndlabs-api` → Environment;
-  removing a variable from `render.yaml` does not remove it from an existing
-  service.
-- Migration `0003` deletes that organization and its data on the first
-  deploy.
-- Onboard real users by invitation (step 5).
-
 ### Configuration
 
 | Variable | Where | Notes |
@@ -79,7 +68,8 @@ docker compose up --build
 
 Starts Postgres, the API (`localhost:8000`, migrations applied
 automatically via `docker/entrypoint.sh`), and the frontend dev server
-(`localhost:5173`).
+(`localhost:5173`, against the real API). The admin secret defaults to
+`dev-admin-secret`; onboard a user as in the [README](../README.md#docker-compose).
 
 ## CI
 
@@ -90,7 +80,7 @@ automatically via `docker/entrypoint.sh`), and the frontend dev server
 | `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit .` (project runtime dependencies) |
 | `frontend` | `eslint`, `tsc --noEmit` (source, tests, e2e and configs), `vitest`, `vite build`, `npm audit --audit-level=high` |
 | `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
-| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → bootstrap an org → API → production frontend build → Playwright (`web/e2e/`). Uploads the Playwright report and API log on failure. |
+| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → pipeline run → report → export → team invite, and API-key sign-in. Uploads the Playwright report and API log on failure. |
 
 The dependency scans block merges. `.github/dependabot.yml` opens weekly
 update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
@@ -98,8 +88,9 @@ disclosed vulnerability arrives as a fix PR rather than only as a red build.
 
 `.github/workflows/smoke.yml` is a manual `workflow_dispatch` that runs
 `scripts/smoke_test.py` against a deployed URL: it waits out a cold start,
-then checks liveness, **readiness**, org bootstrap, a CSV pipeline run,
-export and org isolation. It reads the admin secret from the
+then checks liveness, **readiness**, org bootstrap, user sign-in (invite →
+accept → sign out → sign in), a CSV pipeline run, export and org
+isolation. It reads the admin secret from the
 `DNDLABS_ADMIN_BOOTSTRAP_SECRET` repository secret (Settings → Secrets and
 variables → Actions) — never a workflow input, which GitHub shows unmasked.
 Run the same check locally:

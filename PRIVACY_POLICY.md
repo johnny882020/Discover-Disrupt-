@@ -50,7 +50,8 @@
   fragment, which browsers do not send to servers.
 - **Deletion.** `DELETE /orgs/me/data` removes every run, dataset,
   normalized record, quality report, feature vector and enrichment result
-  belonging to the calling organization, in one call. User accounts are
+  belonging to the calling organization, in one call; only an
+  organization admin (or API key) may call it. User accounts are
   kept (so the organization is not locked out); there is not yet an
   endpoint to delete an individual user account.
 - **Third parties.** Ingested identifiers/SMILES may be sent to PubChem,
