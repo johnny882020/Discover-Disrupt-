@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -21,8 +28,10 @@ jobs:
     env:
       DNDLABS_TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -46,7 +55,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build API image
         run: docker build -f docker/Dockerfile.api -t dndlabs-api:ci .
       - name: Smoke-test the built image
@@ -80,8 +91,10 @@ jobs:
       DNDLABS_AUTO_CREATE_SCHEMA: "false"
       DNDLABS_FRONTEND_ORIGIN: http://localhost:4173
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -103,7 +116,7 @@ jobs:
           done
           cat api.log
           exit 1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -124,7 +137,7 @@ jobs:
         run: npx playwright test
       - name: Upload diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-diagnostics
           path: |
@@ -139,8 +152,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
