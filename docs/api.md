@@ -20,7 +20,7 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 |---|---|---|
 | GET | `/auth/whoami` | Resolve the calling key's org — used by the frontend's key-entry screen |
 | POST | `/auth/keys/revoke` | Revoke the calling key (204) |
-| DELETE | `/orgs/me/data` | Privacy: delete all of the calling org's runs/datasets/records/reports (204). Org and its keys are kept. |
+| DELETE | `/orgs/me/data` | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org and its keys are kept. |
 
 ## Pipelines
 
@@ -39,10 +39,10 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 {"source": "json", "json_path": "/app/samples/upload.json"}
 ```
 
-`csv_path`/`json_path` are read from the **API server's** filesystem.
-Returns `202` with a `PipelineRun` (`status: "pending"`); `dataset_id` is
-`null` until the run finishes — poll `GET /pipelines/runs/{id}` (or use the
-frontend, which does this for you).
+`csv_path`/`json_path` are read from the **API server's** filesystem, not
+the caller's. Returns `202` with a `PipelineRun` (`status: "pending"`);
+`dataset_id` is `null` until the run finishes — poll
+`GET /pipelines/runs/{id}` (the frontend does this automatically).
 
 ## Datasets
 
@@ -60,21 +60,19 @@ frontend, which does this for you).
 ## Health
 
 `GET /health` (also `/api/v1/health`) → `{"status": "ok"}`, no auth. Pure
-liveness — never touches the database, so a broken/unmigrated database does
-not fail this check. This is the path Render's `healthCheckPath` uses.
+liveness: never touches the database, so a broken or unmigrated database
+does not fail this check. This is the path Render's `healthCheckPath` uses.
 
-`GET /api/v1/health/ready` → `{"status": "ok", "database": "ok"}`, or a
+`GET /api/v1/health/ready` → `{"status": "ok", "database": "ok"}`, or
 `503` with `{"status": "unavailable", "database": "unavailable"}` if a
-trivial query against the database fails. No auth. Not used as the
-platform's liveness path; for manual or external-monitoring use, to
-distinguish "process is up" from "process is up and the database actually
-works" — the two were indistinguishable before this endpoint existed.
+trivial query against the database fails. No auth. Use this, not `/health`,
+to determine whether the database is actually reachable and migrated.
 
 ## Errors
 
-`{"detail": "<message>"}`. Every `500` response body is a fixed generic
-message (`"internal server error"`); the real exception is logged
-server-side only, never returned to the client.
+`{"detail": "<message>"}`. Every `500` response body carries a fixed
+generic message (`"internal server error"`); the underlying exception is
+logged server-side only, never returned to the client.
 
 | Status | Meaning |
 |---|---|

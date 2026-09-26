@@ -34,12 +34,13 @@
   covered by automated tests: `tests/integration/test_pipeline_e2e.py::test_two_orgs_are_fully_isolated`,
   `tests/unit/api/test_routes.py::test_org_isolation`).
 
-  **Exception, while enabled:** if `DNDLABS_FREE_TIER_SHARED_PASSWORD` is set
-  (see `docs/architecture.md`), every caller who knows that one shared
-  password authenticates as the same single organization — isolation holds
-  between that shared identity and any *other* organization's real key, but
-  not between different users of the shared password itself. Disable the
-  variable before onboarding customers who need data isolated from each other.
+  **Exception, while enabled:** if `DNDLABS_FREE_TIER_SHARED_PASSWORD` is
+  set (see `docs/architecture.md#auth`), every caller who knows that one
+  shared password authenticates as the same organization — isolation holds
+  between that identity and any *other* organization's real key, but not
+  between different users of the shared password itself. Clear the
+  variable before onboarding any customer who needs data isolated from
+  other users of this value.
 - **Key handling.** API keys are hashed with Argon2 before storage; the
   raw secret is never logged (the structured logger redacts fields named
   like `api_key`/`raw_key`/`authorization` and any `Bearer <token>`
