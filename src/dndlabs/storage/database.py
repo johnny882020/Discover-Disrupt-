@@ -6,6 +6,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -67,6 +68,21 @@ def create_schema(engine: Engine) -> None:
         engine: Target engine.
     """
     Base.metadata.create_all(engine)
+
+
+def head_revision() -> str:
+    """Return the newest Alembic revision the code ships.
+
+    Returns:
+        The head revision id.
+
+    Raises:
+        StorageError: If the migrations do not have exactly one head.
+    """
+    heads = ScriptDirectory(str(MIGRATIONS_DIR)).get_heads()
+    if len(heads) != 1:
+        raise StorageError(f"expected one migration head, found {len(heads)}")
+    return str(heads[0])
 
 
 def run_migrations(url: str) -> None:

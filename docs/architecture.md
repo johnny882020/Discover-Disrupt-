@@ -296,7 +296,7 @@ explicit or absent, never approximated.
 | PubChem | `ingestion/pubchem.py` | PUG REST property endpoint. CIDs batched (default 100). Exponential backoff on 429/5xx/transport errors. |
 | ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...`, paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same backoff pattern as PubChem. |
 | Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
-| CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases case-insensitive; unknown columns go into `extra`. |
+| CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases matched ignoring case, spacing and punctuation (`fields.normalize_header`); unknown columns go into `extra`. |
 | JSON | `ingestion/json_connector.py` | Server-side path (operators). A top-level list, or `{"records": [...]}` with flat scalar values. |
 | UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
@@ -383,7 +383,11 @@ behaviour (`tests/account_repository_checks.py`,
 `GET /health` never touches the database — pure liveness, safe for a
 platform health check to gate restarts on.
 `GET /api/v1/health/ready` does, via `OrganizationRepository.ping()`, and
-returns `503` if the database is unreachable or unmigrated. The two are
+returns `503` if the database is unreachable or its `alembic_version` is not
+the code's head revision (`storage/database.py:head_revision`), so a deploy
+whose newest migration did not apply is not ready. A schema built by
+`create_all` (`DNDLABS_AUTO_CREATE_SCHEMA=true`, development) has no
+revision, and only reachability is checked. The two are
 deliberately different endpoints: a broken database must not restart an
 otherwise-healthy process, but it must be possible to detect from outside
 without reading logs. See [docs/api.md](api.md#service-and-health-no-auth).

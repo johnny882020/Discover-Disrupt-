@@ -54,7 +54,7 @@ def database_url() -> Iterator[str]:
 def _ping(url: str) -> None:
     engine = create_db_engine(url)
     try:
-        SqlOrganizationRepository(SessionFactory(engine)).ping()
+        SqlOrganizationRepository(SessionFactory(engine), HEAD_REVISION).ping()
     finally:
         engine.dispose()
 
@@ -129,6 +129,17 @@ def test_upgrade_deletes_the_retired_free_tier_org(database_url: str) -> None:
         tables = {r[0] for r in conn.execute(text("SELECT tablename FROM pg_tables"))}
         assert "users" not in tables
     engine.dispose()
+
+
+def test_readiness_fails_until_the_newest_migration_applies(database_url: str) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0004")
+    with pytest.raises(StorageError, match=f"revision 0004, expected {HEAD_REVISION}"):
+        _ping(database_url)
+    run_migrations(database_url)
+    _ping(database_url)
 
 
 @pytest.mark.parametrize("check", ALL_CHECKS + UPLOAD_CHECKS, ids=lambda c: c.__name__)

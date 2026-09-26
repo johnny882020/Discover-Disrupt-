@@ -1,12 +1,21 @@
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import inspect, text
 from tests.conftest import HEAD_REVISION
 from tests.legacy_mvp import LEGACY_RUN_ID, apply_legacy_mvp_schema
 
 from dndlabs.core.exceptions import StorageError
-from dndlabs.storage.database import SessionFactory, create_db_engine, create_schema, run_migrations
+from dndlabs.storage.database import (
+    MIGRATIONS_DIR,
+    SessionFactory,
+    create_db_engine,
+    create_schema,
+    head_revision,
+    run_migrations,
+)
 from dndlabs.storage.models import Base
 from dndlabs.storage.repositories import SqlOrganizationRepository
 
@@ -53,7 +62,7 @@ def test_migrations_retire_legacy_mvp_schema_without_losing_its_data(tmp_path: P
         )
         legacy_ids = conn.execute(text("SELECT id FROM legacy_mvp_pipeline_runs")).scalars()
         assert list(legacy_ids) == [LEGACY_RUN_ID]
-    SqlOrganizationRepository(SessionFactory(engine)).ping()
+    SqlOrganizationRepository(SessionFactory(engine), HEAD_REVISION).ping()
     run_migrations(url)  # idempotent
 
 
@@ -67,7 +76,7 @@ def test_migrations_recover_stale_version_with_no_tables(tmp_path: Path) -> None
 
     run_migrations(url)
 
-    SqlOrganizationRepository(SessionFactory(create_db_engine(url))).ping()
+    SqlOrganizationRepository(SessionFactory(create_db_engine(url)), HEAD_REVISION).ping()
 
 
 def test_session_rolls_back_on_error() -> None:
@@ -87,3 +96,30 @@ def test_session_rolls_back_on_error() -> None:
 def test_non_sqlite_engine_is_lazy() -> None:
     engine = create_db_engine("postgresql+psycopg://u:p@localhost:1/db")
     assert engine.dialect.name == "postgresql"
+
+
+def test_head_revision_is_the_newest_migration() -> None:
+    assert head_revision() == HEAD_REVISION
+
+
+def test_ping_requires_the_schema_at_the_expected_revision(tmp_path: Path) -> None:
+    url = f"sqlite:///{tmp_path / 'behind.db'}"
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "0004")
+    repo = SqlOrganizationRepository(SessionFactory(create_db_engine(url)), HEAD_REVISION)
+
+    with pytest.raises(StorageError, match=f"revision 0004, expected {HEAD_REVISION}"):
+        repo.ping()  # a deploy whose newest migration never applied
+
+    run_migrations(url)
+    repo.ping()
+
+
+def test_ping_without_an_expected_revision_accepts_a_create_all_schema() -> None:
+    engine = create_db_engine("sqlite://")
+    create_schema(engine)
+    SqlOrganizationRepository(SessionFactory(engine)).ping()
+    with pytest.raises(StorageError, match="alembic_version"):
+        SqlOrganizationRepository(SessionFactory(engine), HEAD_REVISION).ping()

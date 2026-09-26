@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.engine import CursorResult, Result
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -75,13 +75,17 @@ def _as_utc(value: datetime) -> datetime:
 class SqlOrganizationRepository:
     """Stores organizations."""
 
-    def __init__(self, sessions: SessionFactory) -> None:
+    def __init__(self, sessions: SessionFactory, expected_revision: str | None = None) -> None:
         """Create the repository.
 
         Args:
             sessions: Session factory to use.
+            expected_revision: The Alembic revision the schema must be at for
+                :meth:`ping` to pass, or ``None`` when the schema is not
+                managed by migrations (``create_all`` in development).
         """
         self._sessions = sessions
+        self._expected_revision = expected_revision
 
     def create(self, org: Organization) -> Organization:
         """Insert a new organization.
@@ -127,11 +131,20 @@ class SqlOrganizationRepository:
         """Verify storage is reachable and migrated.
 
         Raises:
-            StorageError: If the database is unreachable, or the
-                ``organizations`` table is missing (schema not migrated).
+            StorageError: If the database is unreachable, the
+                ``organizations`` table is missing, or the schema is not at
+                the expected migration revision.
         """
         with self._sessions.transaction() as session:
             session.execute(select(OrganizationRow.id).limit(1))
+            if self._expected_revision is None:
+                return
+            revisions: set[str] = set(
+                session.execute(text("SELECT version_num FROM alembic_version")).scalars()
+            )
+        if revisions != {self._expected_revision}:
+            found = ", ".join(sorted(revisions)) or "none"
+            raise StorageError(f"schema is at revision {found}, expected {self._expected_revision}")
 
 
 class SqlApiKeyRepository:
@@ -1475,18 +1488,20 @@ class SqlEnrichmentRepository:
             ]
 
 
-def build_sql_repositories(engine: object) -> Repositories:
+def build_sql_repositories(engine: object, expected_revision: str | None = None) -> Repositories:
     """Build the full repository bundle on one engine.
 
     Args:
         engine: Engine to bind to.
+        expected_revision: Migration revision the readiness check requires;
+            ``None`` when the schema is not managed by migrations.
 
     Returns:
         SQL-backed repositories.
     """
     sessions = SessionFactory(engine)  # type: ignore[arg-type]
     return Repositories(
-        organizations=SqlOrganizationRepository(sessions),
+        organizations=SqlOrganizationRepository(sessions, expected_revision),
         api_keys=SqlApiKeyRepository(sessions),
         users=SqlUserRepository(sessions),
         sessions=SqlSessionRepository(sessions),

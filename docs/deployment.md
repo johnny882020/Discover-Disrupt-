@@ -78,7 +78,7 @@ default, is listed in [`.env.example`](../.env.example).
 | CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's — users should upload the file instead |
 | First request is slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site never sleeps. |
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
-| `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. |
+| `/api/v1/health/ready` returns `503` | The database is unreachable, or not at the deployed code's newest migration. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. |
 
 ## Local development
 
@@ -125,17 +125,54 @@ The dependency scans block merges. `.github/dependabot.yml` opens weekly
 update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
 disclosed vulnerability arrives as a fix PR rather than only as a red build.
 
-`.github/workflows/smoke.yml` is a manual `workflow_dispatch` that runs
-`scripts/smoke_test.py` against a deployed URL: it waits out a cold start,
-then checks liveness, **readiness**, org bootstrap, user sign-in (invite →
-accept → sign out → sign in), a file upload run with the suggested column
-mapping, a CSV pipeline run, export and org isolation. It reads the admin secret from the
-`DNDLABS_ADMIN_BOOTSTRAP_SECRET` repository secret (Settings → Secrets and
-variables → Actions) — never a workflow input, which GitHub shows unmasked.
-Run the same check locally:
+## Checking a deployment
+
+Two workflows check the live API after a deploy. Neither uses the admin
+secret.
+
+### Post-deploy check (automatic)
+
+`.github/workflows/post-deploy.yml` runs `scripts/post_deploy_check.py`
+after every successful Render deploy of `dndlabs-api` (Render reports
+deploys to GitHub), and on demand (**Actions → Post-deploy check → Run
+workflow**). It sends no credentials and creates no data. It waits out a
+cold start, then checks:
+
+- liveness, and readiness, which fails unless the database is at the
+  deployed code's newest migration;
+- that the API serves exactly the routes the deployed commit defines;
+- that every protected route rejects an anonymous request with `401`.
+
+A failure shows as a failed workflow run on the deployed commit.
+
+### Smoke test (on demand)
+
+`.github/workflows/smoke.yml` (**Actions → Smoke test → Run workflow**)
+runs `scripts/smoke_test.py`, which exercises the product end to end as a
+dedicated smoke-test organization: user sign-in (invite → accept → sign out
+→ sign in → removal), a file upload with the suggested and a saved column
+mapping, a pipeline run, the quality report, export, and isolation from a
+second organization. It deletes everything it created, pass or fail, and
+refuses to run as any organization without "smoke" in its name.
+
+One-time setup: create the two organizations and store their API keys as
+repository secrets (Settings → Secrets and variables → Actions) named
+`DNDLABS_SMOKE_API_KEY` and `DNDLABS_SMOKE_ISOLATION_API_KEY`. Each key
+reaches only its own organization.
 
 ```bash
-DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dndlabs-api.onrender.com
+API=https://dndlabs-api.onrender.com/api/v1
+for name in "Smoke test" "Smoke test (isolation)"; do
+  curl -X POST $API/admin/orgs -H "X-Admin-Secret: $SECRET" \
+    -H "content-type: application/json" -d "{\"name\": \"$name\"}"
+done   # each response's raw_key is one secret, shown once
+```
+
+Run it locally with the same keys:
+
+```bash
+DNDLABS_SMOKE_API_KEY=<key> DNDLABS_SMOKE_ISOLATION_API_KEY=<key> \
+  python scripts/smoke_test.py https://dndlabs-api.onrender.com
 ```
 
 ## Known limitations

@@ -9,7 +9,15 @@ import { UNAUTHORIZED, authenticate } from "./authHandlers";
 
 const BASE = "*/api/v1";
 
-/** Header (lower-case) -> role, a subset of the API's aliases. */
+/** Mirrors the API: lower-case, runs of other characters become one underscore. */
+function normalizeHeader(column: string): string {
+  return column
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+/** Normalized header -> role, a subset of the API's aliases. */
 const ALIASES: Record<string, ColumnRole> = {
   smiles: "smiles",
   canonical_smiles: "smiles",
@@ -55,7 +63,7 @@ function suggest(orgId: string, columns: string[]): { mapping: ColumnMapping; te
   }
   const mapping: ColumnMapping = {};
   for (const column of columns) {
-    const role = ALIASES[column.toLowerCase()];
+    const role = ALIASES[normalizeHeader(column)];
     if (role && !Object.values(mapping).includes(role)) {
       mapping[column] = role;
     }

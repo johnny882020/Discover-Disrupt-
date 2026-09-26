@@ -8,6 +8,14 @@ def test_canonical_field_aliases() -> None:
     assert canonical_field("unknown") is None
 
 
+def test_canonical_field_ignores_case_spacing_and_punctuation() -> None:
+    assert canonical_field("Compound ID") == "source_record_id"
+    assert canonical_field("Canonical SMILES") == "smiles"
+    assert canonical_field("Molecular-Weight") == "molecular_weight"
+    assert canonical_field("  Activity  Value ") == "activity_value"
+    assert canonical_field("IC50 (nM)") is None  # a unit in the header is not a unit column
+
+
 def test_build_raw_record_coerces_and_collects_extra() -> None:
     record = build_raw_record(
         SourceType.JSON,

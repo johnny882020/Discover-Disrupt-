@@ -20,7 +20,12 @@ from dndlabs.ingestion.uploads import UploadConnector, UploadLimits, UploadServi
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
-from dndlabs.storage.database import create_db_engine, create_schema, run_migrations
+from dndlabs.storage.database import (
+    create_db_engine,
+    create_schema,
+    head_revision,
+    run_migrations,
+)
 from dndlabs.storage.repositories import build_sql_repositories
 from dndlabs.validation.validator import Validator
 
@@ -72,7 +77,10 @@ def build_container(
     engine = create_db_engine(settings.database_url)
     if settings.auto_create_schema:
         create_schema(engine)
-    repositories = build_sql_repositories(engine)
+    # A migration-managed schema must be at the code's head revision to be
+    # ready; one built by create_all (development) has no revision to check.
+    expected_revision = None if settings.auto_create_schema else head_revision()
+    repositories = build_sql_repositories(engine, expected_revision)
 
     pubchem_http = build_pubchem_client(
         settings.pubchem_base_url, settings.pubchem_timeout_seconds, pubchem_transport
