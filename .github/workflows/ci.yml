@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       # Production runs on Postgres; migration tests must too (SQLite alone
       # missed the legacy-schema bug — see tests/integration/test_migrations_postgres.py).
@@ -53,7 +53,7 @@ jobs:
           pip-audit .
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -75,7 +75,7 @@ jobs:
   e2e:
     # Browser workflow against the real stack: Postgres -> migrated API ->
     # production frontend build -> Playwright (web/e2e/).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [backend, frontend]
     services:
       postgres:
@@ -147,7 +147,7 @@ jobs:
           retention-days: 7
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
