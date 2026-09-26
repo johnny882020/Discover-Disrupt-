@@ -78,7 +78,7 @@ React 18, TypeScript, Vite · Docker, Render.
 ## Status
 
 - The hosted NVIDIA GenMol endpoint is not yet verified against a live key.
-- Accounts are invitation-only, with no email delivery or password reset yet.
+- Accounts are invitation-only; invitation and reset links are shared manually (no email delivery).
 - The privacy policy is a draft pending legal review.
 
 See [Known limitations](docs/deployment.md#known-limitations) for the full list.

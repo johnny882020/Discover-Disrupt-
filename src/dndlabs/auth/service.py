@@ -51,8 +51,10 @@ from dndlabs.core.schemas import (
     Invitation,
     InvitationCreate,
     InvitationCreated,
+    InvitationPurpose,
     Organization,
     OrgContext,
+    PasswordResetCreated,
     PrincipalType,
     Role,
     SessionCreated,
@@ -81,6 +83,7 @@ class AuthPolicy:
     Attributes:
         session_ttl: Absolute lifetime of a sign-in session.
         invitation_ttl: How long an invitation can be redeemed.
+        password_reset_ttl: How long a password-reset link can be redeemed.
         max_login_attempts: Consecutive failed sign-ins that lock an account.
         lockout: How long a lock lasts.
         password_min_length: Minimum password length.
@@ -90,6 +93,7 @@ class AuthPolicy:
 
     session_ttl: timedelta = timedelta(hours=12)
     invitation_ttl: timedelta = timedelta(hours=72)
+    password_reset_ttl: timedelta = timedelta(hours=24)
     max_login_attempts: int = 5
     lockout: timedelta = timedelta(minutes=15)
     password_min_length: int = 12
@@ -323,8 +327,7 @@ class AuthService:
             ForbiddenError: If the caller is not an admin.
             ConflictError: If the email already belongs to a member of this org.
         """
-        if ctx.role is not Role.ADMIN:
-            raise ForbiddenError("only organization admins can invite members")
+        self._require_admin(ctx)
         existing = self._users.get_credentials(request.email)
         if existing is not None and existing.user.org_id == ctx.org_id:
             raise ConflictError("this email already belongs to a member of your organization")
@@ -354,7 +357,7 @@ class AuthService:
         Raises:
             InvitationInvalidError: If the token is unknown, expired or used.
         """
-        invitation = self._redeemable_invitation(token)
+        invitation = self._redeemable_invitation(token, InvitationPurpose.JOIN)
         return invitation, self._organizations.get(invitation.org_id)
 
     def accept_invitation(self, token: str, password: str) -> SessionCreated:
@@ -372,7 +375,7 @@ class AuthService:
             PasswordPolicyError: If the password fails the policy.
             ConflictError: If an account with the invitation's email exists.
         """
-        invitation = self._redeemable_invitation(token)
+        invitation = self._redeemable_invitation(token, InvitationPurpose.JOIN)
         check_password_policy(password, invitation.email, self._policy.password_min_length)
         user = self._invitations.accept(
             invitation,
@@ -385,9 +388,229 @@ class AuthService:
         )
         return self._start_session(user)
 
+    def list_pending_invitations(self, ctx: OrgContext) -> list[Invitation]:
+        """List the organization's invitations that can still be accepted.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+
+        Returns:
+            Pending invitations, newest first.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin.
+        """
+        self._require_admin(ctx)
+        return self._invitations.list_pending(
+            ctx.org_id, InvitationPurpose.JOIN, self._policy.clock()
+        )
+
+    def revoke_invitation(self, ctx: OrgContext, invitation_id: uuid.UUID) -> None:
+        """Revoke a pending invitation so its link stops working.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+            invitation_id: The invitation to revoke.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin.
+            NotFoundError: If no pending invitation has this id in the org.
+        """
+        self._require_admin(ctx)
+        self._invitations.revoke(ctx.org_id, invitation_id)
+        logger.info("invitation_revoked", extra={"invitation_id": str(invitation_id)})
+
+    # ------------------------------------------------------------------
+    # Members
+    # ------------------------------------------------------------------
+
+    def list_members(self, ctx: OrgContext) -> list[User]:
+        """List the organization's user accounts.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+
+        Returns:
+            The users, oldest first.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin.
+        """
+        self._require_admin(ctx)
+        return self._users.list_members(ctx.org_id)
+
+    def set_member_role(self, ctx: OrgContext, user_id: uuid.UUID, role: Role) -> User:
+        """Change a member's role.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+            user_id: The member.
+            role: The new role.
+
+        Returns:
+            The updated member.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin.
+            NotFoundError: If the user is not a member of the org.
+            ConflictError: If this would leave the org without an admin user.
+        """
+        self._require_admin(ctx)
+        member = self._users.get(ctx.org_id, user_id).user
+        if member.role is Role.ADMIN and role is not Role.ADMIN:
+            self._require_another_admin(ctx.org_id, user_id)
+        updated = self._users.set_role(ctx.org_id, user_id, role)
+        logger.info("member_role_changed", extra={"user_id": str(user_id), "role": role.value})
+        return updated
+
+    def remove_member(self, ctx: OrgContext, user_id: uuid.UUID) -> None:
+        """Remove a member: their account and sessions are deleted immediately.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+            user_id: The member to remove.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin, or removes themselves.
+            NotFoundError: If the user is not a member of the org.
+            ConflictError: If this would leave the org without an admin user.
+        """
+        self._require_admin(ctx)
+        if ctx.user_id == user_id:
+            raise ForbiddenError("you cannot remove yourself; ask another admin")
+        member = self._users.get(ctx.org_id, user_id).user
+        if member.role is Role.ADMIN:
+            self._require_another_admin(ctx.org_id, user_id)
+        self._users.delete(ctx.org_id, user_id)
+        logger.info("member_removed", extra={"user_id": str(user_id)})
+
+    # ------------------------------------------------------------------
+    # Password reset
+    # ------------------------------------------------------------------
+
+    def issue_password_reset(self, ctx: OrgContext, user_id: uuid.UUID) -> PasswordResetCreated:
+        """Issue a single-use password-reset link for a member.
+
+        Any earlier unused reset link for the same member stops working.
+
+        Args:
+            ctx: The caller's context; must have the ``admin`` role.
+            user_id: The member whose password is reset.
+
+        Returns:
+            The one-time reveal of the reset token and link.
+
+        Raises:
+            ForbiddenError: If the caller is not an admin.
+            NotFoundError: If the user is not a member of the org.
+        """
+        self._require_admin(ctx)
+        member = self._users.get(ctx.org_id, user_id).user
+        return self._create_password_reset(member, ctx.user_id)
+
+    def issue_password_reset_for_email(self, org: Organization, email: str) -> PasswordResetCreated:
+        """Issue a password-reset link for an organization's user (operator bootstrap).
+
+        Args:
+            org: The organization.
+            email: The user's email.
+
+        Returns:
+            The one-time reveal of the reset token and link.
+
+        Raises:
+            NotFoundError: If no user with this email belongs to the org.
+        """
+        credentials = self._users.get_credentials(normalize_email(email))
+        if credentials is None or credentials.user.org_id != org.id:
+            raise NotFoundError(f"no user {normalize_email(email)} in organization {org.id}")
+        return self._create_password_reset(credentials.user, None)
+
+    def preview_password_reset(self, token: str) -> tuple[Invitation, Organization]:
+        """Look up a redeemable password-reset token without redeeming it.
+
+        Args:
+            token: The reset token.
+
+        Returns:
+            The token's metadata and its organization.
+
+        Raises:
+            InvitationInvalidError: If the token is unknown, expired, used or revoked.
+        """
+        reset = self._redeemable_invitation(token, InvitationPurpose.PASSWORD_RESET)
+        return reset, self._organizations.get(reset.org_id)
+
+    def reset_password(self, token: str, password: str) -> SessionCreated:
+        """Redeem a reset token: set the new password, end all sessions, sign in.
+
+        Args:
+            token: The reset token.
+            password: The new password.
+
+        Returns:
+            A new session for the user.
+
+        Raises:
+            InvitationInvalidError: If the token is unknown, expired, used or
+                revoked, or its account no longer exists.
+            PasswordPolicyError: If the password fails the policy.
+        """
+        reset = self._redeemable_invitation(token, InvitationPurpose.PASSWORD_RESET)
+        check_password_policy(password, reset.email, self._policy.password_min_length)
+        user = self._invitations.redeem_password_reset(reset, hash_password(password))
+        logger.info("password_reset", extra={"user_id": str(user.id)})
+        return self._start_session(user)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _require_admin(ctx: OrgContext) -> None:
+        """Refuse a caller without the ``admin`` role."""
+        if ctx.role is not Role.ADMIN:
+            raise ForbiddenError("only organization admins can manage members")
+
+    def _require_another_admin(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Refuse a change that would leave the org without an admin user."""
+        admins = [
+            u for u in self._users.list_members(org_id) if u.role is Role.ADMIN and u.id != user_id
+        ]
+        if not admins:
+            raise ConflictError("an organization must keep at least one admin")
+
+    def _create_password_reset(
+        self, user: User, created_by: uuid.UUID | None
+    ) -> PasswordResetCreated:
+        """Store a reset token for ``user`` (superseding older ones) and reveal it once."""
+        now = self._policy.clock()
+        for pending in self._invitations.list_pending(
+            user.org_id, InvitationPurpose.PASSWORD_RESET, now
+        ):
+            if pending.email == user.email:
+                self._invitations.revoke(user.org_id, pending.id)
+        token, digest = new_token(INVITATION_TOKEN_PREFIX)
+        reset = self._invitations.create(
+            Invitation(
+                org_id=user.org_id,
+                email=user.email,
+                role=user.role,
+                purpose=InvitationPurpose.PASSWORD_RESET,
+                created_by=created_by,
+                expires_at=now + self._policy.password_reset_ttl,
+            ),
+            digest,
+        )
+        logger.info(
+            "password_reset_issued", extra={"user_id": str(user.id), "token_id": str(reset.id)}
+        )
+        return PasswordResetCreated(
+            email=reset.email,
+            expires_at=reset.expires_at,
+            token=token,
+            reset_url=f"{self._policy.frontend_origin.rstrip('/')}/reset#token={token}",
+        )
 
     def _start_session(self, user: User) -> SessionCreated:
         """Create and return a new session for ``user``."""
@@ -433,14 +656,16 @@ class AuthService:
             accept_url=f"{self._policy.frontend_origin.rstrip('/')}/invite#token={token}",
         )
 
-    def _redeemable_invitation(self, token: str) -> Invitation:
-        """Return the invitation for ``token`` if it can still be redeemed."""
+    def _redeemable_invitation(self, token: str, purpose: InvitationPurpose) -> Invitation:
+        """Return the token's invitation if it has ``purpose`` and can still be redeemed."""
         if not token.startswith(INVITATION_TOKEN_PREFIX):
             raise InvitationInvalidError(_INVALID_INVITATION)
         invitation = self._invitations.get_by_token_hash(token_digest(token))
         if (
             invitation is None
+            or invitation.purpose is not purpose
             or invitation.accepted_at is not None
+            or invitation.revoked_at is not None
             or invitation.expires_at <= self._policy.clock()
         ):
             raise InvitationInvalidError(_INVALID_INVITATION)

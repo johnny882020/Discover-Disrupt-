@@ -24,6 +24,8 @@ export interface SessionState {
   signInWithApiKey: (key: string) => Promise<void>;
   /** Redeems an invitation with a chosen password and signs the new user in. */
   acceptInvitation: (token: string, password: string) => Promise<void>;
+  /** Redeems a password-reset link with a new password and signs the user in. */
+  resetPassword: (token: string, password: string) => Promise<void>;
   /** Ends the session server-side (for sessions) and forgets the credential. */
   signOut: () => Promise<void>;
 }

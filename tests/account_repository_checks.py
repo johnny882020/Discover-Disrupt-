@@ -6,7 +6,14 @@ import pytest
 
 from dndlabs.core.exceptions import ConflictError, InvitationInvalidError, NotFoundError
 from dndlabs.core.protocols import Repositories
-from dndlabs.core.schemas import Invitation, Organization, Role, User, UserSession
+from dndlabs.core.schemas import (
+    Invitation,
+    InvitationPurpose,
+    Organization,
+    Role,
+    User,
+    UserSession,
+)
 
 
 def check_users(repos: Repositories) -> None:
@@ -136,10 +143,107 @@ def check_accept_is_atomic(repos: Repositories) -> None:
     assert unused is not None and unused.accepted_at is None  # rolled back
 
 
+def check_member_management(repos: Repositories) -> None:
+    org = repos.organizations.create(Organization(name="Acme"))
+    other = repos.organizations.create(Organization(name="OtherCo"))
+    ada = repos.users.create(User(org_id=org.id, email="ada@acme.com", role=Role.ADMIN), "h")
+    bob = repos.users.create(User(org_id=org.id, email="bob@acme.com"), "h")
+    repos.users.create(User(org_id=other.id, email="otto@other.com"), "h")
+    assert [u.email for u in repos.users.list_members(org.id)] == ["ada@acme.com", "bob@acme.com"]
+
+    assert repos.users.set_role(org.id, bob.id, Role.ADMIN).role is Role.ADMIN
+    with pytest.raises(NotFoundError):
+        repos.users.set_role(other.id, bob.id, Role.MEMBER)
+
+    now = datetime.now(UTC)
+    repos.sessions.create(
+        UserSession(user_id=bob.id, org_id=org.id, expires_at=now + timedelta(hours=1)), "s" * 64
+    )
+    invited = repos.invitations.create(
+        Invitation(
+            org_id=org.id,
+            email="cleo@acme.com",
+            role=Role.MEMBER,
+            created_by=bob.id,
+            expires_at=now + timedelta(days=1),
+        ),
+        "i" * 64,
+    )
+    with pytest.raises(NotFoundError):
+        repos.users.delete(other.id, bob.id)
+    repos.users.delete(org.id, bob.id)
+    assert [u.id for u in repos.users.list_members(org.id)] == [ada.id]
+    assert repos.sessions.get_by_token_hash("s" * 64) is None
+    kept = repos.invitations.get_by_token_hash("i" * 64)
+    assert kept is not None and kept.created_by is None and kept.id == invited.id
+
+
+def check_pending_revoke_and_reset(repos: Repositories) -> None:
+    org = repos.organizations.create(Organization(name="Acme"))
+    user = repos.users.create(User(org_id=org.id, email="bob@acme.com"), "old-hash")
+    now = datetime.now(UTC)
+    repos.users.record_login_failure(user.id, 1, now + timedelta(hours=1))  # locked
+    repos.sessions.create(
+        UserSession(user_id=user.id, org_id=org.id, expires_at=now + timedelta(hours=1)), "s" * 64
+    )
+
+    def token(
+        email: str, purpose: InvitationPurpose, digest: str, expires_in: timedelta = timedelta(1)
+    ) -> Invitation:
+        return repos.invitations.create(
+            Invitation(
+                org_id=org.id,
+                email=email,
+                role=Role.MEMBER,
+                purpose=purpose,
+                expires_at=now + expires_in,
+            ),
+            digest,
+        )
+
+    join = token("cleo@acme.com", InvitationPurpose.JOIN, "a" * 64)
+    token("gone@acme.com", InvitationPurpose.JOIN, "b" * 64, expires_in=-timedelta(1))
+    reset = token("bob@acme.com", InvitationPurpose.PASSWORD_RESET, "c" * 64)
+
+    pending = repos.invitations.list_pending(org.id, InvitationPurpose.JOIN, now)
+    assert [i.id for i in pending] == [join.id]
+    resets = repos.invitations.list_pending(org.id, InvitationPurpose.PASSWORD_RESET, now)
+    assert [(i.id, i.purpose) for i in resets] == [(reset.id, InvitationPurpose.PASSWORD_RESET)]
+
+    repos.invitations.revoke(org.id, join.id)
+    revoked = repos.invitations.get_by_token_hash("a" * 64)
+    assert revoked is not None and revoked.revoked_at is not None
+    assert repos.invitations.list_pending(org.id, InvitationPurpose.JOIN, now) == []
+    with pytest.raises(NotFoundError):
+        repos.invitations.revoke(org.id, join.id)
+    with pytest.raises(InvitationInvalidError):  # a revoked invitation cannot be accepted
+        repos.invitations.accept(revoked, User(org_id=org.id, email="cleo@acme.com"), "h")
+
+    reset_user = repos.invitations.redeem_password_reset(reset, "new-hash")
+    assert reset_user.id == user.id
+    creds = repos.users.get(org.id, user.id)
+    assert (creds.password_hash, creds.failed_login_count, creds.locked_until) == (
+        "new-hash",
+        0,
+        None,
+    )
+    assert repos.sessions.get_by_token_hash("s" * 64) is None
+    with pytest.raises(InvitationInvalidError):
+        repos.invitations.redeem_password_reset(reset, "newer-hash")
+
+    orphan = token("nobody@acme.com", InvitationPurpose.PASSWORD_RESET, "d" * 64)
+    with pytest.raises(InvitationInvalidError):
+        repos.invitations.redeem_password_reset(orphan, "h")
+    unused = repos.invitations.get_by_token_hash("d" * 64)
+    assert unused is not None and unused.accepted_at is None  # rolled back
+
+
 ALL_CHECKS = (
     check_users,
     check_login_counters,
     check_sessions,
     check_invitations,
     check_accept_is_atomic,
+    check_member_management,
+    check_pending_revoke_and_reset,
 )

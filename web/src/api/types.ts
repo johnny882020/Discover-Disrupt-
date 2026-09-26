@@ -83,6 +83,43 @@ export interface InvitationCreated {
   accept_url: string;
 }
 
+/** What redeeming a single-use account token does. */
+export type InvitationPurpose = "join" | "password_reset";
+
+/** A pending invitation, as listed by `GET /auth/invitations` (never includes its token). */
+export interface Invitation {
+  id: string;
+  org_id: string;
+  email: string;
+  role: Role;
+  purpose: InvitationPurpose;
+  created_by: string | null;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Body of `PATCH /auth/members/{user_id}`. */
+export interface MemberUpdate {
+  role: Role;
+}
+
+/** A new password-reset link: the token and link are shown only in this response. */
+export interface PasswordResetCreated {
+  email: string;
+  expires_at: string;
+  token: string;
+  reset_url: string;
+}
+
+/** Whose password a reset link sets (`POST /auth/password-reset/preview`). */
+export interface PasswordResetPreview {
+  email: string;
+  org_name: string;
+  expires_at: string;
+}
+
 /** What an invitation grants (`POST /auth/invitations/preview`). */
 export interface InvitationPreview {
   email: string;

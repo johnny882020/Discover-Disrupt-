@@ -1,20 +1,27 @@
 """Self-service auth endpoints: sign-in, sessions, invitations, keys and privacy deletion."""
 
+import uuid
+
 from fastapi import APIRouter, status
 
 from dndlabs.api.dependencies import CurrentOrg, Services
 from dndlabs.core.exceptions import ForbiddenError
 from dndlabs.core.schemas import (
+    Invitation,
     InvitationAccept,
     InvitationCreate,
     InvitationCreated,
     InvitationPreview,
     InvitationToken,
     LoginRequest,
+    MemberUpdate,
     OrgContext,
     PasswordChange,
+    PasswordResetCreated,
+    PasswordResetPreview,
     Role,
     SessionCreated,
+    User,
 )
 
 router = APIRouter(tags=["auth"])
@@ -108,6 +115,128 @@ def accept_invitation(body: InvitationAccept, services: Services) -> SessionCrea
         A session for the new account.
     """
     return services.auth.accept_invitation(body.token, body.password)
+
+
+@router.get("/auth/invitations")
+def list_invitations(org: CurrentOrg, services: Services) -> list[Invitation]:
+    """List the organization's pending invitations (admins and API keys only).
+
+    Args:
+        org: The authenticated context.
+        services: Injected services.
+
+    Returns:
+        Invitations that can still be accepted, newest first. Tokens are
+        never included.
+    """
+    return services.auth.list_pending_invitations(org)
+
+
+@router.delete("/auth/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_invitation(invitation_id: uuid.UUID, org: CurrentOrg, services: Services) -> None:
+    """Revoke a pending invitation; its link stops working (admins and API keys only).
+
+    Args:
+        invitation_id: The invitation.
+        org: The authenticated context.
+        services: Injected services.
+    """
+    services.auth.revoke_invitation(org, invitation_id)
+
+
+@router.get("/auth/members")
+def list_members(org: CurrentOrg, services: Services) -> list[User]:
+    """List the organization's user accounts (admins and API keys only).
+
+    Args:
+        org: The authenticated context.
+        services: Injected services.
+
+    Returns:
+        The members, oldest first.
+    """
+    return services.auth.list_members(org)
+
+
+@router.patch("/auth/members/{user_id}")
+def update_member(
+    user_id: uuid.UUID, body: MemberUpdate, org: CurrentOrg, services: Services
+) -> User:
+    """Change a member's role (admins and API keys only).
+
+    Args:
+        user_id: The member.
+        body: The new role.
+        org: The authenticated context.
+        services: Injected services.
+
+    Returns:
+        The updated member.
+    """
+    return services.auth.set_member_role(org, user_id, body.role)
+
+
+@router.delete("/auth/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(user_id: uuid.UUID, org: CurrentOrg, services: Services) -> None:
+    """Remove a member; their account and sessions are deleted (admins and API keys only).
+
+    Args:
+        user_id: The member.
+        org: The authenticated context.
+        services: Injected services.
+    """
+    services.auth.remove_member(org, user_id)
+
+
+@router.post("/auth/members/{user_id}/password-reset", status_code=status.HTTP_201_CREATED)
+def issue_password_reset(
+    user_id: uuid.UUID, org: CurrentOrg, services: Services
+) -> PasswordResetCreated:
+    """Issue a single-use password-reset link for a member (admins and API keys only).
+
+    Args:
+        user_id: The member.
+        org: The authenticated context.
+        services: Injected services.
+
+    Returns:
+        The reset token and link, shown once. Earlier unused links for this
+        member stop working.
+    """
+    return services.auth.issue_password_reset(org, user_id)
+
+
+@router.post("/auth/password-reset/preview")
+def preview_password_reset(body: InvitationToken, services: Services) -> PasswordResetPreview:
+    """Describe a redeemable password-reset link without redeeming it.
+
+    Args:
+        body: The reset token.
+        services: Injected services.
+
+    Returns:
+        The account's email and organization.
+    """
+    reset, organization = services.auth.preview_password_reset(body.token)
+    return PasswordResetPreview(
+        email=reset.email, org_name=organization.name, expires_at=reset.expires_at
+    )
+
+
+@router.post("/auth/password-reset/accept")
+def reset_password(body: InvitationAccept, services: Services) -> SessionCreated:
+    """Redeem a password-reset link with a new password; signs the user in.
+
+    All of the user's other sessions end.
+
+    Args:
+        body: The reset token and the new password.
+        services: Injected services.
+
+    Returns:
+        A new session.
+    """
+    return services.auth.reset_password(body.token, body.password)
 
 
 @router.get("/auth/whoami")

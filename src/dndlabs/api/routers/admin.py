@@ -15,6 +15,8 @@ from dndlabs.core.schemas import (
     ApiKeyCreated,
     InvitationCreated,
     Organization,
+    PasswordResetCreated,
+    PasswordResetRequest,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin_secret)])
@@ -82,3 +84,26 @@ def invite_admin(
     """
     org = services.repositories.organizations.get(org_id)
     return services.auth.invite_admin(org, body.email)
+
+
+@router.post("/orgs/{org_id}/password-resets", status_code=201)
+def issue_password_reset(
+    org_id: uuid.UUID, body: PasswordResetRequest, services: Services
+) -> PasswordResetCreated:
+    """Issue a password-reset link for one of an organization's users.
+
+    For when no admin of the organization can sign in to issue it themselves.
+
+    Args:
+        org_id: Organization identifier.
+        body: The user's email.
+        services: Injected services.
+
+    Returns:
+        The reset token and link, shown once.
+
+    Raises:
+        NotFoundError: If the organization or user does not exist.
+    """
+    org = services.repositories.organizations.get(org_id)
+    return services.auth.issue_password_reset_for_email(org, body.email)

@@ -41,8 +41,8 @@ need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
 
 | Who | Signs in with | Can |
 |---|---|---|
-| Operator | `X-Admin-Secret` (`DNDLABS_ADMIN_BOOTSTRAP_SECRET`) | Create organizations, issue API keys, invite each organization's first admin |
-| Org admin | Email + password | Everything a member can, plus invite colleagues (Team page) and delete the organization's data |
+| Operator | `X-Admin-Secret` (`DNDLABS_ADMIN_BOOTSTRAP_SECRET`) | Create organizations, issue API keys, invite each organization's first admin, issue a reset link when no admin can sign in |
+| Org admin | Email + password | Everything a member can, plus manage the team (invite, change roles, reset passwords, remove members, revoke invitations) and delete the organization's data |
 | Org member | Email + password | Run pipelines; view, filter and export the organization's datasets |
 | Program | Org API key (`X-API-Key`) | The same as an org admin, over the API |
 
@@ -60,7 +60,7 @@ default, is listed in [`.env.example`](../.env.example).
 |---|---|---|
 | `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment runs but marks every record `skipped_no_key`; see [nvidia-nim.md](nvidia-nim.md) |
 | `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL: it is the CORS origin and the base of invitation links |
-| `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
+| `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_PASSWORD_RESET_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 24 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
 | `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build; changing this requires a rebuild, not a restart |
 
 ### Troubleshooting
@@ -68,8 +68,9 @@ default, is listed in [`.env.example`](../.env.example).
 | Symptom | Cause / fix |
 |---|---|
 | Sent back to sign-in with "Your session has ended" | The session expired (12 h), was signed out elsewhere, or the password was changed on another device — sign in again |
-| `401 invalid email or password` | Wrong email or password. After 5 failures the account locks for 15 minutes (`429`); an admin cannot unlock it early |
-| Invitation link says "invalid, expired or already used" | Links work once and expire after 72 h — ask an admin (Team page) for a new one |
+| `401 invalid email or password` | Wrong email or password. After 5 failures the account locks for 15 minutes (`429`) |
+| A user forgot their password, or is locked out | An admin opens **Team** → **Reset password** for them and sends the link (valid 24 h); redeeming it also clears the lock. If no admin can sign in, the operator calls `POST /admin/orgs/{org_id}/password-resets` |
+| Invitation or reset link says "invalid, expired or already used" | Links work once and expire (invitations 72 h, resets 24 h); revoked or superseded links stop working — ask an admin (Team page) for a new one |
 | `401` on every API call from a script | Missing/wrong `X-API-Key`, or the key was revoked — issue a new key |
 | Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set; confirm the hosted base URL first — see [nvidia-nim.md](nvidia-nim.md) |
 | CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
@@ -116,7 +117,7 @@ cd web && npm ci && npm run dev   # frontend on :5173, mock API by default
 | `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit .` (project runtime dependencies) |
 | `frontend` | `eslint`, `tsc --noEmit` (source, tests, e2e and configs), `vitest`, `vite build`, `npm audit --audit-level=high` |
 | `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
-| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → pipeline run → report → export → team invite, and API-key sign-in. Uploads the Playwright report and API log on failure. |
+| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → pipeline run → report → export; team management (invite, password reset, removal); and API-key sign-in. Uploads the Playwright report and API log on failure. |
 
 The dependency scans block merges. `.github/dependabot.yml` opens weekly
 update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
@@ -140,9 +141,9 @@ DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dnd
 - **NVIDIA enrichment:** the request/response contract is verified from
   NVIDIA's own source; the hosted base URL is not yet confirmed against a
   live endpoint — see [nvidia-nim.md](nvidia-nim.md).
-- **Accounts:** invitation-only, with no email delivery — invitation links
-  are handed over manually. There is no password reset or account removal
-  yet: a user who forgets their password cannot recover the account.
+- **Accounts:** invitation-only, with no email delivery — invitation and
+  password-reset links are handed over manually, and there is no
+  self-service "forgot password".
 - **Sign-in throttling** is per account, not per client IP — see
   [Auth](architecture.md#auth).
 - **Sources:** UniProt and PDB are planned, not implemented.

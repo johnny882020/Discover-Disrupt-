@@ -10,6 +10,7 @@ import { Dashboard } from "./screens/Dashboard";
 import { DatasetDetail } from "./screens/DatasetDetail";
 import { ExportPanel } from "./screens/ExportPanel";
 import { QualityReport } from "./screens/QualityReport";
+import { ResetPassword } from "./screens/ResetPassword";
 import { RunTrigger } from "./screens/RunTrigger";
 import { Team } from "./screens/Team";
 
@@ -69,6 +70,7 @@ export default function App(): React.JSX.Element {
         <BrowserRouter>
           <Routes>
             <Route path="/invite" element={<AcceptInvite />} />
+            <Route path="/reset" element={<ResetPassword />} />
             <Route
               path="*"
               element={

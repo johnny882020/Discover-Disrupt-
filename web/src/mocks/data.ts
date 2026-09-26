@@ -6,7 +6,7 @@
 import type {
   Dataset,
   EnrichmentResult,
-  InvitationPreview,
+  Invitation,
   NormalizedRecord,
   OrgContext,
   PipelineRun,
@@ -75,22 +75,28 @@ export const SEED_USERS: Record<string, SeedUser> = {
   },
 };
 
-/** A pending invitation and the org it joins. */
-export interface PendingInvitation {
-  org_id: string;
-  preview: InvitationPreview;
+/** An unredeemed single-use token (invitation or password reset). */
+export interface StoredToken {
+  invitation: Invitation;
+  org_name: string;
 }
 
-/** Pending invitations, keyed by token. */
-export const invitationsStore: Record<string, PendingInvitation> = {
+/** Unredeemed invitations and reset links, keyed by token. */
+export const invitationsStore: Record<string, StoredToken> = {
   ddl_inv_welcome000000000000000000000: {
-    org_id: ACME.org_id,
-    preview: {
+    invitation: {
+      id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+      org_id: ACME.org_id,
       email: "cleo@acme.example",
       role: "member",
-      org_name: ACME.org_name,
+      purpose: "join",
+      created_by: null,
+      created_at: "2026-09-20T09:00:00Z",
       expires_at: "2099-01-01T00:00:00Z",
+      accepted_at: null,
+      revoked_at: null,
     },
+    org_name: ACME.org_name,
   },
 };
 
