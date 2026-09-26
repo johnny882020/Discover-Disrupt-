@@ -36,6 +36,7 @@ services:
       context: ./web
     environment:
       VITE_API_BASE_URL: http://localhost:8000/api/v1
+      VITE_USE_MOCKS: "false"  # dev mode defaults to the MSW mock API; use the real one
     ports:
       - "5173:5173"
     depends_on:

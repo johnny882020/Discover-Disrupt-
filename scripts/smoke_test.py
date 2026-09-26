@@ -1,12 +1,12 @@
 """End-to-end smoke test against a running D&D Labs Platform deployment.
 
-Bootstraps a throwaway organization, runs a pipeline for each source that
-doesn't need live network access (CSV/JSON against a small inline sample),
-and checks the dataset, quality report, filtering, enrichment status and
-export all come back consistent. Exits non-zero on the first failure.
+Waits out a free-tier cold start, checks liveness and database readiness,
+bootstraps a throwaway organization, runs a CSV pipeline against the image's
+bundled sample, and checks the quality report, enrichment status, export and
+org isolation. Exits non-zero on the first failure.
 
 Usage:
-    python scripts/smoke_test.py https://dndlabs-api.onrender.com --admin-secret <secret>
+    DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dndlabs-api.onrender.com
 """
 
 import time
@@ -40,18 +40,38 @@ def _wait_for_run(
         time.sleep(1)
 
 
+def _wait_until_awake(client: httpx.Client, deadline_seconds: float) -> dict[str, Any]:
+    """Poll ``/health`` until it answers; Render's free tier cold-starts in 50s+."""
+    deadline = time.monotonic() + deadline_seconds
+    while True:
+        try:
+            health: dict[str, Any] = client.get("/health").raise_for_status().json()
+            return health
+        except httpx.HTTPError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
 def main(
     base_url: Annotated[str, typer.Argument(help="API base URL.")],
-    admin_secret: Annotated[str, typer.Option(help="DNDLABS_ADMIN_BOOTSTRAP_SECRET.")],
+    admin_secret: Annotated[
+        str, typer.Option(envvar="DNDLABS_ADMIN_BOOTSTRAP_SECRET", help="Admin bootstrap secret.")
+    ],
     timeout: Annotated[float, typer.Option(help="Seconds to wait per run.")] = 60.0,
+    wake_timeout: Annotated[float, typer.Option(help="Seconds to wait for a cold start.")] = 180.0,
 ) -> None:
     """Run the smoke test and exit non-zero on the first failure."""
     typer.echo(f"Smoke test: {base_url}")
     try:
-        with httpx.Client(base_url=base_url.rstrip("/"), timeout=30.0) as client:
-            health = client.get("/health").raise_for_status().json()
+        with httpx.Client(base_url=base_url.rstrip("/"), timeout=60.0) as client:
+            health = _wait_until_awake(client, wake_timeout)
             _check(health == {"status": "ok"}, f"health: {health}")
             typer.echo("  ok  health")
+
+            ready = client.get("/api/v1/health/ready")
+            _check(ready.status_code == 200, f"readiness: {ready.status_code} {ready.text}")
+            typer.echo("  ok  readiness (database reachable and migrated)")
 
             org = (
                 client.post(

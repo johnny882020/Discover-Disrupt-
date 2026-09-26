@@ -203,7 +203,7 @@ exception's own message is never returned to the client for the generic
 (`DndLabsError`) case or for anything outside this hierarchy — see
 [docs/api.md#errors](api.md#errors).
 
-## Database schema (Alembic revision `0001`)
+## Database schema (Alembic head: `0002`)
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -221,12 +221,23 @@ on PostgreSQL and JSON/TEXT-backed on SQLite, so the same models and
 migration run identically against Postgres (Docker/Render) and SQLite
 (local dev, tests).
 
-`dnd-pipeline init-db` applies migrations. If it finds a schema created by
+`dnd-pipeline init-db` applies migrations (the API container runs it on
+every boot, via `docker/entrypoint.sh`). If it finds a schema created by
 `DNDLABS_AUTO_CREATE_SCHEMA=true` (dev convenience) with no
 `alembic_version` table, it stamps revision `0001` before upgrading, and
 logs a `WARNING` (`migration_stamp_shortcut`) — that path assumes the
 existing schema actually matches `0001`; verify it does before relying on
 the stamp.
+
+| Revision | Purpose |
+|---|---|
+| `0001` | Platform schema (table above) |
+| `0002` | Retires the pre-rebuild MVP schema. The MVP also used revision id `0001` for an unrelated schema, so databases that ran it reported `0001` as current and never received the platform tables. `0002` detects that state (`organizations` missing), moves the MVP tables into a `legacy_mvp` schema — data preserved, no name collisions — and applies the platform schema. No-op on any database that already has it. |
+
+Migrations are tested against both SQLite and real PostgreSQL
+(`tests/integration/test_migrations_postgres.py`, run in CI against a
+Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
+own vendored migration (`tests/fixtures/legacy_mvp_alembic/`).
 
 ## Readiness vs. liveness
 

@@ -7,9 +7,6 @@ on:
         description: Base URL of the deployed API
         required: true
         default: https://dndlabs-api.onrender.com
-      admin_secret:
-        description: DNDLABS_ADMIN_BOOTSTRAP_SECRET of the deployed API
-        required: true
 
 jobs:
   smoke:
@@ -25,5 +22,12 @@ jobs:
       - name: Run smoke test
         env:
           BASE_URL: ${{ inputs.base_url }}
-          ADMIN_SECRET: ${{ inputs.admin_secret }}
-        run: python scripts/smoke_test.py "$BASE_URL" --admin-secret "$ADMIN_SECRET"
+          # A repository secret, not a workflow input: dispatch inputs are
+          # shown unmasked in the run's UI and event payload.
+          DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${{ secrets.DNDLABS_ADMIN_BOOTSTRAP_SECRET }}
+        run: |
+          if [ -z "$DNDLABS_ADMIN_BOOTSTRAP_SECRET" ]; then
+            echo "::error::Set the DNDLABS_ADMIN_BOOTSTRAP_SECRET repository secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          python scripts/smoke_test.py "$BASE_URL"

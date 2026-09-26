@@ -48,7 +48,7 @@ have even run. Temporary and insecure; see [Auth](architecture.md#auth).
 | CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's |
 | First request is slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site never sleeps. |
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
-| `relation "organizations" does not exist` on any DB-backed call | Migrations haven't run against the linked database. Diagnose with `GET /api/v1/health/ready` (`503` confirms it) before reading logs. Fix: **Manual Deploy → Deploy latest commit** on `dndlabs-api` (not "Restart"), then check its logs for `Database is up to date.` or a `migration_stamp_shortcut` warning. If `/health/ready` still fails after a clean redeploy, the database itself is in a stale state (e.g. `alembic_version` says "head" but the tables were dropped independently) — delete and let the Blueprint recreate `dndlabs-db`, then redeploy `dndlabs-api`. `DNDLABS_FREE_TIER_SHARED_PASSWORD` still works throughout, since it never touches the database. |
+| `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema-alembic-head-0002)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. `DNDLABS_FREE_TIER_SHARED_PASSWORD` keeps working throughout, since it never touches the database. |
 
 ## Docker Compose (local)
 
@@ -66,12 +66,21 @@ automatically via `docker/entrypoint.sh`), and the frontend dev server
 
 | Job | Checks |
 |---|---|
-| `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov`, `pip-audit` (informational) |
-| `docker` | Builds `docker/Dockerfile.api`, smoke-tests the image — catches a broken Dockerfile here, not on a Render deploy |
+| `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit` (informational) |
+| `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
 | `frontend` | `eslint`, `tsc --noEmit`, `vitest`, `vite build`, `npm audit --audit-level=high` (informational) |
 
 The dependency scans are informational, not merge-blocking, until their
 current findings are triaged — see README's Known limitations.
 
 `.github/workflows/smoke.yml` is a manual `workflow_dispatch` that runs
-`scripts/smoke_test.py` against a deployed URL, given the admin secret.
+`scripts/smoke_test.py` against a deployed URL: it waits out a cold start,
+then checks liveness, **readiness**, org bootstrap, a CSV pipeline run,
+export and org isolation. It reads the admin secret from the
+`DNDLABS_ADMIN_BOOTSTRAP_SECRET` repository secret (Settings → Secrets and
+variables → Actions) — never a workflow input, which GitHub shows unmasked.
+Run the same check locally:
+
+```bash
+DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dndlabs-api.onrender.com
+```

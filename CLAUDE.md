@@ -8,6 +8,7 @@ Read [docs/architecture.md](docs/architecture.md) before changing code.
 ```bash
 pip install -e ".[dev]"
 pytest --cov=dndlabs                      # backend tests + coverage
+DNDLABS_TEST_POSTGRES_URL=postgresql+psycopg://… pytest tests/integration  # migrations on real Postgres (CI runs this)
 ruff check . && ruff format --check .
 mypy src/                                 # strict
 DNDLABS_LIVE_TESTS=1 pytest -m live       # live PubChem/ChEMBL/GenMol (opt-in)
@@ -39,4 +40,4 @@ docker compose up --build                 # full stack locally
 - **Config:** `core.config.Settings` (`DNDLABS_*` env vars) only. No hardcoded values or committed secrets.
 - **Storage ordering:** a dataset's records must be persisted before any feature vector or enrichment result that references them (foreign key) — see `pipeline/orchestrator.py`'s stage order.
 - **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `web/tests/` mirrors `web/src/`.
-- **Contracts:** changes to `core/schemas.py`, `core/protocols.py` or the DB schema update `docs/architecture.md` and get a new Alembic revision; NVIDIA contract changes update `docs/nvidia-nim.md`.
+- **Contracts:** changes to `core/schemas.py`, `core/protocols.py` or the DB schema update `docs/architecture.md` and get a new Alembic revision (never reuse a revision id — a reused `0001` once left production without its schema); NVIDIA contract changes update `docs/nvidia-nim.md`.

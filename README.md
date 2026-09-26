@@ -99,7 +99,8 @@ Full list: [`.env.example`](.env.example). The variables that matter most:
 ## Development
 
 ```bash
-pytest --cov=dndlabs                       # backend: 190 tests, 97% coverage
+pytest --cov=dndlabs                       # backend: 194 tests, 97% coverage
+DNDLABS_TEST_POSTGRES_URL=postgresql+psycopg://… pytest tests/integration  # migrations on real Postgres
 DNDLABS_LIVE_TESTS=1 pytest -m live        # against the real external APIs (opt-in)
 ruff check . && ruff format --check . && mypy src/ --strict
 
@@ -117,8 +118,9 @@ docker/  docs/  scripts/
 ```
 
 CI (`.github/workflows/ci.yml`) runs three jobs on every push and PR:
-`backend` (ruff, mypy `--strict`, pytest), `docker` (builds and
-smoke-tests the API image), and `frontend` (eslint, `tsc`, vitest, `vite
+`backend` (ruff, mypy `--strict`, pytest, including migrations against
+a Postgres 16 service), `docker` (builds and smoke-tests the images,
+validates Compose), and `frontend` (eslint, `tsc`, vitest, `vite
 build`). Dependency scans (`pip-audit`, `npm audit`) run informationally;
 see Known limitations.
 
