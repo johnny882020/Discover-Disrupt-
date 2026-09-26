@@ -3,23 +3,40 @@
 import uuid
 
 from dndlabs.auth.models import generate_key, hash_key, key_prefix, verify_key
-from dndlabs.core.exceptions import InvalidApiKeyError
+from dndlabs.core.exceptions import InvalidApiKeyError, NotFoundError
+from dndlabs.core.logging import get_logger
 from dndlabs.core.protocols import ApiKeyRepository, OrganizationRepository
 from dndlabs.core.schemas import ApiKeyCreated, Organization, OrgContext
+
+logger = get_logger(__name__)
+
+# Fixed identity for the free-tier shared-password path (see AuthService.resolve).
+# Deterministic so logs/tests are stable across restarts; never persisted.
+FREE_TIER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+FREE_TIER_KEY_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+FREE_TIER_ORG_NAME = "Free Tier (shared, insecure)"
 
 
 class AuthService:
     """Issues and verifies API keys against the auth repositories."""
 
-    def __init__(self, organizations: OrganizationRepository, api_keys: ApiKeyRepository) -> None:
+    def __init__(
+        self,
+        organizations: OrganizationRepository,
+        api_keys: ApiKeyRepository,
+        shared_password: str | None = None,
+    ) -> None:
         """Create the service.
 
         Args:
             organizations: Organization repository (used to resolve org name on auth).
             api_keys: Key repository.
+            shared_password: Optional temporary bypass credential (see
+                ``resolve``). ``None`` or empty disables it.
         """
         self._organizations = organizations
         self._api_keys = api_keys
+        self._shared_password = shared_password or None
 
     def issue_key(self, org: Organization) -> ApiKeyCreated:
         """Issue a new API key for an organization.
@@ -48,6 +65,15 @@ class AuthService:
         """
         if not raw_key:
             raise InvalidApiKeyError("missing API key")
+        if self._shared_password is not None and raw_key == self._shared_password:
+            # Temporary bypass: every caller using this password shares one
+            # fixed, insecure identity. Authentication itself never depends
+            # on storage; provisioning the org row is best-effort so
+            # FK-scoped writes (runs, datasets) work once storage is healthy.
+            self._ensure_free_tier_org()
+            return OrgContext(
+                org_id=FREE_TIER_ORG_ID, org_name=FREE_TIER_ORG_NAME, api_key_id=FREE_TIER_KEY_ID
+            )
         prefix = key_prefix(raw_key)
         record = self._api_keys.get_by_prefix(prefix)
         get_hash = getattr(self._api_keys, "get_hash", None)
@@ -68,6 +94,29 @@ class AuthService:
             key_id: Key to revoke.
 
         Raises:
+            InvalidApiKeyError: If ``key_id`` is the shared free-tier identity
+                (see ``resolve``) — there is no per-org key to revoke.
             NotFoundError: If the key does not exist for this org.
         """
+        if key_id == FREE_TIER_KEY_ID:
+            raise InvalidApiKeyError("the shared free-tier credential cannot be revoked")
         self._api_keys.revoke(org_id, key_id)
+
+    def _ensure_free_tier_org(self) -> None:
+        """Best-effort: persist the free-tier org row so FK-scoped writes work.
+
+        Swallows every error. The shared password must authenticate even
+        when storage is unreachable or unmigrated; any write that actually
+        needs the org row will fail on its own terms in that case.
+        """
+        try:
+            self._organizations.get(FREE_TIER_ORG_ID)
+        except NotFoundError:
+            try:
+                self._organizations.create(
+                    Organization(id=FREE_TIER_ORG_ID, name=FREE_TIER_ORG_NAME)
+                )
+            except Exception:  # noqa: BLE001 - best-effort provisioning, see docstring
+                logger.warning("free_tier_org_create_failed", exc_info=True)
+        except Exception:  # noqa: BLE001 - storage unavailable; auth still succeeds
+            logger.warning("free_tier_org_lookup_failed", exc_info=True)

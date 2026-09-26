@@ -114,6 +114,16 @@ only an Argon2 hash and a short lookup `prefix` are stored. Every other
 endpoint requires `X-API-Key: <raw_key>`, resolved by `AuthService.resolve`
 into an `OrgContext` that every downstream call is scoped by.
 
+**Free-tier shared password (temporary, insecure).** When
+`DNDLABS_FREE_TIER_SHARED_PASSWORD` is set (default `freetier2026`), any
+`X-API-Key` equal to it authenticates as one fixed, shared identity
+(`AuthService.FREE_TIER_ORG_ID`) with no per-org key and — deliberately — no
+database lookup, so it authenticates even if the database is unreachable or
+unmigrated. It cannot be revoked. This exists only to unblock a single-operator
+free-tier deployment before real customer onboarding; every caller who knows
+the password shares one identity and one dataset. Clear the variable (empty
+string) to disable it once real per-org keys are in use.
+
 ## Validation
 
 Record rules run in this order. Each receives the record as the previous

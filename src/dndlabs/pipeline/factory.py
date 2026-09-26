@@ -123,7 +123,9 @@ def build_container(
         repositories=repositories,
         service=service,
         exporter=DatasetExporter(),
-        auth=AuthService(repositories.organizations, repositories.api_keys),
+        auth=AuthService(
+            repositories.organizations, repositories.api_keys, settings.free_tier_shared_password
+        ),
         _engine=engine,
         _http_clients=tuple(http_clients),
     )

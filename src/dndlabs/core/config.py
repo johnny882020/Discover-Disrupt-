@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     admin_bootstrap_secret: str = "change-me-in-production"
     frontend_origin: str = "http://localhost:5173"
 
+    free_tier_shared_password: str | None = Field(
+        default="freetier2026",
+        description=(
+            "Temporary, insecure shared credential: authenticates as one fixed "
+            "org with no per-org key and no database lookup. Set to an empty "
+            "string to disable. Replace with real per-org keys before "
+            "onboarding real customers."
+        ),
+    )
+
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)
     pubchem_batch_size: int = Field(default=100, ge=1, le=500)

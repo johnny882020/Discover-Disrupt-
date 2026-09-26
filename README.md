@@ -44,7 +44,11 @@ docker compose up --build
 - API: <http://localhost:8000> (docs at `/docs`)
 - Frontend: <http://localhost:5173>
 
-Bootstrap your first organization:
+Fastest path: open <http://localhost:5173> and enter the shared password
+`freetier2026` (see `DNDLABS_FREE_TIER_SHARED_PASSWORD` below — **temporary
+and insecure**, replace with real per-org keys before onboarding customers).
+
+Or bootstrap a real, isolated organization:
 
 ```bash
 curl -X POST localhost:8000/api/v1/admin/orgs \
@@ -107,6 +111,7 @@ ones:
 | `DNDLABS_ADMIN_BOOTSTRAP_SECRET` | `change-me-in-production` | Guards `POST /admin/orgs` |
 | `DNDLABS_FRONTEND_ORIGIN` | `http://localhost:5173` | CORS allow-origin |
 | `DNDLABS_NVIDIA_NIM_API_KEY` | unset | Enrichment runs but marks every record `skipped_no_key` when unset |
+| `DNDLABS_FREE_TIER_SHARED_PASSWORD` | `freetier2026` | **Temporary, insecure.** One password authenticates as one shared identity, no per-org key needed. Clear it once real org keys are in use — see [docs/architecture.md](docs/architecture.md#auth) |
 
 Frontend build-time: `VITE_API_BASE_URL` (see `web/.env.example`).
 
