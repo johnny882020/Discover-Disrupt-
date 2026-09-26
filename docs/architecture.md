@@ -225,6 +225,11 @@ sources and SMILES spellings. `activity_value_nm` is normalized to
 nanomolar; accepted units are `M`, `mM`, `uM`/`µM`/`μM`, `nM`, `pM` and
 `mol/L` variants (case-insensitive except molar, which must be `M`).
 
+Example: `tests/fixtures/lab_export_malformed.csv` has 5 records; 3 are
+accepted and 2 rejected (an invalid SMILES, a missing structure), each
+rejection reported as a `ValidationIssue` in the run's `QualityReport`.
+Malformed input never crashes a run.
+
 ## Filtering & preprocessing
 
 `filtering/query.py` translates a `DatasetFilter` into a SQL predicate at
