@@ -37,7 +37,24 @@
 Keep the API key for programmatic access, or discard it — web users never
 need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
 
+### Accounts and access
+
+| Who | Signs in with | Can |
+|---|---|---|
+| Operator | `X-Admin-Secret` (`DNDLABS_ADMIN_BOOTSTRAP_SECRET`) | Create organizations, issue API keys, invite each organization's first admin |
+| Org admin | Email + password | Everything a member can, plus invite colleagues (Team page) and delete the organization's data |
+| Org member | Email + password | Run pipelines; view, filter and export the organization's datasets |
+| Program | Org API key (`X-API-Key`) | The same as an org admin, over the API |
+
+People join only by invitation: the link works once, expires after 72
+hours, and is where the invitee chooses their password. Sessions last 12
+hours; five wrong passwords lock an account for 15 minutes. Details:
+[Auth](architecture.md#auth).
+
 ### Configuration
+
+The variables below matter for a deployment; every setting, with its
+default, is listed in [`.env.example`](../.env.example).
 
 | Variable | Where | Notes |
 |---|---|---|
@@ -60,7 +77,9 @@ need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
 | `/api/v1/health/ready` returns `503` | The platform schema isn't present in the linked database. Check `dndlabs-api`'s boot log for the `init-db` outcome: `Running upgrade …` then `Database is up to date.` means migrations applied; `Error: migration failed: …` names the cause. A database that ran the pre-rebuild MVP is repaired automatically by revision `0002` on the next deploy (see [architecture.md](architecture.md#database-schema)). If readiness still fails after a clean **Manual Deploy → Deploy latest commit**, confirm `DNDLABS_DATABASE_URL` on `dndlabs-api` is linked to `dndlabs-db` and that `dndlabs-db` is `Available`. |
 
-## Docker Compose (local)
+## Local development
+
+### Docker Compose
 
 ```bash
 docker compose up --build
@@ -69,7 +88,24 @@ docker compose up --build
 Starts Postgres, the API (`localhost:8000`, migrations applied
 automatically via `docker/entrypoint.sh`), and the frontend dev server
 (`localhost:5173`, against the real API). The admin secret defaults to
-`dev-admin-secret`; onboard a user as in the [README](../README.md#docker-compose).
+`dev-admin-secret`. Onboard a user with the same two calls as on Render
+(step 5 above), against `http://localhost:8000/api/v1`.
+
+### Without Docker
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+dnd-pipeline init-db
+dnd-pipeline bootstrap-org "Acme Pharma"          # prints org_id and api_key
+dnd-pipeline invite-admin <org_id> you@acme.com   # prints a one-time sign-up link
+dnd-pipeline run --org-id <org_id> --source pubchem --ids 2244,3672
+
+uvicorn dndlabs.api.app:create_app --factory --reload   # API on :8000
+
+cd web && npm ci && npm run dev   # frontend on :5173, mock API by default
+                                  # (mock sign-in: ada@acme.example / correct horse battery)
+```
 
 ## CI
 
@@ -98,3 +134,22 @@ Run the same check locally:
 ```bash
 DNDLABS_ADMIN_BOOTSTRAP_SECRET=<secret> python scripts/smoke_test.py https://dndlabs-api.onrender.com
 ```
+
+## Known limitations
+
+- **NVIDIA enrichment:** the request/response contract is verified from
+  NVIDIA's own source; the hosted base URL is not yet confirmed against a
+  live endpoint — see [nvidia-nim.md](nvidia-nim.md).
+- **Accounts:** invitation-only, with no email delivery — invitation links
+  are handed over manually. There is no password reset or account removal
+  yet: a user who forgets their password cannot recover the account.
+- **Sign-in throttling** is per account, not per client IP — see
+  [Auth](architecture.md#auth).
+- **Sources:** UniProt and PDB are planned, not implemented.
+- **Dependencies:** no Python lockfile — `pip install` resolves unpinned
+  floor versions (the frontend is pinned by `package-lock.json`).
+- **Security scanning:** dependency audits (`pip-audit`, `npm audit`) cover
+  known-vulnerable packages only — no code-level SAST, and no scanning of
+  the container base image's OS packages.
+- **Privacy:** [`PRIVACY_POLICY.md`](../PRIVACY_POLICY.md) is a draft
+  pending legal review.
