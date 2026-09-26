@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setStoredApiKey } from "../../src/api/client";
 import { ExportPanel } from "../../src/screens/ExportPanel";
 import { renderWithProviders, SEEDED_API_KEY } from "../test-utils";
@@ -13,7 +13,18 @@ describe("ExportPanel screen", () => {
     URL.revokeObjectURL = URL.revokeObjectURL ?? (() => undefined);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("downloads the selected format", async () => {
+    // jsdom cannot navigate; capture the download anchor's click instead.
+    const clicked: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this);
+    });
     const user = userEvent.setup();
     renderWithProviders(
       <Routes>
@@ -26,5 +37,7 @@ describe("ExportPanel screen", () => {
     await user.click(screen.getByRole("button", { name: /download csv/i }));
 
     expect(await screen.findByText(/download started/i)).toBeInTheDocument();
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0].download).toMatch(/\.csv$/);
   });
 });

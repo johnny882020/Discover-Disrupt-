@@ -4,9 +4,16 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       # Production runs on Postgres; migration tests must too (SQLite alone
       # missed the legacy-schema bug — see tests/integration/test_migrations_postgres.py).
@@ -21,8 +28,10 @@ jobs:
     env:
       DNDLABS_TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -37,18 +46,18 @@ jobs:
       - name: Test
         run: pytest --cov=dndlabs --cov-report=term-missing
       - name: Dependency vulnerability scan
-        # Informational for now: flags known-vulnerable dependencies without
-        # blocking merges on pre-existing, unreviewed findings. Promote to a
-        # hard gate once the current findings are triaged.
-        continue-on-error: true
+        # Audits the project's resolved runtime dependencies (what the image
+        # ships via `pip install .`), not the runner's own tooling.
         run: |
           pip install pip-audit
-          pip-audit
+          pip-audit .
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build API image
         run: docker build -f docker/Dockerfile.api -t dndlabs-api:ci .
       - name: Smoke-test the built image
@@ -63,14 +72,90 @@ jobs:
       - name: Validate docker-compose.yml
         run: docker compose config --quiet
 
+  e2e:
+    # Browser workflow against the real stack: Postgres -> migrated API ->
+    # production frontend build -> Playwright (web/e2e/).
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DNDLABS_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+      DNDLABS_AUTO_CREATE_SCHEMA: "false"
+      DNDLABS_FRONTEND_ORIGIN: http://localhost:4173
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install API
+        run: pip install .
+      - name: Migrate and bootstrap an org
+        run: |
+          dnd-pipeline init-db
+          key=$(dnd-pipeline bootstrap-org "E2E Org" | awk '/^api_key/ {print $2}')
+          test -n "$key"
+          echo "::add-mask::$key"
+          echo "PLAYWRIGHT_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Start API and wait for readiness
+        run: |
+          nohup uvicorn dndlabs.api.app:create_app --factory --port 8000 > api.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8000/api/v1/health/ready && exit 0
+            sleep 1
+          done
+          cat api.log
+          exit 1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend
+        working-directory: web
+        run: npm ci
+      - name: Build frontend against the local API
+        working-directory: web
+        env:
+          VITE_API_BASE_URL: http://localhost:8000/api/v1
+        run: npm run build
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e
+        working-directory: web
+        run: npx playwright test
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-diagnostics
+          path: |
+            web/playwright-report
+            web/test-results
+            api.log
+          retention-days: 7
+
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -86,8 +171,4 @@ jobs:
       - name: Build
         run: npm run build
       - name: Dependency vulnerability scan
-        # Informational for now, same rationale as the backend's pip-audit
-        # step: known findings (react-router, esbuild/vite dev tooling) need
-        # a deliberate, tested upgrade, not a blocking gate mid-pass.
-        continue-on-error: true
         run: npm audit --audit-level=high

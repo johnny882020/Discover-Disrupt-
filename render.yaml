@@ -35,6 +35,8 @@ services:
     staticPublishPath: web/dist
     autoDeploy: true
     envVars:
+      - key: NODE_VERSION
+        value: "22"  # vitest 5 requires Node >=22.12; pin instead of Render's default
       - key: VITE_API_BASE_URL
         value: https://dndlabs-api.onrender.com/api/v1
     routes:

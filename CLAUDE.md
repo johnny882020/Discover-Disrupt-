@@ -11,11 +11,12 @@ pytest --cov=dndlabs                      # backend tests + coverage
 DNDLABS_TEST_POSTGRES_URL=postgresql+psycopg://… pytest tests/integration  # migrations on real Postgres (CI runs this)
 ruff check . && ruff format --check .
 mypy src/                                 # strict
+pip-audit .                               # known-vulnerable runtime deps (CI gate)
 DNDLABS_LIVE_TESTS=1 pytest -m live       # live PubChem/ChEMBL/GenMol (opt-in)
 
 cd web && npm ci
-npm run lint && npm run typecheck && npm test -- --run && npm run build
-npx playwright test                       # e2e, needs a real backend at PLAYWRIGHT_BASE_URL
+npm run lint && npm run typecheck && npm test -- --run && npm run build && npm audit --audit-level=high
+PLAYWRIGHT_API_KEY=<org key> npx playwright test   # e2e vs. a production build + real API on :8000 (CI job: e2e)
 
 docker compose up --build                 # full stack locally
 ```

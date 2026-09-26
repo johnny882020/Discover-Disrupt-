@@ -105,7 +105,8 @@ DNDLABS_LIVE_TESTS=1 pytest -m live        # against the real external APIs (opt
 ruff check . && ruff format --check . && mypy src/ --strict
 
 cd web && npm run lint && npm run typecheck && npm test -- --run && npm run build
-npx playwright test                        # e2e; needs PLAYWRIGHT_BASE_URL pointed at a real backend
+VITE_API_BASE_URL=http://localhost:8000/api/v1 npm run build   # e2e targets the production build
+PLAYWRIGHT_API_KEY=<org key> npx playwright test               # needs the API running on :8000
 ```
 
 Coding standards and layering rules: [CLAUDE.md](CLAUDE.md).
@@ -117,12 +118,13 @@ web/{src (mirrors into web/tests), e2e}
 docker/  docs/  scripts/
 ```
 
-CI (`.github/workflows/ci.yml`) runs three jobs on every push and PR:
-`backend` (ruff, mypy `--strict`, pytest, including migrations against
-a Postgres 16 service), `docker` (builds and smoke-tests the images,
-validates Compose), and `frontend` (eslint, `tsc`, vitest, `vite
-build`). Dependency scans (`pip-audit`, `npm audit`) run informationally;
-see Known limitations.
+CI (`.github/workflows/ci.yml`) gates every push and PR on four jobs:
+`backend` (ruff, mypy `--strict`, pytest — including migrations against a
+Postgres 16 service — and `pip-audit`), `frontend` (eslint, `tsc` over
+source, tests and configs, vitest, `vite build`, `npm audit`), `docker`
+(builds and smoke-tests the images, validates Compose), and `e2e`
+(Playwright against the real stack). Dependabot opens weekly update PRs
+for pip, npm, GitHub Actions and Docker base images.
 
 ## Known limitations
 
@@ -138,14 +140,8 @@ see Known limitations.
   them raises `ConnectorNotFoundError`.
 - No dependency lockfile — `pip install -e ".[dev]"` installs unpinned
   floor versions (the frontend *is* pinned, via `package-lock.json`).
-- Dependency scanning is informational, not a merge gate. Current known
-  findings (`react-router` moderate open-redirect; `vite`/`esbuild`
-  dev-server tooling; transitive `cryptography`/`pip`/`setuptools`
-  versions) need a deliberate, tested upgrade before promotion to a hard
-  gate — `react-router` in particular is a breaking major-version bump.
 - No code-level SAST (e.g. `bandit`); dependency scanning covers known-
   vulnerable packages only, not custom code patterns.
-- Playwright e2e runs manually, not gated in CI (needs a real Postgres and
-  a built frontend in the runner).
-- No Dependabot/Renovate config.
+- `pip-audit` covers the project's runtime dependencies, not the base
+  image's OS packages or bundled tooling; no container image scanning.
 - `PRIVACY_POLICY.md` is a draft pending legal review.
