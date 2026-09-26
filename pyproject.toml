@@ -22,6 +22,7 @@ dependencies = [
     "pandas>=2.2",
     "rdkit>=2023.9.5",
     "argon2-cffi>=23.1",
+    "chembl_structure_pipeline>=1.2.2",
 ]
 
 [project.optional-dependencies]

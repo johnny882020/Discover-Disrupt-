@@ -16,8 +16,10 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
 ## Features
 
 - **Ingestion** from PubChem, ChEMBL and lab exports (CSV, JSON).
-- **Validation and normalization:** structure and identifier checks, activity
-  values converted to nanomolar, duplicates removed across sources.
+- **Validation and normalization:** structure and identifier checks,
+  standardization with the ChEMBL Structure Pipeline (salts stripped, charges
+  neutralized), activity values converted to nanomolar, duplicates removed
+  across sources and salt forms.
 - **Quality reports** that explain every rejected record.
 - **Featurization:** RDKit descriptors and Morgan fingerprints per compound.
 - **AI enrichment (optional):** candidate analogs from NVIDIA BioNeMo GenMol.
@@ -52,6 +54,7 @@ Production deployment and onboarding: [docs/deployment.md](docs/deployment.md).
 | [API reference](docs/api.md) | Endpoints, authentication headers, error codes |
 | [Deployment](docs/deployment.md) | Render, onboarding, configuration, local development, CI, known limitations |
 | [NVIDIA integration](docs/nvidia-nim.md) | GenMol enrichment contract and status |
+| [Roadmap](docs/roadmap.md) | Planned releases, features and open-source models |
 | [Contributing](CLAUDE.md) | Commands, layering rules, coding standards |
 | [Privacy policy](PRIVACY_POLICY.md) | Draft, pending legal review |
 
