@@ -22,6 +22,7 @@ from dndlabs.core.schemas import (
     FeatureVector,
     Invitation,
     InvitationPurpose,
+    MappingTemplate,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -31,6 +32,7 @@ from dndlabs.core.schemas import (
     RuleOutcome,
     SourceSpec,
     SourceType,
+    Upload,
     User,
     UserCredentials,
     UserSession,
@@ -58,6 +60,29 @@ class Connector(Protocol):
 
         Raises:
             IngestionError: If the source cannot be read.
+        """
+        ...
+
+
+@runtime_checkable
+class OrgScopedConnector(Protocol):
+    """A connector whose input belongs to an organization (e.g. its uploaded files)."""
+
+    source: SourceType
+
+    def fetch_for_org(self, org_id: uuid.UUID, spec: SourceSpec) -> AsyncIterator[RawRecord]:
+        """Fetch raw records described by ``spec`` from ``org_id``'s data.
+
+        Args:
+            org_id: The organization running the pipeline (enforced).
+            spec: What to ingest.
+
+        Returns:
+            An async iterator of raw, unvalidated records.
+
+        Raises:
+            IngestionError: If the input cannot be read.
+            NotFoundError: If the input does not belong to ``org_id``.
         """
         ...
 
@@ -533,6 +558,90 @@ class InvitationRepository(Protocol):
         ...
 
 
+class UploadRepository(Protocol):
+    """Persistence of uploaded files, scoped by organization."""
+
+    def create(self, upload: Upload, data: bytes) -> Upload:
+        """Store an uploaded file.
+
+        Args:
+            upload: Its metadata.
+            data: Its content.
+
+        Returns:
+            The stored metadata.
+        """
+        ...
+
+    def get(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> Upload:
+        """Fetch an upload's metadata.
+
+        Args:
+            org_id: Owning organization (enforced).
+            upload_id: Upload identifier.
+
+        Returns:
+            The metadata.
+
+        Raises:
+            NotFoundError: If the upload does not exist in this org.
+        """
+        ...
+
+    def get_data(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> bytes:
+        """Fetch an upload's content.
+
+        Args:
+            org_id: Owning organization (enforced).
+            upload_id: Upload identifier.
+
+        Returns:
+            The file content.
+
+        Raises:
+            NotFoundError: If the upload does not exist in this org.
+        """
+        ...
+
+
+class MappingTemplateRepository(Protocol):
+    """Persistence of saved column mappings, scoped by organization."""
+
+    def create(self, template: MappingTemplate) -> MappingTemplate:
+        """Store a template, replacing any of the org's templates with the same name.
+
+        Args:
+            template: The template.
+
+        Returns:
+            The stored template.
+        """
+        ...
+
+    def list_templates(self, org_id: uuid.UUID) -> list[MappingTemplate]:
+        """List an organization's templates, by name.
+
+        Args:
+            org_id: Organization (enforced).
+
+        Returns:
+            The templates.
+        """
+        ...
+
+    def delete(self, org_id: uuid.UUID, template_id: uuid.UUID) -> None:
+        """Delete a template.
+
+        Args:
+            org_id: Owning organization (enforced).
+            template_id: Template identifier.
+
+        Raises:
+            NotFoundError: If the template does not exist in this org.
+        """
+        ...
+
+
 class RunRepository(Protocol):
     """Persistence of pipeline run metadata, scoped by organization."""
 
@@ -741,6 +850,8 @@ class Repositories:
     users: UserRepository
     sessions: SessionRepository
     invitations: InvitationRepository
+    uploads: UploadRepository
+    mapping_templates: MappingTemplateRepository
     runs: RunRepository
     datasets: DatasetRepository
     reports: QualityReportRepository

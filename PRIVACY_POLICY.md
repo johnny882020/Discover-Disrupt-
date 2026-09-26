@@ -19,9 +19,11 @@
   recent failed sign-ins, and the times the account and password were
   created or changed. Sign-in sessions and pending invitations are stored
   only as SHA-256 hashes of their tokens, with expiry and revocation times.
-- **Ingested chemical/biological data**: whatever a customer submits via
-  `POST /pipelines/run` (PubChem/ChEMBL identifiers, or uploaded CSV/JSON
-  content) and the normalized, validated records the pipeline produces
+- **Ingested chemical/biological data**: files a customer uploads (CSV,
+  TSV, Excel or SD files, stored as uploaded, with their name, size and
+  SHA-256 checksum), saved column mappings (column names and their roles),
+  whatever is submitted via `POST /pipelines/run` (PubChem/ChEMBL
+  identifiers), and the normalized, validated records the pipeline produces
   from it, plus AI-generated candidate molecules from the enrichment
   stage (when configured).
 - No payment information or browsing analytics are collected. The API has
@@ -49,10 +51,11 @@
   (see `core/logging.py`). Invitation links carry their token in the URL
   fragment, which browsers do not send to servers.
 - **Deletion.** `DELETE /orgs/me/data` removes every run, dataset,
-  normalized record, quality report, feature vector and enrichment result
-  belonging to the calling organization, in one call; only an
+  normalized record, quality report, feature vector, enrichment result
+  and uploaded file belonging to the calling organization, in one call; only an
   organization admin (or API key) may call it. User accounts are
-  kept (so the organization is not locked out). An admin can remove an
+  kept (so the organization is not locked out), as are saved column
+  mappings, which an admin or member deletes individually. An admin can remove an
   individual member (`DELETE /auth/members/{id}`), which deletes their
   account and sessions immediately.
 - **Third parties.** Ingested identifiers/SMILES may be sent to PubChem,

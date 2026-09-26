@@ -44,6 +44,7 @@ class SourceType(StrEnum):
     CHEMBL = "chembl"
     CSV = "csv"
     JSON = "json"
+    UPLOAD = "upload"
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +290,31 @@ class PasswordChange(_Contract):
 # --------------------------------------------------------------------------
 
 
+class ColumnRole(StrEnum):
+    """What a column of an uploaded table holds (a ``RawRecord`` field, or ``ignore``).
+
+    Columns without a role are kept on each record as ``extra`` data.
+    """
+
+    SOURCE_RECORD_ID = "source_record_id"
+    NAME = "name"
+    SMILES = "smiles"
+    INCHI = "inchi"
+    INCHIKEY = "inchikey"
+    MOLECULAR_FORMULA = "molecular_formula"
+    MOLECULAR_WEIGHT = "molecular_weight"
+    TARGET = "target"
+    ASSAY_TYPE = "assay_type"
+    ACTIVITY_VALUE = "activity_value"
+    ACTIVITY_UNIT = "activity_unit"
+    ACTIVITY_RELATION = "activity_relation"
+    IGNORE = "ignore"
+
+
+#: Roles that identify a structure; an upload's mapping needs at least one.
+STRUCTURE_ROLES = frozenset({ColumnRole.SMILES, ColumnRole.INCHI})
+
+
 class SourceSpec(_Contract):
     """What a pipeline run should ingest."""
 
@@ -297,6 +323,8 @@ class SourceSpec(_Contract):
     csv_path: str | None = None
     json_path: str | None = None
     chembl_target: str | None = None
+    upload_id: uuid.UUID | None = None
+    column_mapping: dict[str, ColumnRole] | None = None
     dataset_name: str | None = None
 
     @model_validator(mode="after")
@@ -314,7 +342,76 @@ class SourceSpec(_Contract):
             raise ValueError("csv source requires csv_path")
         elif self.source is SourceType.JSON and not self.json_path:
             raise ValueError("json source requires json_path")
+        elif self.source is SourceType.UPLOAD:
+            if self.upload_id is None or not self.column_mapping:
+                raise ValueError("upload source requires upload_id and column_mapping")
+            _check_mapping(self.column_mapping)
         return self
+
+
+def _check_mapping(mapping: dict[str, ColumnRole]) -> None:
+    """Require a structure column and at most one column per role."""
+    roles = [role for role in mapping.values() if role is not ColumnRole.IGNORE]
+    if not STRUCTURE_ROLES.intersection(roles):
+        raise ValueError("column_mapping needs a SMILES or InChI column")
+    repeated = sorted({role.value for role in roles if roles.count(role) > 1})
+    if repeated:
+        raise ValueError(f"each role can be assigned to one column only: {repeated}")
+
+
+class UploadFormat(StrEnum):
+    """File formats accepted for upload."""
+
+    CSV = "csv"
+    TSV = "tsv"
+    XLSX = "xlsx"
+    SDF = "sdf"
+
+
+class Upload(_Contract):
+    """Metadata of a file an organization uploaded (its bytes are stored separately)."""
+
+    id: uuid.UUID = Field(default_factory=new_id)
+    org_id: uuid.UUID
+    filename: str
+    format: UploadFormat
+    size_bytes: int
+    sha256: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class MappingTemplateCreate(_Contract):
+    """Save a column mapping for reuse with files that share its headers."""
+
+    name: str = Field(min_length=1, max_length=100)
+    mapping: dict[str, ColumnRole] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> "MappingTemplateCreate":
+        """Apply the same rules as a run's column mapping."""
+        _check_mapping(self.mapping)
+        return self
+
+
+class MappingTemplate(_Contract):
+    """A saved, reusable column mapping, keyed by column header."""
+
+    id: uuid.UUID = Field(default_factory=new_id)
+    org_id: uuid.UUID
+    name: str
+    mapping: dict[str, ColumnRole]
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class UploadPreview(_Contract):
+    """An uploaded table's columns, first rows and suggested column mapping."""
+
+    upload: Upload
+    columns: list[str]
+    rows: list[dict[str, str]]
+    row_count: int
+    suggested_mapping: dict[str, ColumnRole]
+    template: MappingTemplate | None = None
 
 
 class RawRecord(_Contract):

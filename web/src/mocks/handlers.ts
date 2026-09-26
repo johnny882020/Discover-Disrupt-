@@ -14,6 +14,7 @@ import type {
   RunPipelineRequest,
 } from "../api/types";
 import { UNAUTHORIZED, authHandlers, authenticate } from "./authHandlers";
+import { uploadHandlers } from "./uploadHandlers";
 import {
   DATASET_ASPIRIN,
   ENRICHMENT_RESULTS,
@@ -27,6 +28,7 @@ const BASE = "*/api/v1";
 
 export const handlers = [
   ...authHandlers,
+  ...uploadHandlers,
 
   http.get(`${BASE}/health`, () => {
     return HttpResponse.json<HealthResponse>({ status: "ok" });
@@ -60,6 +62,8 @@ export const handlers = [
         csv_path: body.csv_path ?? null,
         json_path: body.json_path ?? null,
         chembl_target: body.chembl_target ?? null,
+        upload_id: body.upload_id ?? null,
+        column_mapping: body.column_mapping ?? null,
         dataset_name: body.dataset_name ?? null,
       },
       status: "succeeded",

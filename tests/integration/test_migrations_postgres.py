@@ -25,6 +25,7 @@ from dndlabs.storage.repositories import SqlOrganizationRepository, build_sql_re
 from tests.account_repository_checks import ALL_CHECKS
 from tests.conftest import HEAD_REVISION
 from tests.legacy_mvp import LEGACY_RUN_ID, apply_legacy_mvp_schema
+from tests.upload_repository_checks import UPLOAD_CHECKS
 
 SERVER_URL = os.environ.get("DNDLABS_TEST_POSTGRES_URL", "")
 
@@ -130,7 +131,7 @@ def test_upgrade_deletes_the_retired_free_tier_org(database_url: str) -> None:
     engine.dispose()
 
 
-@pytest.mark.parametrize("check", ALL_CHECKS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("check", ALL_CHECKS + UPLOAD_CHECKS, ids=lambda c: c.__name__)
 def test_account_repositories_on_postgres(database_url: str, check: Callable[..., None]) -> None:
     run_migrations(database_url)
     engine = create_db_engine(database_url)

@@ -15,7 +15,9 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
 
 ## Features
 
-- **Ingestion** from PubChem, ChEMBL and lab exports (CSV, JSON).
+- **Ingestion** from PubChem, ChEMBL and your own files: drag-and-drop a CSV,
+  TSV, Excel or SD file, confirm the suggested column mapping, and save it
+  for next time.
 - **Validation and normalization:** structure and identifier checks,
   standardization with the ChEMBL Structure Pipeline (salts stripped, charges
   neutralized), activity values converted to nanomolar, duplicates removed

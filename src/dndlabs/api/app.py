@@ -11,7 +11,7 @@ from dndlabs import __version__
 from dndlabs.api.dependencies import ApiServices
 from dndlabs.api.errors import register_error_handlers
 from dndlabs.api.landing import ServiceInfo, render_landing
-from dndlabs.api.routers import admin, auth, datasets, enrichment, health, pipelines
+from dndlabs.api.routers import admin, auth, datasets, enrichment, health, pipelines, uploads
 from dndlabs.core.config import get_settings
 from dndlabs.core.logging import configure_logging
 from dndlabs.pipeline.factory import build_container
@@ -54,6 +54,7 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             service=container.service,
             exporter=container.exporter,
             auth=container.auth,
+            uploads=container.uploads,
             settings=settings,
         )
         try:
@@ -85,6 +86,7 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
     app.include_router(pipelines.router, prefix=API_PREFIX)
     app.include_router(datasets.router, prefix=API_PREFIX)
     app.include_router(enrichment.router, prefix=API_PREFIX)
+    app.include_router(uploads.router, prefix=API_PREFIX)
     app.include_router(health.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["meta"])

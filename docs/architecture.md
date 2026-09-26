@@ -31,7 +31,7 @@ explicitly in the PR that makes it.
 ## Pipeline run
 
 ```text
-SourceSpec → Connector.fetch → RawRecord[]
+SourceSpec → Connector.fetch (or fetch_for_org) → RawRecord[]
                                    │
                                    ▼
                              Validator.run → NormalizedRecord[] + QualityReport
@@ -63,7 +63,10 @@ any feature vector or enrichment result, since both reference
 | `LoginRequest` / `SessionCreated` | Sign-in body; one-time reveal of a session token with its expiry and user |
 | `InvitationCreate` / `AdminInvitationCreate` / `InvitationCreated` / `InvitationToken` / `InvitationPreview` / `InvitationAccept` / `PasswordChange` | Invitation and password request/response bodies; emails are normalized (trimmed, lowercased) on input |
 | `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
-| `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `dataset_name` — cross-validated per source |
+| `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `upload_id` + `column_mapping`, `dataset_name` — cross-validated per source |
+| `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `name`, `activity_value`, … or `ignore`); a mapping needs `smiles` or `inchi` and uses each other role once |
+| `Upload` / `UploadFormat` / `UploadPreview` | A stored file's metadata (`csv` / `tsv` / `xlsx` / `sdf`, size, SHA-256); its columns, first rows, row count and suggested mapping |
+| `MappingTemplateCreate` / `MappingTemplate` | A named, org-saved column mapping, suggested for uploads whose headers include its columns |
 | `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra` |
 | `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id` |
 | `ValidationIssue` | `rule`, `severity` (`error` / `warning`), `source_record_id`, `field`, `message` |
@@ -83,6 +86,12 @@ class Connector(Protocol):
     source: SourceType
 
     def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]: ...  # async generator
+
+
+class OrgScopedConnector(Protocol):  # reads org-owned input, e.g. an upload
+    source: SourceType
+
+    def fetch_for_org(self, org_id: uuid.UUID, spec: SourceSpec) -> AsyncIterator[RawRecord]: ...
 
 
 class ValidationRule(Protocol):
@@ -105,12 +114,15 @@ class EnrichmentClient(Protocol):
 `Connector.fetch` is a plain (non-`async`) method typed to return
 `AsyncIterator[RawRecord]`: implementations are async generator functions,
 so `fetch(spec)` returns an iterator immediately, with no `await` before
-the `async for`.
+the `async for`. The orchestrator calls `fetch_for_org` with the run's
+`org_id` when a connector implements `OrgScopedConnector`, so a connector
+reading stored org data can only reach the running org's rows.
 
 Repositories (`OrganizationRepository`, `ApiKeyRepository`, `UserRepository`,
 `SessionRepository`, `InvitationRepository`, `RunRepository`,
 `DatasetRepository`, `QualityReportRepository`, `FeatureRepository`,
-`EnrichmentRepository`) are bundled as `Repositories`. Every org-scoped
+`EnrichmentRepository`, `UploadRepository`, `MappingTemplateRepository`)
+are bundled as `Repositories`. Every org-scoped
 method takes `org_id` explicitly — the entire tenant-isolation mechanism;
 there is no other check. A lookup of a missing or wrong-org entity raises
 `NotFoundError`. Two kinds of method are deliberately not org-scoped:
@@ -283,8 +295,9 @@ explicit or absent, never approximated.
 |---|---|---|
 | PubChem | `ingestion/pubchem.py` | PUG REST property endpoint. CIDs batched (default 100). Exponential backoff on 429/5xx/transport errors. |
 | ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...`, paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same backoff pattern as PubChem. |
-| CSV | `ingestion/csv_connector.py` | Delimiter sniffed (`,` `;` tab); header aliases case-insensitive; unknown columns go into `extra`. |
-| JSON | `ingestion/json_connector.py` | A top-level list, or `{"records": [...]}` with flat scalar values. |
+| Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
+| CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases case-insensitive; unknown columns go into `extra`. |
+| JSON | `ingestion/json_connector.py` | Server-side path (operators). A top-level list, or `{"records": [...]}` with flat scalar values. |
 | UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
 ## Exceptions (`core/exceptions.py`)
@@ -318,7 +331,7 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0004`.
+Alembic head: `0005`.
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -333,6 +346,8 @@ Alembic head: `0004`.
 | `validation_issues` | `org_id`, `dataset_id`, `severity`, `rule`, `message` | |
 | `feature_vectors` | `org_id`, `record_id` (unique), `descriptors` (JSON), `fingerprint_bits` (JSON) | |
 | `enrichment_results` | `org_id`, `record_id`, `status`, `candidates` (JSON) | |
+| `uploads` | `org_id`, `filename`, `format`, `size_bytes`, `sha256`, `data` (bytes) | Uploaded files; stored in the database because the web service's disk is ephemeral |
+| `mapping_templates` | `org_id`, `name`, `mapping` (JSON) | Unique `(org_id, name)` |
 
 `GUID`/`StringArray` custom column types make UUID and array columns native
 on PostgreSQL and JSON/TEXT-backed on SQLite, so the same models and
@@ -353,13 +368,15 @@ the stamp.
 | `0002` | Retires the pre-rebuild MVP schema. The MVP also used revision id `0001` for an unrelated schema, so databases that ran it reported `0001` as current and never received the platform tables. `0002` detects that state (`organizations` missing), moves the MVP tables into a `legacy_mvp` schema — data preserved, no name collisions — and applies the platform schema. No-op on any database that already has it. |
 | `0003` | Adds `users`, `user_sessions` and `user_invitations` (each only if absent, so a stamped `create_all` schema upgrades cleanly). Deletes the organization the removed shared-password login used (`00000000-0000-0000-0000-000000000001`) and everything it owned. |
 | `0004` | Adds `user_invitations.purpose` (existing rows become `join`) and `user_invitations.revoked_at`, for password-reset links and revocable invitations. |
+| `0005` | Adds `uploads` and `mapping_templates` (each only if absent). |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
-own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`
-and `0004` upgrades and downgrades, and the account repositories' transactional
-behaviour (`tests/account_repository_checks.py`, shared by both dialects).
+own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`
+upgrades and downgrades, and the account and upload repositories'
+behaviour (`tests/account_repository_checks.py`,
+`tests/upload_repository_checks.py`, shared by both dialects).
 
 ## Readiness vs. liveness
 
@@ -406,6 +423,14 @@ by `chem/rdkit.ts`, and depictions are cached by SMILES and size. The
 drawing is an SVG `<img>`, so it cannot run script. Until RDKit.js has
 loaded — or if it cannot load or parse the SMILES — the SMILES text is shown
 instead.
+
+**Uploads.** The Run page's default source is a file: drag-and-drop or
+choose a CSV, TSV, Excel or SD file (`design-system/FileDrop.tsx`). The
+upload's preview opens in `uploads/MappingEditor.tsx`, which shows the first
+rows with structures drawn and a role selector per column, pre-set from the
+server's suggestion. The mapping is checked in the browser with the same
+rules as the server (`uploads/columnRoles.ts`) and can be saved as a named
+template for future uploads.
 
 **Theme.** Light and dark follow the operating system's colour scheme;
 `<html data-theme="light|dark">` forces one. The Tailwind `dark:` variant

@@ -25,6 +25,7 @@ from dndlabs.core.exceptions import (
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     ApiKeyRecord,
+    ColumnRole,
     Dataset,
     DatasetFilter,
     DatasetWithRecords,
@@ -32,6 +33,7 @@ from dndlabs.core.schemas import (
     FeatureVector,
     Invitation,
     InvitationPurpose,
+    MappingTemplate,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -40,6 +42,8 @@ from dndlabs.core.schemas import (
     RunStatus,
     SourceSpec,
     SourceType,
+    Upload,
+    UploadFormat,
     User,
     UserCredentials,
     UserSession,
@@ -51,10 +55,12 @@ from dndlabs.storage.models import (
     EnrichmentResultRow,
     FeatureVectorRow,
     InvitationRow,
+    MappingTemplateRow,
     NormalizedRecordRow,
     OrganizationRow,
     QualityReportRow,
     RunRow,
+    UploadRow,
     UserRow,
     UserSessionRow,
     ValidationIssueRow,
@@ -782,6 +788,186 @@ def _rowcount(result: Result[Any]) -> int:
     return cast(CursorResult[Any], result).rowcount
 
 
+class SqlUploadRepository:
+    """Stores uploaded files, scoped by organization."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def create(self, upload: Upload, data: bytes) -> Upload:
+        """Store an uploaded file.
+
+        Args:
+            upload: Its metadata.
+            data: Its content.
+
+        Returns:
+            The stored metadata.
+        """
+        with self._sessions.transaction() as db:
+            db.add(
+                UploadRow(
+                    id=upload.id,
+                    org_id=upload.org_id,
+                    filename=upload.filename,
+                    format=upload.format.value,
+                    size_bytes=upload.size_bytes,
+                    sha256=upload.sha256,
+                    data=data,
+                    created_at=upload.created_at,
+                )
+            )
+        return upload
+
+    def get(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> Upload:
+        """Fetch an upload's metadata (without loading its content).
+
+        Args:
+            org_id: Owning organization (enforced).
+            upload_id: Upload identifier.
+
+        Returns:
+            The metadata.
+
+        Raises:
+            NotFoundError: If the upload does not exist in this org.
+        """
+        columns = (
+            UploadRow.id,
+            UploadRow.org_id,
+            UploadRow.filename,
+            UploadRow.format,
+            UploadRow.size_bytes,
+            UploadRow.sha256,
+            UploadRow.created_at,
+        )
+        with self._sessions.transaction() as db:
+            row = db.execute(
+                select(*columns).where(UploadRow.id == upload_id, UploadRow.org_id == org_id)
+            ).first()
+            if row is None:
+                raise NotFoundError(f"upload {upload_id} not found for org {org_id}")
+            return Upload(
+                id=row.id,
+                org_id=row.org_id,
+                filename=row.filename,
+                format=UploadFormat(row.format),
+                size_bytes=row.size_bytes,
+                sha256=row.sha256,
+                created_at=_as_utc(row.created_at),
+            )
+
+    def get_data(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> bytes:
+        """Fetch an upload's content.
+
+        Args:
+            org_id: Owning organization (enforced).
+            upload_id: Upload identifier.
+
+        Returns:
+            The file content.
+
+        Raises:
+            NotFoundError: If the upload does not exist in this org.
+        """
+        with self._sessions.transaction() as db:
+            data = db.scalars(
+                select(UploadRow.data).where(UploadRow.id == upload_id, UploadRow.org_id == org_id)
+            ).first()
+            if data is None:
+                raise NotFoundError(f"upload {upload_id} not found for org {org_id}")
+            return bytes(data)
+
+
+class SqlMappingTemplateRepository:
+    """Stores saved column mappings, scoped by organization."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def create(self, template: MappingTemplate) -> MappingTemplate:
+        """Store a template, replacing any of the org's templates with the same name.
+
+        Args:
+            template: The template.
+
+        Returns:
+            The stored template.
+        """
+        with self._sessions.transaction() as db:
+            db.execute(
+                delete(MappingTemplateRow).where(
+                    MappingTemplateRow.org_id == template.org_id,
+                    MappingTemplateRow.name == template.name,
+                )
+            )
+            db.add(
+                MappingTemplateRow(
+                    id=template.id,
+                    org_id=template.org_id,
+                    name=template.name,
+                    mapping={column: role.value for column, role in template.mapping.items()},
+                    created_at=template.created_at,
+                )
+            )
+        return template
+
+    def list_templates(self, org_id: uuid.UUID) -> list[MappingTemplate]:
+        """List an organization's templates, by name.
+
+        Args:
+            org_id: Organization (enforced).
+
+        Returns:
+            The templates.
+        """
+        with self._sessions.transaction() as db:
+            rows = db.scalars(
+                select(MappingTemplateRow)
+                .where(MappingTemplateRow.org_id == org_id)
+                .order_by(MappingTemplateRow.name)
+            )
+            return [
+                MappingTemplate(
+                    id=row.id,
+                    org_id=row.org_id,
+                    name=row.name,
+                    mapping={column: ColumnRole(role) for column, role in row.mapping.items()},
+                    created_at=_as_utc(row.created_at),
+                )
+                for row in rows
+            ]
+
+    def delete(self, org_id: uuid.UUID, template_id: uuid.UUID) -> None:
+        """Delete a template.
+
+        Args:
+            org_id: Owning organization (enforced).
+            template_id: Template identifier.
+
+        Raises:
+            NotFoundError: If the template does not exist in this org.
+        """
+        with self._sessions.transaction() as db:
+            deleted = db.execute(
+                delete(MappingTemplateRow).where(
+                    MappingTemplateRow.id == template_id, MappingTemplateRow.org_id == org_id
+                )
+            )
+            if _rowcount(deleted) != 1:
+                raise NotFoundError(f"mapping template {template_id} not found for org {org_id}")
+
+
 class SqlRunRepository:
     """Stores :class:`PipelineRun` metadata, scoped by organization."""
 
@@ -1025,6 +1211,7 @@ class SqlDatasetRepository:
             session.execute(delete(NormalizedRecordRow).where(NormalizedRecordRow.org_id == org_id))
             session.execute(delete(DatasetRow).where(DatasetRow.org_id == org_id))
             session.execute(delete(RunRow).where(RunRow.org_id == org_id))
+            session.execute(delete(UploadRow).where(UploadRow.org_id == org_id))
             return len(dataset_ids)
 
 
@@ -1304,6 +1491,8 @@ def build_sql_repositories(engine: object) -> Repositories:
         users=SqlUserRepository(sessions),
         sessions=SqlSessionRepository(sessions),
         invitations=SqlInvitationRepository(sessions),
+        uploads=SqlUploadRepository(sessions),
+        mapping_templates=SqlMappingTemplateRepository(sessions),
         runs=SqlRunRepository(sessions),
         datasets=SqlDatasetRepository(sessions),
         reports=SqlQualityReportRepository(sessions),

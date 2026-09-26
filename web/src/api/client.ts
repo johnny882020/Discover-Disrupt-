@@ -119,6 +119,8 @@ export function formatErrorDetail(detail: ApiErrorBody["detail"] | undefined): s
 interface RequestOptions {
   method?: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
   body?: unknown;
+  /** Sent as `multipart/form-data` instead of JSON (the browser sets the boundary). */
+  form?: FormData;
   /** Overrides the stored credential; `null` sends the request without one. */
   credential?: Credential | null;
   /** Parse the response as a Blob instead of JSON (for file downloads). */
@@ -136,7 +138,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const response = await fetch(`${BASE_URL}${path}`, {
     method: options.method ?? "GET",
     headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    body: options.form ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined),
     signal: options.signal,
   });
 
@@ -179,6 +181,12 @@ export const apiClient = {
     request<T>(path, { method: "PATCH", body, credential }),
   del: <T>(path: string, credential?: Credential | null) =>
     request<T>(path, { method: "DELETE", credential }),
+  /** Upload a file as the multipart field `file`. */
+  upload: <T>(path: string, file: File, credential?: Credential | null) => {
+    const form = new FormData();
+    form.append("file", file, file.name); // explicit name: some FormData implementations drop it
+    return request<T>(path, { method: "POST", form, credential });
+  },
   getBlob: (path: string, credential?: Credential | null) =>
     request<Blob>(path, { method: "GET", credential, asBlob: true }),
 };

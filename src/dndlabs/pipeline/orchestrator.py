@@ -6,7 +6,13 @@ from typing import Protocol
 
 from dndlabs.core.exceptions import DndLabsError, PipelineError
 from dndlabs.core.logging import get_logger
-from dndlabs.core.protocols import Connector, EnrichmentClient, Featurizer, Repositories
+from dndlabs.core.protocols import (
+    Connector,
+    EnrichmentClient,
+    Featurizer,
+    OrgScopedConnector,
+    Repositories,
+)
 from dndlabs.core.schemas import (
     Dataset,
     PipelineRun,
@@ -26,7 +32,7 @@ logger = get_logger(__name__)
 class ConnectorProvider(Protocol):
     """Looks up the connector for a source."""
 
-    def get(self, source: SourceType) -> Connector:
+    def get(self, source: SourceType) -> Connector | OrgScopedConnector:
         """Return the connector for ``source``.
 
         Args:
@@ -100,7 +106,12 @@ class PipelineService:
 
         Returns:
             The pending run.
+
+        Raises:
+            NotFoundError: If the spec names an upload the org does not have.
         """
+        if spec.upload_id is not None:
+            self._repos.uploads.get(org_id, spec.upload_id)  # fail fast, before the run exists
         return self._repos.runs.create(PipelineRun(org_id=org_id, spec=spec))
 
     async def execute(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
@@ -147,9 +158,13 @@ class PipelineService:
 
     async def _execute_stages(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
         """Run ingest, validate, featurize, enrich and store for ``run``."""
-        raws = []
-        async for raw in self._connectors.get(run.spec.source).fetch(run.spec):
-            raws.append(raw)
+        connector = self._connectors.get(run.spec.source)
+        records = (
+            connector.fetch_for_org(org_id, run.spec)
+            if isinstance(connector, OrgScopedConnector)
+            else connector.fetch(run.spec)
+        )
+        raws = [raw async for raw in records]
 
         dataset_id = new_id()
         outcome = self._validator.run(run.id, dataset_id, raws)

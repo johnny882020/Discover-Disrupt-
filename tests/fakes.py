@@ -20,6 +20,7 @@ from dndlabs.core.schemas import (
     FeatureVector,
     Invitation,
     InvitationPurpose,
+    MappingTemplate,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -28,6 +29,7 @@ from dndlabs.core.schemas import (
     Role,
     SourceSpec,
     SourceType,
+    Upload,
     User,
     UserCredentials,
     UserSession,
@@ -260,6 +262,48 @@ class FakeInvitations:
         return digest
 
 
+class FakeUploads:
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, tuple[Upload, bytes]] = {}
+
+    def create(self, upload: Upload, data: bytes) -> Upload:
+        self.items[upload.id] = (upload, data)
+        return upload
+
+    def get(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> Upload:
+        found = self.items.get(upload_id)
+        if found is None or found[0].org_id != org_id:
+            raise NotFoundError(f"upload {upload_id} not found for org {org_id}")
+        return found[0]
+
+    def get_data(self, org_id: uuid.UUID, upload_id: uuid.UUID) -> bytes:
+        self.get(org_id, upload_id)
+        return self.items[upload_id][1]
+
+
+class FakeMappingTemplates:
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, MappingTemplate] = {}
+
+    def create(self, template: MappingTemplate) -> MappingTemplate:
+        self.items = {
+            k: t
+            for k, t in self.items.items()
+            if not (t.org_id == template.org_id and t.name == template.name)
+        }
+        self.items[template.id] = template
+        return template
+
+    def list_templates(self, org_id: uuid.UUID) -> list[MappingTemplate]:
+        return sorted((t for t in self.items.values() if t.org_id == org_id), key=lambda t: t.name)
+
+    def delete(self, org_id: uuid.UUID, template_id: uuid.UUID) -> None:
+        found = self.items.get(template_id)
+        if found is None or found.org_id != org_id:
+            raise NotFoundError(f"mapping template {template_id} not found for org {org_id}")
+        del self.items[template_id]
+
+
 class FakeRuns:
     def __init__(self) -> None:
         self.items: dict[uuid.UUID, PipelineRun] = {}
@@ -372,6 +416,8 @@ def fake_repositories() -> Repositories:
         users=users,
         sessions=sessions,
         invitations=FakeInvitations(users),
+        uploads=FakeUploads(),
+        mapping_templates=FakeMappingTemplates(),
         runs=FakeRuns(),
         datasets=FakeDatasets(),
         reports=FakeReports(),

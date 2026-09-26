@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 
 from dndlabs.core.exceptions import ConnectorNotFoundError
-from dndlabs.core.protocols import Connector
+from dndlabs.core.protocols import Connector, OrgScopedConnector
 from dndlabs.core.schemas import SourceType
 
 #: Sources on the roadmap but intentionally not implemented yet.
@@ -16,15 +16,17 @@ PLANNED_SOURCES: dict[str, str] = {
 class ConnectorRegistry:
     """Maps each :class:`SourceType` to a connector instance."""
 
-    def __init__(self, connectors: Iterable[Connector]) -> None:
+    def __init__(self, connectors: Iterable[Connector | OrgScopedConnector]) -> None:
         """Register connectors.
 
         Args:
             connectors: Connector instances; later ones override earlier ones.
         """
-        self._connectors: dict[SourceType, Connector] = {c.source: c for c in connectors}
+        self._connectors: dict[SourceType, Connector | OrgScopedConnector] = {
+            c.source: c for c in connectors
+        }
 
-    def get(self, source: SourceType | str) -> Connector:
+    def get(self, source: SourceType | str) -> Connector | OrgScopedConnector:
         """Look up the connector for ``source``.
 
         Args:
