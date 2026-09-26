@@ -143,6 +143,7 @@ def auth_policy(settings: Settings) -> AuthPolicy:
     return AuthPolicy(
         session_ttl=timedelta(hours=settings.session_ttl_hours),
         invitation_ttl=timedelta(hours=settings.invitation_ttl_hours),
+        password_reset_ttl=timedelta(hours=settings.password_reset_ttl_hours),
         max_login_attempts=settings.login_max_attempts,
         lockout=timedelta(minutes=settings.login_lockout_minutes),
         password_min_length=settings.password_min_length,

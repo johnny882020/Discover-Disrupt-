@@ -117,6 +117,14 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     [establish],
   );
 
+  const resetPassword = useCallback(
+    async (token: string, password: string) => {
+      const session = await apiClient.post<SessionCreated>("/auth/password-reset/accept", { token, password }, null);
+      await establish({ kind: "session", token: session.token });
+    },
+    [establish],
+  );
+
   const signOut = useCallback(async () => {
     if (credential?.kind === "session") {
       try {
@@ -131,8 +139,8 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   const status = org ? "signed_in" : checking ? "checking" : "signed_out";
 
   const value = useMemo<SessionState>(
-    () => ({ status, credential, org, notice, signIn, signInWithApiKey, acceptInvitation, signOut }),
-    [status, credential, org, notice, signIn, signInWithApiKey, acceptInvitation, signOut],
+    () => ({ status, credential, org, notice, signIn, signInWithApiKey, acceptInvitation, resetPassword, signOut }),
+    [status, credential, org, notice, signIn, signInWithApiKey, acceptInvitation, resetPassword, signOut],
   );
 
   return <SessionContextInternal.Provider value={value}>{children}</SessionContextInternal.Provider>;

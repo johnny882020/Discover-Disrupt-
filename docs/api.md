@@ -29,6 +29,7 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 | POST | `/admin/orgs` | `{"name": "Acme"}` → creates an org, returns `ApiKeyCreated` (the raw key, shown once) |
 | POST | `/admin/orgs/{org_id}/keys` | Issue an additional key for an existing org |
 | POST | `/admin/orgs/{org_id}/invitations` | `{"email": "ada@acme.com"}` → invite the org's first **admin**; returns `InvitationCreated` (`token`, `accept_url`, shown once) |
+| POST | `/admin/orgs/{org_id}/password-resets` | `{"email": "ada@acme.com"}` → password-reset link for one of the org's users, for when no admin can sign in; returns `PasswordResetCreated` (`token`, `reset_url`, shown once) |
 
 ## Sign-in and accounts
 
@@ -38,8 +39,16 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 | POST | `/auth/logout` | session | End the calling session (204) |
 | POST | `/auth/password` | session | `{"current_password", "new_password"}` → 204; ends the user's other sessions |
 | POST | `/auth/invitations` | admin | `{"email", "role": "member"\|"admin"}` → `InvitationCreated` (201) |
+| GET | `/auth/invitations` | admin | Pending invitations (`Invitation[]`, newest first; never includes tokens) |
+| DELETE | `/auth/invitations/{id}` | admin | Revoke a pending invitation; its link stops working (204) |
 | POST | `/auth/invitations/preview` | none | `{"token"}` → `InvitationPreview` (`email`, `role`, `org_name`, `expires_at`); does not redeem |
 | POST | `/auth/invitations/accept` | none | `{"token", "password"}` → `SessionCreated` (201); creates the account |
+| GET | `/auth/members` | admin | The org's users (`User[]`, oldest first) |
+| PATCH | `/auth/members/{user_id}` | admin | `{"role": "admin"\|"member"}` → the updated `User` |
+| DELETE | `/auth/members/{user_id}` | admin | Remove a member; their account and sessions are deleted (204) |
+| POST | `/auth/members/{user_id}/password-reset` | admin | Single-use reset link → `PasswordResetCreated` (201); supersedes the member's earlier unused links |
+| POST | `/auth/password-reset/preview` | none | `{"token"}` → `PasswordResetPreview` (`email`, `org_name`, `expires_at`); does not redeem |
+| POST | `/auth/password-reset/accept` | none | `{"token", "password"}` → `SessionCreated`; sets the password, clears any lock, ends all other sessions |
 | GET | `/auth/whoami` | any | `OrgContext`: `org_id`, `org_name`, `principal` (`api_key`/`user`), `role`, and `api_key_id` or `user_id` + `session_id` + `email` |
 | POST | `/auth/keys/revoke` | API key | Revoke the calling key (204) |
 | DELETE | `/orgs/me/data` | admin | Privacy: delete all of the calling org's runs/datasets/records/reports (204). The org, its keys and its user accounts are kept. |
@@ -101,11 +110,11 @@ logged server-side only, never returned to the client.
 
 | Status | Meaning |
 |---|---|
-| `400` | Invitation token unknown, expired or already used |
+| `400` | Invitation or reset token unknown, expired, already used or revoked |
 | `401` | Missing, invalid, expired or revoked credential; wrong email or password (always `invalid email or password`); wrong admin secret on `/admin/*`. Carries `WWW-Authenticate: Bearer` |
-| `403` | Authenticated but not allowed: inviting or deleting org data without the `admin` role, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
+| `403` | Authenticated but not allowed: managing members, invitations or org data without the `admin` role, removing yourself, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
 | `404` | Unknown run/dataset, or one that belongs to a different org |
-| `409` | Invitation for an email that is already a member of the org, or redemption for an email that already has an account |
+| `409` | Invitation for an email that is already a member of the org, redemption for an email that already has an account, or a change that would leave the org without an admin |
 | `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, an invalid email), or a password that fails the policy |
 | `429` | Sign-in locked after repeated failures; retry after the `Retry-After` seconds |
 | `500` | Internal error (e.g. storage failure); detail is logged, not returned |

@@ -21,11 +21,13 @@ from dndlabs.core.schemas import (
     ExportFormat,
     FeatureVector,
     Invitation,
+    InvitationPurpose,
     NormalizedRecord,
     Organization,
     PipelineRun,
     QualityReport,
     RawRecord,
+    Role,
     RuleOutcome,
     SourceSpec,
     SourceType,
@@ -321,6 +323,45 @@ class UserRepository(Protocol):
         """
         ...
 
+    def list_members(self, org_id: uuid.UUID) -> list[User]:
+        """List an organization's users, oldest first.
+
+        Args:
+            org_id: Organization (enforced).
+
+        Returns:
+            The users.
+        """
+        ...
+
+    def set_role(self, org_id: uuid.UUID, user_id: uuid.UUID, role: Role) -> User:
+        """Change a user's role.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+            role: The new role.
+
+        Returns:
+            The updated user.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        ...
+
+    def delete(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Delete a user and, by cascade, their sessions.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        ...
+
     def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
         """Replace a user's password hash.
 
@@ -423,6 +464,53 @@ class InvitationRepository(Protocol):
         """
         ...
 
+    def list_pending(
+        self, org_id: uuid.UUID, purpose: InvitationPurpose, now: datetime
+    ) -> list[Invitation]:
+        """List an organization's unredeemed, unrevoked, unexpired tokens, newest first.
+
+        Args:
+            org_id: Organization (enforced).
+            purpose: Which kind of token to list.
+            now: Current time (tokens expiring at or before it are excluded).
+
+        Returns:
+            The pending tokens.
+        """
+        ...
+
+    def revoke(self, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
+        """Revoke a pending token so it can no longer be redeemed.
+
+        Args:
+            org_id: Owning organization (enforced).
+            invitation_id: Token to revoke.
+
+        Raises:
+            NotFoundError: If no unredeemed, unrevoked token has this id in this org.
+        """
+        ...
+
+    def redeem_password_reset(self, invitation: Invitation, password_hash: str) -> User:
+        """Redeem a password-reset token, in one transaction.
+
+        Marks the token used, sets the password of the user with the token's
+        email in its org, clears any sign-in lock, and deletes all of that
+        user's sessions.
+
+        Args:
+            invitation: The (valid, unexpired) reset token being redeemed.
+            password_hash: Argon2 hash of the new password.
+
+        Returns:
+            The user whose password was reset.
+
+        Raises:
+            InvitationInvalidError: If the token was already used or revoked,
+                or its account no longer exists.
+        """
+        ...
+
     def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
         """Redeem an invitation: mark it used and create its user, in one transaction.
 
@@ -439,7 +527,7 @@ class InvitationRepository(Protocol):
             The created user.
 
         Raises:
-            InvitationInvalidError: If the invitation was already accepted.
+            InvitationInvalidError: If the invitation was already accepted or revoked.
             ConflictError: If an account with this email already exists.
         """
         ...

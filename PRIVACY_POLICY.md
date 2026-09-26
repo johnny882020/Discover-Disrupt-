@@ -52,8 +52,9 @@
   normalized record, quality report, feature vector and enrichment result
   belonging to the calling organization, in one call; only an
   organization admin (or API key) may call it. User accounts are
-  kept (so the organization is not locked out); there is not yet an
-  endpoint to delete an individual user account.
+  kept (so the organization is not locked out). An admin can remove an
+  individual member (`DELETE /auth/members/{id}`), which deletes their
+  account and sessions immediately.
 - **Third parties.** Ingested identifiers/SMILES may be sent to PubChem,
   ChEMBL, and (when configured) NVIDIA's hosted BioNeMo GenMol NIM, solely
   to fetch or enrich the requested data — never sold, never used for

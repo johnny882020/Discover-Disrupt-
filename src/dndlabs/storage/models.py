@@ -127,7 +127,7 @@ class UserSessionRow(Base):
 
 
 class InvitationRow(Base):
-    """A single-use invitation, stored by the SHA-256 digest of its token."""
+    """A single-use account token (join or password reset), stored by the SHA-256 of its token."""
 
     __tablename__ = "user_invitations"
 
@@ -137,6 +137,7 @@ class InvitationRow(Base):
     )
     email: Mapped[str] = mapped_column(String(320))
     role: Mapped[str] = mapped_column(String(16))
+    purpose: Mapped[str] = mapped_column(String(16), default="join")
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -144,6 +145,7 @@ class InvitationRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RunRow(Base):

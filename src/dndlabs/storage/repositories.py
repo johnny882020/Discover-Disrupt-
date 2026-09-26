@@ -31,6 +31,7 @@ from dndlabs.core.schemas import (
     EnrichmentResult,
     FeatureVector,
     Invitation,
+    InvitationPurpose,
     NormalizedRecord,
     Organization,
     PipelineRun,
@@ -345,6 +346,63 @@ class SqlUserRepository:
                 .values(failed_login_count=0, locked_until=None)
             )
 
+    def list_members(self, org_id: uuid.UUID) -> list[User]:
+        """List an organization's users, oldest first.
+
+        Args:
+            org_id: Organization (enforced).
+
+        Returns:
+            The users.
+        """
+        with self._sessions.transaction() as session:
+            rows = session.scalars(
+                select(UserRow).where(UserRow.org_id == org_id).order_by(UserRow.created_at)
+            )
+            return [_credentials_from_row(row).user for row in rows]
+
+    def set_role(self, org_id: uuid.UUID, user_id: uuid.UUID, role: Role) -> User:
+        """Change a user's role.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+            role: The new role.
+
+        Returns:
+            The updated user.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        with self._sessions.transaction() as session:
+            row = _user_row(session, org_id, user_id)
+            row.role = role.value
+            return _credentials_from_row(row).user
+
+    def delete(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Delete a user and their sessions.
+
+        Sessions are deleted explicitly rather than relying on ``ON DELETE
+        CASCADE``, which SQLite only honours with its foreign-keys pragma.
+
+        Args:
+            org_id: Owning organization (enforced).
+            user_id: User identifier.
+
+        Raises:
+            NotFoundError: If the user does not exist in this org.
+        """
+        with self._sessions.transaction() as session:
+            row = _user_row(session, org_id, user_id)
+            session.execute(delete(UserSessionRow).where(UserSessionRow.user_id == user_id))
+            session.execute(
+                update(InvitationRow)
+                .where(InvitationRow.created_by == user_id)
+                .values(created_by=None)
+            )
+            session.delete(row)
+
     def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
         """Replace a user's password hash.
 
@@ -556,6 +614,7 @@ class SqlInvitationRepository:
                     org_id=invitation.org_id,
                     email=invitation.email,
                     role=invitation.role.value,
+                    purpose=invitation.purpose.value,
                     token_hash=token_hash,
                     created_by=invitation.created_by,
                     created_at=invitation.created_at,
@@ -577,18 +636,90 @@ class SqlInvitationRepository:
             row = db.scalars(
                 select(InvitationRow).where(InvitationRow.token_hash == token_hash)
             ).first()
-            if row is None:
-                return None
-            return Invitation(
-                id=row.id,
-                org_id=row.org_id,
-                email=row.email,
-                role=Role(row.role),
-                created_by=row.created_by,
-                created_at=_as_utc(row.created_at),
-                expires_at=_as_utc(row.expires_at),
-                accepted_at=_as_utc(row.accepted_at) if row.accepted_at else None,
+            return _invitation_from_row(row) if row else None
+
+    def list_pending(
+        self, org_id: uuid.UUID, purpose: InvitationPurpose, now: datetime
+    ) -> list[Invitation]:
+        """List an organization's unredeemed, unrevoked, unexpired tokens, newest first.
+
+        Args:
+            org_id: Organization (enforced).
+            purpose: Which kind of token to list.
+            now: Current time.
+
+        Returns:
+            The pending tokens.
+        """
+        with self._sessions.transaction() as db:
+            rows = db.scalars(
+                select(InvitationRow)
+                .where(
+                    InvitationRow.org_id == org_id,
+                    InvitationRow.purpose == purpose.value,
+                    InvitationRow.accepted_at.is_(None),
+                    InvitationRow.revoked_at.is_(None),
+                    InvitationRow.expires_at > now,
+                )
+                .order_by(InvitationRow.created_at.desc())
             )
+            return [_invitation_from_row(row) for row in rows]
+
+    def revoke(self, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
+        """Revoke a pending token.
+
+        Args:
+            org_id: Owning organization (enforced).
+            invitation_id: Token to revoke.
+
+        Raises:
+            NotFoundError: If no unredeemed, unrevoked token has this id in this org.
+        """
+        with self._sessions.transaction() as db:
+            revoked = db.execute(
+                update(InvitationRow)
+                .where(
+                    InvitationRow.id == invitation_id,
+                    InvitationRow.org_id == org_id,
+                    InvitationRow.accepted_at.is_(None),
+                    InvitationRow.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(UTC))
+            )
+            if _rowcount(revoked) != 1:
+                raise NotFoundError(
+                    f"pending invitation {invitation_id} not found for org {org_id}"
+                )
+
+    def redeem_password_reset(self, invitation: Invitation, password_hash: str) -> User:
+        """Redeem a password-reset token, in one transaction.
+
+        Args:
+            invitation: The reset token being redeemed.
+            password_hash: Argon2 hash of the new password.
+
+        Returns:
+            The user whose password was reset.
+
+        Raises:
+            InvitationInvalidError: If the token was already used or revoked,
+                or its account no longer exists.
+        """
+        with self._sessions.transaction() as db:
+            _claim(db, invitation)
+            row = db.scalars(
+                select(UserRow).where(
+                    UserRow.org_id == invitation.org_id, UserRow.email == invitation.email
+                )
+            ).first()
+            if row is None:
+                raise InvitationInvalidError(_TOKEN_UNUSABLE)
+            row.password_hash = password_hash
+            row.password_changed_at = datetime.now(UTC)
+            row.failed_login_count = 0
+            row.locked_until = None
+            db.execute(delete(UserSessionRow).where(UserSessionRow.user_id == row.id))
+            return _credentials_from_row(row).user
 
     def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
         """Mark an invitation used and create its user, in one transaction.
@@ -602,23 +733,48 @@ class SqlInvitationRepository:
             The created user.
 
         Raises:
-            InvitationInvalidError: If the invitation was already accepted.
+            InvitationInvalidError: If the invitation was already accepted or revoked.
             ConflictError: If an account with this email already exists.
         """
         with self._sessions.transaction() as db:
-            claimed = db.execute(
-                update(InvitationRow)
-                .where(
-                    InvitationRow.id == invitation.id,
-                    InvitationRow.org_id == invitation.org_id,
-                    InvitationRow.accepted_at.is_(None),
-                )
-                .values(accepted_at=datetime.now(UTC))
-            )
-            if _rowcount(claimed) != 1:
-                raise InvitationInvalidError("invitation is invalid, expired or already used")
+            _claim(db, invitation)
             _insert_user(db, user, password_hash)
         return user
+
+
+_TOKEN_UNUSABLE = "invitation is invalid, expired or already used"
+
+
+def _claim(db: Session, invitation: Invitation) -> None:
+    """Mark a token used, atomically; raise if it was already used or revoked."""
+    claimed = db.execute(
+        update(InvitationRow)
+        .where(
+            InvitationRow.id == invitation.id,
+            InvitationRow.org_id == invitation.org_id,
+            InvitationRow.accepted_at.is_(None),
+            InvitationRow.revoked_at.is_(None),
+        )
+        .values(accepted_at=datetime.now(UTC))
+    )
+    if _rowcount(claimed) != 1:
+        raise InvitationInvalidError(_TOKEN_UNUSABLE)
+
+
+def _invitation_from_row(row: InvitationRow) -> Invitation:
+    """Convert an invitation row to its contract."""
+    return Invitation(
+        id=row.id,
+        org_id=row.org_id,
+        email=row.email,
+        role=Role(row.role),
+        purpose=InvitationPurpose(row.purpose),
+        created_by=row.created_by,
+        created_at=_as_utc(row.created_at),
+        expires_at=_as_utc(row.expires_at),
+        accepted_at=_as_utc(row.accepted_at) if row.accepted_at else None,
+        revoked_at=_as_utc(row.revoked_at) if row.revoked_at else None,
+    )
 
 
 def _rowcount(result: Result[Any]) -> int:

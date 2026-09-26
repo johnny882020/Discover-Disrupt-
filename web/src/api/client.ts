@@ -175,6 +175,8 @@ export const apiClient = {
     request<T>(path, { method: "GET", credential, signal }),
   post: <T>(path: string, body?: unknown, credential?: Credential | null) =>
     request<T>(path, { method: "POST", body, credential }),
+  patch: <T>(path: string, body: unknown, credential?: Credential | null) =>
+    request<T>(path, { method: "PATCH", body, credential }),
   del: <T>(path: string, credential?: Credential | null) =>
     request<T>(path, { method: "DELETE", credential }),
   getBlob: (path: string, credential?: Credential | null) =>

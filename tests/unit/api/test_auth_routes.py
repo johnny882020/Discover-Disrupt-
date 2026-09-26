@@ -204,3 +204,118 @@ def test_openapi_declares_both_auth_schemes(client: TestClient) -> None:
     schemes = client.get("/openapi.json").json()["components"]["securitySchemes"]
     assert schemes["APIKeyHeader"]["name"] == "X-API-Key"
     assert schemes["HTTPBearer"]["scheme"] == "bearer"
+
+
+def _invite_member(client: TestClient, admin: dict, email: str) -> dict:  # type: ignore[type-arg]
+    token = client.post(
+        "/api/v1/auth/invitations", json={"email": email}, headers=_bearer(admin)
+    ).json()["token"]
+    return client.post(
+        "/api/v1/auth/invitations/accept", json={"token": token, "password": PASSWORD}
+    ).json()
+
+
+def test_member_management_routes(client: TestClient) -> None:
+    admin, _ = _bootstrap(client)
+    bob = _invite_member(client, admin, "bob@acme.com")
+    bob_id = bob["user"]["id"]
+
+    members = client.get("/api/v1/auth/members", headers=_bearer(admin)).json()
+    assert [m["email"] for m in members] == ["ada@acme.com", "bob@acme.com"]
+    assert client.get("/api/v1/auth/members", headers=_bearer(bob)).status_code == 403
+
+    promoted = client.patch(
+        f"/api/v1/auth/members/{bob_id}", json={"role": "admin"}, headers=_bearer(admin)
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "admin"
+
+    assert (
+        client.delete(f"/api/v1/auth/members/{bob_id}", headers=_bearer(admin)).status_code == 204
+    )
+    assert client.get("/api/v1/auth/whoami", headers=_bearer(bob)).status_code == 401
+    assert (
+        client.delete(f"/api/v1/auth/members/{bob_id}", headers=_bearer(admin)).status_code == 404
+    )
+
+
+def test_last_admin_and_self_removal_are_refused(client: TestClient) -> None:
+    admin, _ = _bootstrap(client)
+    admin_id = admin["user"]["id"]
+    demote = client.patch(
+        f"/api/v1/auth/members/{admin_id}", json={"role": "member"}, headers=_bearer(admin)
+    )
+    assert demote.status_code == 409
+    assert demote.json()["detail"] == "an organization must keep at least one admin"
+    remove = client.delete(f"/api/v1/auth/members/{admin_id}", headers=_bearer(admin))
+    assert remove.status_code == 403
+
+
+def test_pending_invitations_routes(client: TestClient) -> None:
+    admin, _ = _bootstrap(client)
+    created = client.post(
+        "/api/v1/auth/invitations", json={"email": "cleo@acme.com"}, headers=_bearer(admin)
+    ).json()
+    listed = client.get("/api/v1/auth/invitations", headers=_bearer(admin)).json()
+    assert [(i["id"], i["email"], i["purpose"]) for i in listed] == [
+        (created["id"], "cleo@acme.com", "join")
+    ]
+    assert "token" not in listed[0]
+
+    path = f"/api/v1/auth/invitations/{created['id']}"
+    assert client.delete(path, headers=_bearer(admin)).status_code == 204
+    assert client.get("/api/v1/auth/invitations", headers=_bearer(admin)).json() == []
+    accept = client.post(
+        "/api/v1/auth/invitations/accept", json={"token": created["token"], "password": PASSWORD}
+    )
+    assert accept.status_code == 400
+
+
+def test_password_reset_routes(client: TestClient) -> None:
+    admin, _ = _bootstrap(client)
+    bob = _invite_member(client, admin, "bob@acme.com")
+    reset = client.post(
+        f"/api/v1/auth/members/{bob['user']['id']}/password-reset", headers=_bearer(admin)
+    )
+    assert reset.status_code == 201
+    body = reset.json()
+    assert body["reset_url"].endswith(f"/reset#token={body['token']}")
+
+    preview = client.post("/api/v1/auth/password-reset/preview", json={"token": body["token"]})
+    assert preview.json()["email"] == "bob@acme.com"
+    assert preview.json()["org_name"] == "Acme"
+
+    new_password = "a brand new passphrase"
+    done = client.post(
+        "/api/v1/auth/password-reset/accept",
+        json={"token": body["token"], "password": new_password},
+    )
+    assert done.status_code == 200
+    assert client.get("/api/v1/auth/whoami", headers=_bearer(bob)).status_code == 401
+    login = client.post(
+        "/api/v1/auth/login", json={"email": "bob@acme.com", "password": new_password}
+    )
+    assert login.status_code == 200
+    reused = client.post(
+        "/api/v1/auth/password-reset/accept",
+        json={"token": body["token"], "password": new_password},
+    )
+    assert reused.status_code == 400
+
+
+def test_operator_password_reset(client: TestClient) -> None:
+    _, org_id = _bootstrap(client)
+    reset = client.post(
+        f"/api/v1/admin/orgs/{org_id}/password-resets",
+        json={"email": "ada@acme.com"},
+        headers=ADMIN,
+    )
+    assert reset.status_code == 201
+    unknown = client.post(
+        f"/api/v1/admin/orgs/{org_id}/password-resets", json={"email": "x@acme.com"}, headers=ADMIN
+    )
+    assert unknown.status_code == 404
+    no_secret = client.post(
+        f"/api/v1/admin/orgs/{org_id}/password-resets", json={"email": "ada@acme.com"}
+    )
+    assert no_secret.status_code == 401

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
     invitation_ttl_hours: int = Field(default=72, ge=1, le=720)
+    password_reset_ttl_hours: int = Field(default=24, ge=1, le=168)
     login_max_attempts: int = Field(default=5, ge=1)
     login_lockout_minutes: int = Field(default=15, ge=1)
     password_min_length: int = Field(default=12, ge=8, le=64)

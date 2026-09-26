@@ -19,11 +19,13 @@ from dndlabs.core.schemas import (
     EnrichmentResult,
     FeatureVector,
     Invitation,
+    InvitationPurpose,
     NormalizedRecord,
     Organization,
     PipelineRun,
     QualityReport,
     RawRecord,
+    Role,
     SourceSpec,
     SourceType,
     User,
@@ -88,6 +90,7 @@ def _now():  # type: ignore[no-untyped-def]
 class FakeUsers:
     def __init__(self) -> None:
         self.items: dict[uuid.UUID, UserCredentials] = {}
+        self.sessions: FakeSessions | None = None  # wired by fake_repositories
 
     def create(self, user: User, password_hash: str) -> User:
         if self.email_exists(user.email):
@@ -121,6 +124,24 @@ class FakeUsers:
         self.items[user_id] = self.items[user_id].model_copy(
             update={"failed_login_count": 0, "locked_until": None}
         )
+
+    def list_members(self, org_id: uuid.UUID) -> list[User]:
+        members = [c.user for c in self.items.values() if c.user.org_id == org_id]
+        return sorted(members, key=lambda u: u.created_at)
+
+    def set_role(self, org_id: uuid.UUID, user_id: uuid.UUID, role: Role) -> User:
+        creds = self.get(org_id, user_id)
+        user = creds.user.model_copy(update={"role": role})
+        self.items[user_id] = creds.model_copy(update={"user": user})
+        return user
+
+    def delete(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        self.get(org_id, user_id)
+        del self.items[user_id]
+        if self.sessions is not None:
+            self.sessions.items = {
+                d: s for d, s in self.sessions.items.items() if s.user_id != user_id
+            }
 
     def set_password(self, org_id: uuid.UUID, user_id: uuid.UUID, password_hash: str) -> None:
         creds = self.get(org_id, user_id)
@@ -177,13 +198,66 @@ class FakeInvitations:
     def get_by_token_hash(self, token_hash: str) -> Invitation | None:
         return self.items.get(token_hash)
 
-    def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
-        digest = next(d for d, i in self.items.items() if i.id == invitation.id)
-        if self.items[digest].accepted_at is not None:
+    def list_pending(
+        self, org_id: uuid.UUID, purpose: InvitationPurpose, now: datetime
+    ) -> list[Invitation]:
+        pending = [
+            i
+            for i in self.items.values()
+            if i.org_id == org_id
+            and i.purpose is purpose
+            and i.accepted_at is None
+            and i.revoked_at is None
+            and i.expires_at > now
+        ]
+        return sorted(pending, key=lambda i: i.created_at, reverse=True)
+
+    def revoke(self, org_id: uuid.UUID, invitation_id: uuid.UUID) -> None:
+        for digest, i in self.items.items():
+            if (
+                i.id == invitation_id
+                and i.org_id == org_id
+                and i.accepted_at is None
+                and i.revoked_at is None
+            ):
+                self.items[digest] = i.model_copy(update={"revoked_at": _now()})
+                return
+        raise NotFoundError(f"pending invitation {invitation_id} not found for org {org_id}")
+
+    def redeem_password_reset(self, invitation: Invitation, password_hash: str) -> User:
+        digest = self._claimable(invitation)
+        creds = next(
+            (
+                c
+                for c in self._users.items.values()
+                if c.user.org_id == invitation.org_id and c.user.email == invitation.email
+            ),
+            None,
+        )
+        if creds is None:
             raise InvitationInvalidError("invitation is invalid, expired or already used")
+        self._users.items[creds.user.id] = creds.model_copy(
+            update={"password_hash": password_hash, "failed_login_count": 0, "locked_until": None}
+        )
+        if self._users.sessions is not None:
+            self._users.sessions.items = {
+                d: s for d, s in self._users.sessions.items.items() if s.user_id != creds.user.id
+            }
+        self.items[digest] = self.items[digest].model_copy(update={"accepted_at": _now()})
+        return creds.user
+
+    def accept(self, invitation: Invitation, user: User, password_hash: str) -> User:
+        digest = self._claimable(invitation)
         created = self._users.create(user, password_hash)
         self.items[digest] = self.items[digest].model_copy(update={"accepted_at": _now()})
         return created
+
+    def _claimable(self, invitation: Invitation) -> str:
+        digest = next(d for d, i in self.items.items() if i.id == invitation.id)
+        current = self.items[digest]
+        if current.accepted_at is not None or current.revoked_at is not None:
+            raise InvitationInvalidError("invitation is invalid, expired or already used")
+        return digest
 
 
 class FakeRuns:
@@ -290,11 +364,13 @@ class FakeEnrichments:
 
 def fake_repositories() -> Repositories:
     users = FakeUsers()
+    sessions = FakeSessions()
+    users.sessions = sessions
     return Repositories(
         organizations=FakeOrganizations(),
         api_keys=FakeApiKeys(),
         users=users,
-        sessions=FakeSessions(),
+        sessions=sessions,
         invitations=FakeInvitations(users),
         runs=FakeRuns(),
         datasets=FakeDatasets(),

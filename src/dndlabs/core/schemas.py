@@ -166,16 +166,29 @@ class UserSession(_Contract):
     revoked_at: datetime | None = None
 
 
+class InvitationPurpose(StrEnum):
+    """What redeeming a single-use account token does."""
+
+    JOIN = "join"
+    PASSWORD_RESET = "password_reset"
+
+
 class Invitation(_EmailContract):
-    """Persisted view of an invitation to join an organization (token hash only)."""
+    """Persisted view of a single-use account token (token hash only).
+
+    ``purpose="join"`` creates an account; ``purpose="password_reset"`` sets
+    a new password on the existing account with this email in ``org_id``.
+    """
 
     id: uuid.UUID = Field(default_factory=new_id)
     org_id: uuid.UUID
     role: Role
+    purpose: InvitationPurpose = InvitationPurpose.JOIN
     created_by: uuid.UUID | None = None
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: datetime
     accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
 class LoginRequest(_EmailContract):
@@ -226,6 +239,33 @@ class InvitationPreview(_Contract):
 
     email: str
     role: Role
+    org_name: str
+    expires_at: datetime
+
+
+class MemberUpdate(_Contract):
+    """Change a member's role."""
+
+    role: Role
+
+
+class PasswordResetRequest(_EmailContract):
+    """Operator bootstrap: issue a password-reset link for an organization's user."""
+
+
+class PasswordResetCreated(_Contract):
+    """One-time reveal of a password-reset token and the link that redeems it."""
+
+    email: str
+    expires_at: datetime
+    token: str
+    reset_url: str
+
+
+class PasswordResetPreview(_Contract):
+    """Whose password a reset link sets, shown before the new password is chosen."""
+
+    email: str
     org_name: str
     expires_at: datetime
 

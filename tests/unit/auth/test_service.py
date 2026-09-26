@@ -388,3 +388,223 @@ def test_default_policy_is_used_when_none_is_given(repos: Repositories) -> None:
     org = repos.organizations.create(Organization(name="Acme"))
     assert service.invite_admin(org, "a@b.co").accept_url.startswith("http://localhost:5173/")
     assert isinstance(repos.api_keys, FakeApiKeys)
+
+
+# --- members ------------------------------------------------------------------
+
+
+def _member_session(service: AuthService, admin: OrgContext, email: str, role: Role) -> OrgContext:
+    invitation = service.invite(admin, InvitationCreate(email=email, role=role))
+    return service.resolve_session(service.accept_invitation(invitation.token, PASSWORD).token)
+
+
+def test_admin_lists_members_and_changes_roles(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    assert [m.email for m in service.list_members(admin)] == ["ada@acme.com", "bob@acme.com"]
+
+    promoted = service.set_member_role(admin, bob.user_id, Role.ADMIN)  # type: ignore[arg-type]
+    assert promoted.role is Role.ADMIN
+    assert service.resolve_session(_login(service, "bob@acme.com")).role is Role.ADMIN
+
+
+def test_the_last_admin_cannot_be_demoted_or_removed(
+    service: AuthService, org: Organization
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    with pytest.raises(ConflictError, match="at least one admin"):
+        service.set_member_role(admin, admin.user_id, Role.MEMBER)  # type: ignore[arg-type]
+    key = service.resolve_api_key(service.issue_key(org).raw_key)
+    with pytest.raises(ConflictError, match="at least one admin"):
+        service.remove_member(key, admin.user_id)  # type: ignore[arg-type]
+
+    second = _member_session(service, admin, "cleo@acme.com", Role.ADMIN)
+    service.set_member_role(admin, admin.user_id, Role.MEMBER)  # type: ignore[arg-type]
+    assert service.resolve_session(_login(service, "ada@acme.com")).role is Role.MEMBER
+    assert second.role is Role.ADMIN
+
+
+def test_removing_a_member_ends_their_sessions(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    bob_token = _login(service, "bob@acme.com")
+
+    service.remove_member(admin, bob.user_id)  # type: ignore[arg-type]
+
+    with pytest.raises(NotAuthenticatedError):
+        service.resolve_session(bob_token)
+    with pytest.raises(InvalidCredentialsError):
+        service.login("bob@acme.com", PASSWORD)
+    # The email can be invited again.
+    service.invite(admin, InvitationCreate(email="bob@acme.com"))
+
+
+def test_admins_cannot_remove_themselves(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    with pytest.raises(ForbiddenError, match="yourself"):
+        service.remove_member(admin, admin.user_id)  # type: ignore[arg-type]
+
+
+def test_members_cannot_manage_members(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    for action in (
+        lambda: service.list_members(bob),
+        lambda: service.set_member_role(bob, admin.user_id, Role.MEMBER),  # type: ignore[arg-type]
+        lambda: service.remove_member(bob, admin.user_id),  # type: ignore[arg-type]
+        lambda: service.issue_password_reset(bob, admin.user_id),  # type: ignore[arg-type]
+        lambda: service.list_pending_invitations(bob),
+    ):
+        with pytest.raises(ForbiddenError):
+            action()
+
+
+def test_managing_a_user_of_another_org_is_not_found(
+    service: AuthService, repos: Repositories
+) -> None:
+    acme = repos.organizations.create(Organization(name="Acme"))
+    other = repos.organizations.create(Organization(name="OtherCo"))
+    acme_admin = service.resolve_session(_admin_session(service, acme, "ada@acme.com"))
+    other_admin = service.resolve_session(_admin_session(service, other, "otto@other.com"))
+    with pytest.raises(NotFoundError):
+        service.remove_member(acme_admin, other_admin.user_id)  # type: ignore[arg-type]
+    with pytest.raises(NotFoundError):
+        service.issue_password_reset(acme_admin, other_admin.user_id)  # type: ignore[arg-type]
+
+
+# --- pending invitations ------------------------------------------------------
+
+
+def test_pending_invitations_can_be_listed_and_revoked(
+    service: AuthService, org: Organization, clock: Clock
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    first = service.invite(admin, InvitationCreate(email="bob@acme.com"))
+    second = service.invite(admin, InvitationCreate(email="cleo@acme.com"))
+    assert [i.email for i in service.list_pending_invitations(admin)] == [
+        "cleo@acme.com",
+        "bob@acme.com",
+    ]
+
+    service.revoke_invitation(admin, first.id)
+
+    assert [i.id for i in service.list_pending_invitations(admin)] == [second.id]
+    with pytest.raises(InvitationInvalidError):
+        service.accept_invitation(first.token, PASSWORD)
+    with pytest.raises(NotFoundError):
+        service.revoke_invitation(admin, first.id)  # already revoked
+    clock.advance(timedelta(hours=72))
+    assert service.list_pending_invitations(admin) == []
+
+
+# --- password reset -----------------------------------------------------------
+
+
+def test_password_reset_sets_a_new_password_and_ends_sessions(
+    service: AuthService, org: Organization
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    old_session = _login(service, "bob@acme.com")
+
+    reset = service.issue_password_reset(admin, bob.user_id)  # type: ignore[arg-type]
+    assert reset.reset_url == f"https://app.example/reset#token={reset.token}"
+    preview, preview_org = service.preview_password_reset(reset.token)
+    assert (preview.email, preview_org.name) == ("bob@acme.com", "Acme")
+
+    session = service.reset_password(reset.token, "a brand new passphrase")
+
+    assert session.user.email == "bob@acme.com"
+    with pytest.raises(NotAuthenticatedError):
+        service.resolve_session(old_session)
+    with pytest.raises(InvalidCredentialsError):
+        service.login("bob@acme.com", PASSWORD)
+    service.login("bob@acme.com", "a brand new passphrase")
+    with pytest.raises(InvitationInvalidError):
+        service.reset_password(reset.token, "another new passphrase")  # single use
+
+
+def test_password_reset_clears_a_lockout(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError):
+            service.login("bob@acme.com", "wrong password")
+    with pytest.raises(AccountLockedError):
+        service.login("bob@acme.com", PASSWORD)
+
+    reset = service.issue_password_reset(admin, bob.user_id)  # type: ignore[arg-type]
+    service.reset_password(reset.token, "a brand new passphrase")
+    service.login("bob@acme.com", "a brand new passphrase")
+
+
+def test_a_new_reset_link_supersedes_the_previous_one(
+    service: AuthService, org: Organization
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    first = service.issue_password_reset(admin, bob.user_id)  # type: ignore[arg-type]
+    second = service.issue_password_reset(admin, bob.user_id)  # type: ignore[arg-type]
+    with pytest.raises(InvitationInvalidError):
+        service.reset_password(first.token, "a brand new passphrase")
+    service.reset_password(second.token, "a brand new passphrase")
+
+
+def test_reset_links_expire_after_24_hours(
+    service: AuthService, org: Organization, clock: Clock
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    reset = service.issue_password_reset(admin, admin.user_id)  # type: ignore[arg-type]
+    clock.advance(timedelta(hours=24))
+    with pytest.raises(InvitationInvalidError):
+        service.preview_password_reset(reset.token)
+
+
+def test_reset_and_invitation_tokens_are_not_interchangeable(
+    service: AuthService, org: Organization
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    invitation = service.invite(admin, InvitationCreate(email="bob@acme.com"))
+    reset = service.issue_password_reset(admin, admin.user_id)  # type: ignore[arg-type]
+    with pytest.raises(InvitationInvalidError):
+        service.reset_password(invitation.token, "a brand new passphrase")
+    with pytest.raises(InvitationInvalidError):
+        service.accept_invitation(reset.token, "a brand new passphrase")
+    with pytest.raises(InvitationInvalidError):
+        service.preview_invitation(reset.token)
+
+
+def test_reset_policy_is_enforced_and_the_link_survives_a_weak_password(
+    service: AuthService, org: Organization
+) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    reset = service.issue_password_reset(admin, admin.user_id)  # type: ignore[arg-type]
+    with pytest.raises(PasswordPolicyError):
+        service.reset_password(reset.token, "short")
+    service.reset_password(reset.token, "a brand new passphrase")
+
+
+def test_reset_for_a_removed_member_fails(service: AuthService, org: Organization) -> None:
+    admin = service.resolve_session(_admin_session(service, org))
+    bob = _member_session(service, admin, "bob@acme.com", Role.MEMBER)
+    reset = service.issue_password_reset(admin, bob.user_id)  # type: ignore[arg-type]
+    service.remove_member(admin, bob.user_id)  # type: ignore[arg-type]
+    with pytest.raises(InvitationInvalidError):
+        service.reset_password(reset.token, "a brand new passphrase")
+
+
+def test_operator_reset_by_email(service: AuthService, repos: Repositories) -> None:
+    acme = repos.organizations.create(Organization(name="Acme"))
+    other = repos.organizations.create(Organization(name="OtherCo"))
+    _admin_session(service, acme, "ada@acme.com")
+    reset = service.issue_password_reset_for_email(acme, "ADA@acme.com")
+    assert reset.email == "ada@acme.com"
+    service.reset_password(reset.token, "a brand new passphrase")
+    with pytest.raises(NotFoundError):
+        service.issue_password_reset_for_email(other, "ada@acme.com")
+    with pytest.raises(NotFoundError):
+        service.issue_password_reset_for_email(acme, "nobody@acme.com")
+
+
+def _login(service: AuthService, email: str) -> str:
+    return service.login(email, PASSWORD).token

@@ -62,6 +62,7 @@ any feature vector or enrichment result, since both reference
 | `User` / `UserCredentials` / `UserSession` / `Invitation` | Account, its sign-in state (hash, failure count, lock; internal to auth), a session and an invitation — the latter two persisted by token hash only |
 | `LoginRequest` / `SessionCreated` | Sign-in body; one-time reveal of a session token with its expiry and user |
 | `InvitationCreate` / `AdminInvitationCreate` / `InvitationCreated` / `InvitationToken` / `InvitationPreview` / `InvitationAccept` / `PasswordChange` | Invitation and password request/response bodies; emails are normalized (trimmed, lowercased) on input |
+| `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
 | `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `dataset_name` — cross-validated per source |
 | `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra` |
 | `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id` |
@@ -201,8 +202,28 @@ cookies would break a cookie session.
   stuffing across many accounts) is not implemented. Put the API behind a
   rate-limiting proxy before exposing it widely.
 
+**Managing the team.** Admins (and org API keys) list members, change
+roles, remove members and revoke pending invitations. A removed member's
+account and sessions are deleted at once; their email can be invited again.
+An organization must always keep at least one admin user: demoting or
+removing the last one is refused (`409`), and admins cannot remove
+themselves.
+
+**Password reset.** There is no self-service "forgot password" (no email
+delivery). Instead, an admin issues a single-use reset link for a member
+(`POST /auth/members/{id}/password-reset`), valid for
+`DNDLABS_PASSWORD_RESET_TTL_HOURS` (default 24) at
+`{DNDLABS_FRONTEND_ORIGIN}/reset#token=…`. It is the same token mechanism as
+invitations (`user_invitations.purpose = "password_reset"`), and the two
+kinds are not interchangeable. Issuing a new link supersedes the member's
+earlier unused ones. Redeeming it sets the new password, clears any
+sign-in lock and ends all of the user's sessions, in one transaction. If
+no admin can sign in, the operator issues the link
+(`POST /admin/orgs/{id}/password-resets`).
+
 **Authorization within an org:**
-- Inviting and deleting the organization's data require the `admin` role.
+- Managing members and invitations, and deleting the organization's data,
+  require the `admin` role.
 - Sign-out and password change require a user session.
 - Key revocation requires an API key.
 - Every other endpoint is open to any authenticated principal of the org.
@@ -297,7 +318,7 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0003`.
+Alembic head: `0004`.
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -305,7 +326,7 @@ Alembic head: `0003`.
 | `api_keys` | `org_id`, `prefix` (unique), `hashed_key`, `revoked_at` | Raw key never stored |
 | `users` | `org_id`, `email` (unique), `password_hash`, `role`, `failed_login_count`, `locked_until` | Email stored lowercased |
 | `user_sessions` | `user_id`, `org_id`, `token_hash` (unique), `expires_at`, `revoked_at` | Raw token never stored |
-| `user_invitations` | `org_id`, `email`, `role`, `token_hash` (unique), `expires_at`, `accepted_at` | Raw token never stored |
+| `user_invitations` | `org_id`, `email`, `role`, `purpose` (`join` / `password_reset`), `token_hash` (unique), `expires_at`, `accepted_at`, `revoked_at` | Invitations and reset links; raw token never stored |
 | `pipeline_runs` | `org_id`, `source`, `status`, `dataset_id`, `request_payload` (JSON) | |
 | `datasets` | `org_id`, `run_id` (unique), `record_count` | One per run |
 | `normalized_records` | `org_id`, `dataset_id`, `record_key`, all `NormalizedRecord` fields | Unique `(dataset_id, record_key)` |
@@ -331,12 +352,13 @@ the stamp.
 | `0001` | Platform schema (table above) |
 | `0002` | Retires the pre-rebuild MVP schema. The MVP also used revision id `0001` for an unrelated schema, so databases that ran it reported `0001` as current and never received the platform tables. `0002` detects that state (`organizations` missing), moves the MVP tables into a `legacy_mvp` schema — data preserved, no name collisions — and applies the platform schema. No-op on any database that already has it. |
 | `0003` | Adds `users`, `user_sessions` and `user_invitations` (each only if absent, so a stamped `create_all` schema upgrades cleanly). Deletes the organization the removed shared-password login used (`00000000-0000-0000-0000-000000000001`) and everything it owned. |
+| `0004` | Adds `user_invitations.purpose` (existing rows become `join`) and `user_invitations.revoked_at`, for password-reset links and revocable invitations. |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
 own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`
-upgrade and downgrade, and the account repositories' transactional
+and `0004` upgrades and downgrades, and the account repositories' transactional
 behaviour (`tests/account_repository_checks.py`, shared by both dialects).
 
 ## Readiness vs. liveness
@@ -363,8 +385,10 @@ own Render Static Site.
 
 **Signing in.** Users sign in with email and password, or with an org API
 key via "Use an API key instead". New users arrive through an invitation
-link (`/invite`) and choose their password there. Admins invite colleagues
-from the Team page, and the Account page changes the password.
+link (`/invite`) and choose their password there; a reset link (`/reset`)
+sets a new one. On the Team page, admins invite colleagues, change roles,
+issue reset links, remove members and revoke pending invitations. The
+Account page changes the password.
 
 **Credential handling.** `auth/SessionContext.tsx` holds the credential — a
 session token or an API key — in memory and `sessionStorage` (never
