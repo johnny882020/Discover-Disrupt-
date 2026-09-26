@@ -121,6 +121,11 @@ test.describe("full pipeline workflow", () => {
     await expect(page).toHaveURL(/\/datasets\/[^/]+$/);
     await expect(page.getByRole("heading", { name: datasetPattern })).toBeVisible();
 
+    // Structures are drawn by RDKit.js (WebAssembly), not shown as SMILES text.
+    const depiction = page.locator('img[src^="data:image/svg+xml"]').first();
+    await expect(depiction).toBeVisible();
+    await expect(depiction).toHaveAttribute("alt", /\S+/);
+
     // The run should also now appear on the dashboard.
     await page.getByRole("link", { name: /d&d labs/i }).click();
     await expect(page.getByRole("heading", { name: /dashboard/i })).toBeVisible();

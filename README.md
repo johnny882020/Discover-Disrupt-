@@ -21,6 +21,7 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
   neutralized), activity values converted to nanomolar, duplicates removed
   across sources and salt forms.
 - **Quality reports** that explain every rejected record.
+- **Structure depiction** in the browser with RDKit.js.
 - **Featurization:** RDKit descriptors and Morgan fingerprints per compound.
 - **AI enrichment (optional):** candidate analogs from NVIDIA BioNeMo GenMol.
 - **Export** to CSV or JSON Lines.
