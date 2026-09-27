@@ -119,24 +119,33 @@ class ChemblConnector:
             raise IngestionError(f"ChemblConnector cannot fetch {spec.source.value!r}")
         if not spec.chembl_target:
             raise IngestionError("chembl source requires chembl_target")
-        path: str | None = (
-            f"/activity.json?target_chembl_id={spec.chembl_target}&limit={self._page_size}&offset=0"
+        # The first page's query goes through httpx's params, which encode it:
+        # the target is user input, and a raw ``&`` or space in it would
+        # otherwise add or break query parameters. Later pages follow ChEMBL's
+        # own ``next`` link, which arrives already encoded.
+        page = self._get_page(
+            "/activity.json",
+            {"target_chembl_id": spec.chembl_target, "limit": self._page_size, "offset": 0},
         )
-        pages_fetched = 0
-        while path is not None:
-            page = self._get_page(path)
+        pages_fetched = 1
+        while True:
             for activity in page.activities:
                 yield activity.to_raw_record()
-            pages_fetched += 1
             path = _normalize_next_path(page.page_meta.next)
+            if path is None:
+                break
+            page = self._get_page(path)
+            pages_fetched += 1
         logger.info(
             "chembl fetch complete",
             extra={"target": spec.chembl_target, "pages": pages_fetched},
         )
 
-    def _get_page(self, path: str) -> _ActivityResponse:
+    def _get_page(self, path: str, params: dict[str, str | int] | None = None) -> _ActivityResponse:
         """GET one page, with retries on transient errors."""
-        response = send_with_retries(lambda: self._client.get(path), "ChEMBL", self._retry)
+        response = send_with_retries(
+            lambda: self._client.get(path, params=params), "ChEMBL", self._retry
+        )
         if response.is_error:
             raise IngestionError(
                 f"ChEMBL request failed ({response.status_code}): {response.text[:200]}"

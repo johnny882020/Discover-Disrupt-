@@ -10,7 +10,7 @@ SCANNER = AlertScanner()
 CASES: dict[str, tuple[list[str], list[str]]] = {
     "Aniline (primary aromatic amine)": (
         ["Nc1ccccc1", "CC(=O)Nc1ccc(N)cc1"],
-        ["CC(=O)Nc1ccccc1", "NCc1ccccc1", "NC(=O)c1ccccc1"],
+        ["CC(=O)Nc1ccccc1", "NCc1ccccc1", "NC(=O)c1ccccc1", "NC(=S)c1ccccc1", "NC(=O)Nc1ccccc1"],
     ),
     "Nitroaromatic": (["O=[N+]([O-])c1ccccc1"], ["CC[N+](=O)[O-]"]),
     "Thiophene": (["Cc1cccs1"], ["C1CCSC1"]),
@@ -77,3 +77,19 @@ def test_highlighted_atoms_are_the_matched_group() -> None:
 
 def test_a_clean_molecule_has_no_alerts() -> None:
     assert SCANNER.scan(Chem.MolFromSmiles("CC(C)Cc1ccc(C(C)C(=O)O)cc1")) == []  # ibuprofen
+
+
+def test_aniline_alert_flags_only_the_aromatic_nh2_of_sulfanilamide() -> None:
+    # Sulfanilamide has two NH2 groups: the aniline's (atom 0) is flagged,
+    # the sulfonamide's (on S) is not.
+    mol = Chem.MolFromSmiles("Nc1ccc(cc1)S(N)(=O)=O")
+    (alert,) = [a for a in SCANNER.scan(mol) if a.name.startswith("Aniline")]
+    assert alert.atoms == [0, 1]
+
+
+@pytest.mark.parametrize("smiles", ["Nc1ccccn1", "Nc1cc[nH]c(=O)n1", "Nc1nc2[nH]cnc2c(=O)[nH]1"])
+def test_aniline_alert_covers_heteroaromatic_amines_next_to_ring_carbonyls(smiles: str) -> None:
+    # Amino-pyridines/-pyrimidinones are primary aromatic amines too; a ring
+    # C=O elsewhere in the ring does not make the NH2 an amide.
+    names = {a.name for a in SCANNER.scan(Chem.MolFromSmiles(smiles))}
+    assert "Aniline (primary aromatic amine)" in names

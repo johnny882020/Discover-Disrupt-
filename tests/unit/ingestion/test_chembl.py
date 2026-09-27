@@ -43,6 +43,28 @@ async def test_fetch_paginates_across_both_pages() -> None:
     assert aspirin.target == "CHEMBL204"
 
 
+async def test_target_is_url_encoded() -> None:
+    seen: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "activities": [],
+                "page_meta": {"limit": 50, "offset": 0, "total_count": 0, "next": None},
+            },
+        )
+
+    await _fetch(_connector(httpx.MockTransport(handler)), "CHEMBL 204&limit=1")
+    [url] = seen
+    # The whole value is one parameter: the "&limit=1" smuggled in the target
+    # neither adds a parameter nor overrides the page size.
+    assert url.params.get_list("target_chembl_id") == ["CHEMBL 204&limit=1"]
+    assert url.params.get_list("limit") == ["50"]
+    assert url.params["offset"] == "0"
+
+
 async def test_next_link_prefix_is_stripped() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/chembl/api/data/activity.json":

@@ -5,6 +5,10 @@ not over HTTP — it is a thin wrapper over the same services the API uses.
 Having database access, the operator is trusted: commands take the org id
 as an argument, like the admin-secret operator endpoints, whereas the
 tenant-facing API derives it from the caller's credential.
+
+Ids and choices are typed parameters (``uuid.UUID``, enums), so Typer rejects
+a malformed value as a usage error (exit 2, naming the option) before any
+command runs, instead of a ``ValueError`` traceback from inside one.
 """
 
 import asyncio
@@ -20,7 +24,7 @@ from dndlabs.cli.formatting import format_datasets, format_report, format_run
 from dndlabs.core.config import Settings, get_settings
 from dndlabs.core.exceptions import DndLabsError
 from dndlabs.core.logging import configure_logging
-from dndlabs.core.schemas import Organization, SourceSpec, SourceType
+from dndlabs.core.schemas import ExportFormat, Organization, SourceSpec, SourceType
 from dndlabs.pipeline.factory import Container, build_container, migrate
 
 app = typer.Typer(
@@ -79,10 +83,10 @@ def bootstrap_org(name: str) -> None:
 
 
 @app.command("invite-admin")
-def invite_admin(org_id: str, email: str) -> None:
+def invite_admin(org_id: uuid.UUID, email: str) -> None:
     """Invite an organization's admin and print the single-use sign-up link (shown once)."""
     with _container() as container:
-        org = container.repositories.organizations.get(uuid.UUID(org_id))
+        org = container.repositories.organizations.get(org_id)
         invitation = container.auth.invite_admin(org, email)
         typer.echo(f"email    {invitation.email}")
         typer.echo(f"expires  {invitation.expires_at.isoformat()}")
@@ -92,7 +96,7 @@ def invite_admin(org_id: str, email: str) -> None:
 
 @app.command()
 def run(
-    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
+    org_id: Annotated[uuid.UUID, typer.Option(help="Organization UUID.")],
     source: Annotated[SourceType, typer.Option(help="Source connector.")],
     ids: Annotated[str | None, typer.Option(help="Comma-separated PubChem CIDs.")] = None,
     path: Annotated[Path | None, typer.Option(help="Input file for csv/json.")] = None,
@@ -102,7 +106,7 @@ def run(
     """Ingest, validate, store, feature-ize and enrich a dataset."""
     spec = _build_spec(source, ids, path, chembl_target, name)
     with _container() as container:
-        run_record = container.service.submit(uuid.UUID(org_id), spec)
+        run_record = container.service.submit(org_id, spec)
         # Execute synchronously rather than wait for the API's background
         # worker, which may not be running. run_now claims this exact run
         # atomically, so it never executes twice: if a worker polling the
@@ -110,9 +114,7 @@ def run(
         finished = asyncio.run(container.worker.run_now(run_record))
         typer.echo(format_run(finished))
         if finished.dataset_id:
-            report = container.repositories.reports.get_for_dataset(
-                uuid.UUID(org_id), finished.dataset_id
-            )
+            report = container.repositories.reports.get_for_dataset(org_id, finished.dataset_id)
             typer.echo("")
             typer.echo(format_report(report))
 
@@ -145,43 +147,40 @@ def _split(values: str) -> list[str]:
 
 
 @app.command()
-def datasets(org_id: Annotated[str, typer.Option(help="Organization UUID.")]) -> None:
+def datasets(org_id: Annotated[uuid.UUID, typer.Option(help="Organization UUID.")]) -> None:
     """List stored datasets for an organization, newest first."""
     with _container() as container:
-        typer.echo(format_datasets(container.repositories.datasets.list_for_org(uuid.UUID(org_id))))
+        typer.echo(format_datasets(container.repositories.datasets.list_for_org(org_id)))
 
 
 @app.command()
 def report(
-    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
-    dataset_id: str,
+    org_id: Annotated[uuid.UUID, typer.Option(help="Organization UUID.")],
+    dataset_id: uuid.UUID,
     as_json: Annotated[bool, typer.Option("--json", help="Print raw JSON.")] = False,
 ) -> None:
     """Print a dataset's quality report."""
     with _container() as container:
-        quality = container.repositories.reports.get_for_dataset(
-            uuid.UUID(org_id), uuid.UUID(dataset_id)
-        )
+        quality = container.repositories.reports.get_for_dataset(org_id, dataset_id)
         typer.echo(quality.model_dump_json(indent=2) if as_json else format_report(quality, 50))
 
 
 @app.command()
 def export(
-    org_id: Annotated[str, typer.Option(help="Organization UUID.")],
-    dataset_id: str,
-    fmt: Annotated[str, typer.Option("--format")] = "csv",
+    org_id: Annotated[uuid.UUID, typer.Option(help="Organization UUID.")],
+    dataset_id: uuid.UUID,
+    fmt: Annotated[ExportFormat, typer.Option("--format", help="Export format.")] = (
+        ExportFormat.CSV
+    ),
     output: Annotated[Path | None, typer.Option(help="Output file path.")] = None,
 ) -> None:
     """Export a stored dataset to a file, with each record's computed properties."""
-    from dndlabs.core.schemas import ExportFormat
-
     with _container() as container:
-        org, ds = uuid.UUID(org_id), uuid.UUID(dataset_id)
-        dataset = container.repositories.datasets.get(org, ds)
-        assessment = container.assessment.assess_records(org, ds, dataset.records)
+        dataset = container.repositories.datasets.get(org_id, dataset_id)
+        assessment = container.assessment.assess_records(org_id, dataset_id, dataset.records)
         profiles = {p.record_id: p for p in assessment.profiles}
-        body = container.exporter.export(dataset.records, ExportFormat(fmt), profiles)
-        out_path = output or Path(f"{dataset_id}.{fmt}")
+        body = container.exporter.export(dataset.records, fmt, profiles)
+        out_path = output or Path(f"{dataset_id}.{fmt.value}")
         out_path.write_bytes(body)
         typer.echo(str(out_path))
 

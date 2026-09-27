@@ -56,7 +56,7 @@ def _resolver(
     pubchem: Handler = _pubchem,
     chembl: Handler = _chembl,
     sleeps: list[float] | None = None,
-    **kwargs: int,
+    **kwargs: float,
 ) -> LookupStructureResolver:
     recorded = sleeps if sleeps is not None else []
     return LookupStructureResolver(
@@ -195,6 +195,14 @@ async def test_pubchem_requests_are_throttled() -> None:
         [_raw(1, lookup_name="aspirin"), _raw(2, inchikey=ASPIRIN_KEY)]
     )
     assert sleeps == [0.2, 0.2]
+
+
+async def test_pubchem_interval_is_configurable() -> None:
+    sleeps: list[float] = []
+    await _resolver(sleeps=sleeps, min_interval_seconds=0.5).resolve(
+        [_raw(1, lookup_name="aspirin"), _raw(2, inchikey=ASPIRIN_KEY)]
+    )
+    assert sleeps == [0.5, 0.5]
 
 
 @pytest.mark.parametrize("value", ["", "   "])

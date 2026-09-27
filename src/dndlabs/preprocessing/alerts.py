@@ -27,7 +27,12 @@ from dndlabs.core.schemas import AlertFamily, StructuralAlert
 #: Several patterns cover alternative notations or isomers (nitro charge
 #: forms, ortho/para quinones and their precursors).
 REACTIVE_METABOLITE_ALERTS: dict[str, tuple[str, ...]] = {
-    "Aniline (primary aromatic amine)": ("[NX3;H2;!$(N[#6]=[#7,#8,#16])]c",),
+    # H2 alone keeps amides out: an anilide's N (acetanilide) has one H, and
+    # a primary amide's or sulfonamide's NH2 (benzamide, sulfanilamide's
+    # SO2NH2) sits on a non-aromatic C or on S, never on ``c``. An aromatic
+    # carbon bearing NH2 has no valence left for an exocyclic double bond,
+    # so no "not an amide carbon" exclusion is needed (one once here never matched).
+    "Aniline (primary aromatic amine)": ("[NX3;H2]c",),
     "Nitroaromatic": ("c[NX3+](=O)[O-]", "c[NX3](=O)=O"),
     "Thiophene": ("c1ccsc1",),
     "Furan": ("c1ccoc1",),

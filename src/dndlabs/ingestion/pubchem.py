@@ -105,6 +105,7 @@ class PubChemConnector:
         batch_size: int = 100,
         max_retries: int = 3,
         backoff_seconds: float = 0.5,
+        min_interval_seconds: float = 0.2,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """Create the connector.
@@ -114,10 +115,14 @@ class PubChemConnector:
             batch_size: Maximum CIDs per request.
             max_retries: Retries for transient failures.
             backoff_seconds: Initial retry delay, doubled after each attempt.
+            min_interval_seconds: Pause between batch requests
+                (``Settings.pubchem_min_interval_seconds``; the default keeps
+                to PubChem's published 5 requests per second).
             sleep: Sleep function (injectable for tests).
         """
         self._client = client
         self._batch_size = batch_size
+        self._min_interval = min_interval_seconds
         self._retry = RetryPolicy(max_retries, backoff_seconds, sleep)
 
     async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
@@ -139,8 +144,11 @@ class PubChemConnector:
         cids = list(dict.fromkeys(i.strip() for i in spec.identifiers if i.strip()))
         # CIDs travel comma-joined in the URL path, so the batch size bounds the
         # URL length and the number of requests. Batches are sent one after
-        # another, with no throttle of their own (unlike resolution.py).
-        for batch in _chunks(cids, self._batch_size):
+        # another with a pause between them, as in resolution.py: a large CID
+        # list would otherwise exceed PubChem's rate limit and be answered 503.
+        for index, batch in enumerate(_chunks(cids, self._batch_size)):
+            if index:
+                self._retry.sleep(self._min_interval)
             path = f"/compound/cid/{','.join(batch)}/property/{','.join(PROPERTIES)}/JSON"
             for record in self._get_properties(path):
                 yield record

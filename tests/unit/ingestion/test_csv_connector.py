@@ -24,6 +24,22 @@ async def test_reads_csv(tmp_path: Path) -> None:
     assert record.activity_value == "5"
 
 
+async def test_windows_1252_file_is_read_like_an_upload(tmp_path: Path) -> None:
+    path = tmp_path / "x.csv"
+    path.write_bytes("name,smiles\nCaf\xe9ine \u2013 anhydrous,CCO\n".encode("cp1252"))
+    [record] = await _fetch(path)
+    assert record.name == "Caf\xe9ine \u2013 anhydrous"
+    assert record.smiles == "CCO"
+
+
+async def test_utf8_bom_is_stripped(tmp_path: Path) -> None:
+    path = tmp_path / "x.csv"
+    path.write_bytes("smiles,name\nCCO,\u03b1-ethanol\n".encode("utf-8-sig"))
+    [record] = await _fetch(path)
+    assert record.smiles == "CCO"
+    assert record.name == "\u03b1-ethanol"
+
+
 async def test_semicolon_delimiter(tmp_path: Path) -> None:
     path = tmp_path / "x.csv"
     path.write_text("SMILES;Value\nCCO;5\n", encoding="utf-8")
