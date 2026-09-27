@@ -356,3 +356,61 @@ export interface ApiErrorBody {
 export interface HealthResponse {
   status: "ok";
 }
+
+// ---------------------------------------------------------------------------
+// Hit/lead assessment (mirrors core/schemas.py)
+// ---------------------------------------------------------------------------
+
+/** Potency class of an activity value: < 100 nM, < 1 µM, < 10 µM, ≥ 10 µM, or open. */
+export type PotencyClass = "optimized" | "lead" | "hit" | "inactive" | "unknown";
+
+/** A computed hit-to-lead property criterion. */
+export type Criterion =
+  | "mw_under_500"
+  | "clogp_under_5"
+  | "lipinski"
+  | "rotatable_bonds_under_10"
+  | "tpsa_under_140"
+  | "tpsa_under_90";
+
+/** Computed properties of one compound (RDKit) and the criteria it meets. */
+export interface CompoundProfile {
+  record_id: string;
+  molecular_weight: number | null;
+  clogp: number | null;
+  tpsa: number | null;
+  hbd: number | null;
+  hba: number | null;
+  rotatable_bonds: number | null;
+  rings: number | null;
+  qed: number | null;
+  lipinski_violations: number | null;
+  potency_class: PotencyClass;
+  criteria: Partial<Record<Criterion, boolean>>;
+}
+
+/** How many compounds of a group meet a criterion. */
+export interface CriterionShare {
+  passing: number;
+  evaluated: number;
+}
+
+/** A criterion over all compounds, the actives and the five most potent. */
+export interface CriterionSummary {
+  criterion: Criterion;
+  label: string;
+  all_compounds: CriterionShare;
+  actives: CriterionShare;
+  most_potent: CriterionShare;
+}
+
+/** `GET /datasets/{id}/assessment`. */
+export interface DatasetAssessment {
+  dataset_id: string;
+  compounds: number;
+  potency_classes: Record<PotencyClass, number>;
+  actives: number;
+  most_potent_ids: string[];
+  criteria: CriterionSummary[];
+  profiles: CompoundProfile[];
+}

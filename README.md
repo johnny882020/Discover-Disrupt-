@@ -24,6 +24,9 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
   neutralized), activity values converted to nanomolar, duplicates removed
   across sources and salt forms.
 - **Quality reports** that explain every rejected record.
+- **Hit/lead criteria:** potency classes (hit, lead, optimized) and
+  computed properties (MW, cLogP, TPSA, Lipinski, rotatable bonds, QED),
+  each judged over all compounds, the actives and the five most potent.
 - **Structure depiction** in the browser with RDKit.js.
 - **Featurization:** RDKit descriptors and Morgan fingerprints per compound.
 - **AI enrichment (optional):** candidate analogs from NVIDIA BioNeMo GenMol.

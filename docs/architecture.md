@@ -10,9 +10,9 @@ explicitly in the PR that makes it.
       api/ (FastAPI)        cli/ (Typer)        delivery
              └───────┬───────────┘
                  pipeline/                      orchestration, export, wiring
-      ┌──────────────┼───────────────┬──────────────┐
- ingestion/     validation/      filtering/   preprocessing/  enrichment/
-      └──────────────┼───────────────┴──────────────┘
+      ┌──────────────┼───────────────┬──────────────┬──────────────┐
+ ingestion/     validation/      filtering/   preprocessing/  enrichment/  assessment/
+      └──────────────┼───────────────┴──────────────┴──────────────┘
                    core/                        contracts, protocols, config,
                                                 logging, exceptions
                    auth/                        API keys, user accounts, sessions,
@@ -22,7 +22,7 @@ explicitly in the PR that makes it.
 
 | Rule | Enforced by |
 |---|---|
-| `ingestion`, `validation`, `filtering`, `preprocessing`, `enrichment`, `auth`, `storage` import only from `core` | Code review |
+| `ingestion`, `validation`, `filtering`, `preprocessing`, `enrichment`, `assessment`, `auth`, `storage` import only from `core` | Code review |
 | Concrete classes are wired only in `pipeline/factory.py` | Composition root |
 | `api` and `cli` never touch SQLAlchemy | `Repositories` protocol bundle |
 | Values crossing a module boundary are Pydantic models | `core/schemas.py` |
@@ -76,6 +76,7 @@ any feature vector or enrichment result, since both reference
 | `QualityReport` | Counts, `issues_by_rule`, `issues`, `pass_rate` for one run |
 | `DatasetFilter` | Record query filters (MW range, target, source, activity range, pagination) |
 | `FeatureVector` | RDKit descriptors + Morgan fingerprint for one record |
+| `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class, computed properties and criteria met; each criterion over all compounds, actives and the five most potent |
 | `EnrichmentRequest` / `GeneratedCandidate` / `EnrichmentResult` | One record submitted for GenMol enrichment, one generated analog, per-record outcome (`enriched` / `skipped_no_key` / `failed`) |
 | `PipelineRun` | `org_id`, `status`, `error`, `dataset_id`, timestamps |
 | `Dataset` / `DatasetWithRecords` | Stored dataset metadata, with or without records — both `org_id`-scoped |
@@ -283,8 +284,21 @@ Malformed input never crashes a run.
 the repository layer (`GET /datasets/{id}/records?mw_min=&target=&...`) —
 selection, distinct from validation's correctness checks.
 `preprocessing/featurize.py` computes RDKit descriptors (MW, LogP, TPSA,
-HBD/HBA, rotatable bonds, ring count, QED) and a Morgan fingerprint for
-every accepted record with a canonical SMILES, stored in `feature_vectors`.
+HBD/HBA, Lipinski's NH + OH and N + O counts, rotatable bonds, ring count,
+QED) and a Morgan fingerprint for every accepted record with a canonical
+SMILES, stored in `feature_vectors`.
+
+## Hit/lead assessment
+
+`assessment/criteria.py` holds the hit-to-lead thresholds and computes a
+`DatasetAssessment` from records and their stored descriptors: potency
+classes, per-compound profiles, and each criterion over all compounds, the
+actives and the five most potent (the groups a hit-to-lead review uses).
+`pipeline/assessment.py` (`AssessmentService`) loads a dataset and its
+descriptors (`FeatureRepository.descriptors_for`, org-scoped) and
+recomputes, in memory, descriptors missing from vectors stored before they
+were added. It serves `GET /datasets/{id}/assessment`, and the exporter
+writes the profiles' properties after the record fields.
 
 ## NVIDIA BioNeMo enrichment
 
@@ -438,6 +452,11 @@ session token or an API key — in memory and `sessionStorage` (never
 - Any `401` signs the user out with a notice.
 - The query cache is cleared whenever the identity changes, so one org's
   data is never shown to another.
+
+**Datasets.** A dataset's page shows the hit/lead criteria
+(`assessment/HitLeadPanel.tsx`: potency classes, the count of actives, and
+each criterion over all compounds, actives and the five most potent) above
+its records, which carry their potency class and computed properties.
 
 **Structures.** `design-system/MoleculeView.tsx` draws 2D structures in the
 browser with RDKit.js (RDKit compiled to WebAssembly, BSD-3). The module

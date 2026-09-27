@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from dndlabs.api.dependencies import CurrentOrg, Services
 from dndlabs.core.schemas import (
     Dataset,
+    DatasetAssessment,
     DatasetFilter,
     DatasetWithRecords,
     ExportFormat,
@@ -111,6 +112,26 @@ def get_quality_report(dataset_id: uuid.UUID, org: CurrentOrg, services: Service
     return services.repositories.reports.get_for_dataset(org.org_id, dataset_id)
 
 
+@router.get("/{dataset_id}/assessment")
+def get_assessment(dataset_id: uuid.UUID, org: CurrentOrg, services: Services) -> DatasetAssessment:
+    """Assess a dataset against hit-to-lead criteria.
+
+    Potency classes from activity values (optimized < 100 nM, lead < 1 µM,
+    hit < 10 µM); property criteria (MW, cLogP, Lipinski, rotatable bonds,
+    polar surface area) over all compounds, the actives and the five most
+    potent; and every compound's computed properties.
+
+    Args:
+        dataset_id: Dataset identifier.
+        org: The authenticated org context.
+        services: Injected services.
+
+    Returns:
+        The assessment.
+    """
+    return services.assessment.assess(org.org_id, dataset_id)
+
+
 @router.get(
     "/{dataset_id}/export",
     response_class=Response,
@@ -139,7 +160,9 @@ def export_dataset(
         The serialized dataset as an attachment.
     """
     dataset = services.repositories.datasets.get(org.org_id, dataset_id)
-    body = services.exporter.export(dataset.records, fmt)
+    assessment = services.assessment.assess_records(org.org_id, dataset_id, dataset.records)
+    profiles = {p.record_id: p for p in assessment.profiles}
+    body = services.exporter.export(dataset.records, fmt, profiles)
     return Response(
         content=body,
         media_type=_MEDIA_TYPES[fmt],

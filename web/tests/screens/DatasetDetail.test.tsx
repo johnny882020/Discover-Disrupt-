@@ -25,10 +25,22 @@ describe("DatasetDetail screen", () => {
     expect(screen.getByText("Compound 0")).toBeInTheDocument();
   });
 
+  it("shows the hit/lead criteria and each compound's computed properties", async () => {
+    renderForDataset("dataset-aspirin");
+
+    expect(await screen.findByRole("heading", { name: "Hit/lead criteria" })).toBeInTheDocument();
+    expect(screen.getByText("Optimized (< 100 nM): 5")).toBeInTheDocument();
+    expect(screen.getByText("Lead (< 1 µM): 3")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Lipinski's rule of five/ })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "cLogP" })).toBeInTheDocument();
+    expect(screen.getAllByText("1.31")).toHaveLength(8);
+  });
+
   it("shows an empty-records state", async () => {
     renderForDataset("dataset-empty");
 
     expect(await screen.findByText("COX-2 CSV upload")).toBeInTheDocument();
     expect(screen.getByText(/no records yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Hit/lead criteria" })).not.toBeInTheDocument();
   });
 });

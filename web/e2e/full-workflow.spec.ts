@@ -126,6 +126,13 @@ test.describe("full pipeline workflow", () => {
     await expect(page).toHaveURL(/\/datasets\/[^/]+$/);
     await expect(page.getByRole("heading", { name: datasetPattern })).toBeVisible();
 
+    // Hit/lead criteria from the real assessment: aspirin (1.5 µM) and
+    // ibuprofen (2.5 µM) are hits; caffeine (40 µM) is inactive.
+    await expect(page.getByRole("heading", { name: "Hit/lead criteria" })).toBeVisible();
+    await expect(page.getByText("Hit (< 10 µM): 2")).toBeVisible();
+    await expect(page.getByText("Inactive (≥ 10 µM): 1")).toBeVisible();
+    await expect(page.getByRole("row", { name: /MW < 500/ })).toBeVisible();
+
     // Structures are drawn by RDKit.js (WebAssembly), not shown as SMILES text.
     const depiction = page.locator('img[src^="data:image/svg+xml"]').first();
     await expect(depiction).toBeVisible();

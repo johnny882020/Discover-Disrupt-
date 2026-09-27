@@ -165,8 +165,11 @@ def export(
     from dndlabs.core.schemas import ExportFormat
 
     with _container() as container:
-        dataset = container.repositories.datasets.get(uuid.UUID(org_id), uuid.UUID(dataset_id))
-        body = container.exporter.export(dataset.records, ExportFormat(fmt))
+        org, ds = uuid.UUID(org_id), uuid.UUID(dataset_id)
+        dataset = container.repositories.datasets.get(org, ds)
+        assessment = container.assessment.assess_records(org, ds, dataset.records)
+        profiles = {p.record_id: p for p in assessment.profiles}
+        body = container.exporter.export(dataset.records, ExportFormat(fmt), profiles)
         out_path = output or Path(f"{dataset_id}.{fmt}")
         out_path.write_bytes(body)
         typer.echo(str(out_path))

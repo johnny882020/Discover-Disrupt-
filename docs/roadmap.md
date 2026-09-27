@@ -28,8 +28,8 @@ and ADME/Tox. Line numbers below are the guide's own.
 
 | Guide section (lines) | What a project must show | Status today | Planned in |
 |---|---|---|---|
-| Hit/lead properties (32–38, 55–61) | MW < 500, clogP < 5, Lipinski, rotatable bonds < 10, PSA < 140 Å² (< 90 Å² for CNS), for the majority and for the 5 most potent compounds | Descriptors are computed and stored, but not shown or exported | R2 |
-| Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Activity normalized to nM; no potency classes or assay format | R2 |
+| Hit/lead properties (32–38, 55–61) | MW < 500, clogP < 5, Lipinski, rotatable bonds < 10, PSA < 140 Å² (< 90 Å² for CNS), for the majority and for the 5 most potent compounds | Done: shown per compound and summarized over all compounds, actives and the 5 most potent | R2 |
+| Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Potency classes and the count of actives done; no assay format yet | R2 |
 | Assays and controls (14–15, 24–25, 44, 47) | Named assays (binding, competition, selectivity) with positive and negative controls | No assay metadata | R2 |
 | Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | No structural alerts | R2 |
 | Novelty, SAR, series (28–31, 52–54) | Novel scaffold, SAR-amenable, pharmacophore, 1–2 series | None | R3 |
@@ -97,12 +97,12 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
   CIDs, ChEMBL IDs and names, as well as SMILES and InChI; `.smi` and
   `.mol` files. Identifiers are resolved via PubChem/ChEMBL, but only for
   columns the user maps for lookup.
-- **Properties in view:** the computed descriptors (MW, clogP, TPSA, H-bond
-  donors/acceptors, rotatable bonds, QED) in the API, the records table,
-  the compound view and exports.
-- **Hit/lead criteria panel:** the guide's thresholds per compound and
-  aggregated as the guide asks (majority; 5 most potent). Potency classes:
-  hit < 10 µM, lead < 1 µM, optimized < 100 nM. Count of actives.
+- **Properties in view** *(done)*: the computed descriptors (MW, clogP,
+  TPSA, H-bond donors/acceptors, rotatable bonds, QED) in the API, the
+  records table and exports.
+- **Hit/lead criteria panel** *(done)*: the guide's thresholds per compound
+  and over all compounds, the actives and the 5 most potent. Potency
+  classes: hit < 10 µM, lead < 1 µM, optimized < 100 nM. Count of actives.
 - **Liabilities:** PAINS, Brenk and reactive-metabolite alerts, highlighted
   on the structure; filters such as "hide PAINS".
 - **Assay metadata:** assay format (biochemical / cell-based), readout and

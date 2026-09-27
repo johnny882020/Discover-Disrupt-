@@ -388,10 +388,22 @@ class FakeReports:
 class FakeFeatures:
     def __init__(self) -> None:
         self.items: list[FeatureVector] = []
+        self.owners: dict[uuid.UUID, uuid.UUID] = {}
 
     def save_many(self, org_id: uuid.UUID, vectors: Sequence[FeatureVector]) -> int:
         self.items.extend(vectors)
+        self.owners.update({v.record_id: org_id for v in vectors})
         return len(vectors)
+
+    def descriptors_for(
+        self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, dict[str, float]]:
+        wanted = set(record_ids)
+        return {
+            v.record_id: dict(v.descriptors)
+            for v in self.items
+            if v.record_id in wanted and self.owners.get(v.record_id) == org_id
+        }
 
 
 class FakeEnrichments:

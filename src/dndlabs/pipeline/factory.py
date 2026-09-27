@@ -19,6 +19,7 @@ from dndlabs.ingestion.pubchem import PubChemConnector, build_pubchem_client
 from dndlabs.ingestion.registry import ConnectorRegistry
 from dndlabs.ingestion.resolution import LookupStructureResolver
 from dndlabs.ingestion.uploads import UploadConnector, UploadLimits, UploadService
+from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
@@ -43,6 +44,7 @@ class Container:
         exporter: Dataset exporter.
         auth: Auth service.
         uploads: Upload service.
+        assessment: Hit-to-lead assessment service.
     """
 
     settings: Settings
@@ -51,6 +53,7 @@ class Container:
     exporter: DatasetExporter
     auth: AuthService
     uploads: UploadService
+    assessment: AssessmentService
     _engine: Engine
     _http_clients: tuple[httpx.Client, ...]
 
@@ -130,11 +133,12 @@ def build_container(
             JsonConnector(),
         ]
     )
+    featurizer = RdkitFeaturizer()
     service = PipelineService(
         connectors=connectors,
         validator=Validator(),
         repositories=repositories,
-        featurizer=RdkitFeaturizer(),
+        featurizer=featurizer,
         enrichment_client=enrichment_client,
         resolver=LookupStructureResolver(
             pubchem_http,
@@ -151,6 +155,7 @@ def build_container(
         exporter=DatasetExporter(),
         auth=AuthService(repositories, auth_policy(settings)),
         uploads=UploadService(repositories.uploads, repositories.mapping_templates, upload_limits),
+        assessment=AssessmentService(repositories, featurizer),
         _engine=engine,
         _http_clients=tuple(http_clients),
     )

@@ -1,7 +1,7 @@
 """RDKit-based featurization of normalized records for ML consumption."""
 
 from rdkit import Chem, RDLogger
-from rdkit.Chem import Descriptors, rdFingerprintGenerator, rdMolDescriptors
+from rdkit.Chem import Descriptors, Lipinski, rdFingerprintGenerator, rdMolDescriptors
 
 from dndlabs.core.exceptions import ValidationError
 from dndlabs.core.schemas import FeatureVector, NormalizedRecord
@@ -18,7 +18,13 @@ _DESCRIPTORS: dict[str, object] = {
     "rotatable_bonds": rdMolDescriptors.CalcNumRotatableBonds,
     "num_rings": rdMolDescriptors.CalcNumRings,
     "qed": Descriptors.qed,
+    # Lipinski's rule-of-five counts: donors as NH + OH, acceptors as N + O.
+    "nhoh_count": Lipinski.NHOHCount,  # type: ignore[attr-defined]
+    "no_count": Lipinski.NOCount,  # type: ignore[attr-defined]
 }
+
+#: Descriptor names every feature vector carries.
+DESCRIPTOR_NAMES: tuple[str, ...] = tuple(_DESCRIPTORS)
 
 
 class RdkitFeaturizer:

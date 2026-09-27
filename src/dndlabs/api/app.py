@@ -55,6 +55,7 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             exporter=container.exporter,
             auth=container.auth,
             uploads=container.uploads,
+            assessment=container.assessment,
             settings=settings,
         )
         try:
