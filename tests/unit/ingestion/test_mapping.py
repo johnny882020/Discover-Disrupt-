@@ -92,3 +92,34 @@ def test_a_matching_template_wins_and_the_most_specific_one_is_used() -> None:
     mapping, template = suggest_mapping(table, [small, other, large])
     assert template == large
     assert mapping == {"Struct": ColumnRole.SMILES, "Val": ColumnRole.ACTIVITY_VALUE}
+
+
+def test_new_structure_headers_are_mapped() -> None:
+    table = _table(["MolFile", "PubChem CID", "ChEMBL ID", "Lookup Name"])
+    mapping, _ = suggest_mapping(table, [])
+    assert mapping == {
+        "MolFile": ColumnRole.MOL_BLOCK,
+        "PubChem CID": ColumnRole.PUBCHEM_CID,
+        "ChEMBL ID": ColumnRole.CHEMBL_ID,
+        "Lookup Name": ColumnRole.LOOKUP_NAME,
+    }
+
+
+def test_mol_blocks_and_chembl_ids_are_recognized_by_content() -> None:
+    block = "\n  RDKit\n\n  1  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
+    table = _table(["Structure", "Ref"], [block, "CHEMBL25"], [block, "chembl113"])
+    mapping, _ = suggest_mapping(table, [])
+    assert mapping == {"Structure": ColumnRole.MOL_BLOCK, "Ref": ColumnRole.CHEMBL_ID}
+
+
+def test_names_and_cids_are_never_suggested_from_content() -> None:
+    # A lookup sends values to PubChem; internal codes must never go by default.
+    table = _table(["Compound", "Number"], ["aspirin", "2244"], ["caffeine", "2519"])
+    mapping, _ = suggest_mapping(table, [])
+    assert mapping == {}
+
+
+def test_an_identifier_header_does_not_stop_the_search_for_a_structure_column() -> None:
+    table = _table(["InChIKey", "Structure"], ["BSYNRYMUTXBXSQ-UHFFFAOYSA-N", "CCO"])
+    mapping, _ = suggest_mapping(table, [])
+    assert mapping == {"InChIKey": ColumnRole.INCHIKEY, "Structure": ColumnRole.SMILES}

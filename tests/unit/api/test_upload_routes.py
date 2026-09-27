@@ -109,7 +109,7 @@ def test_upload_run_requires_a_structure_column(
         headers=auth_headers,
     )
     assert response.status_code == 422
-    assert "SMILES or InChI" in response.json()["detail"][0]["msg"]
+    assert "identifies the structure" in response.json()["detail"][0]["msg"]
 
 
 def test_mapping_templates_crud_and_suggestion(

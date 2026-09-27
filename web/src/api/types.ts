@@ -173,7 +173,11 @@ export type ColumnRole =
   | "name"
   | "smiles"
   | "inchi"
+  | "mol_block"
   | "inchikey"
+  | "pubchem_cid"
+  | "chembl_id"
+  | "lookup_name"
   | "molecular_formula"
   | "molecular_weight"
   | "target"
@@ -187,7 +191,7 @@ export type ColumnRole =
 export type ColumnMapping = Record<string, ColumnRole>;
 
 /** File formats accepted for upload. */
-export type UploadFormat = "csv" | "tsv" | "xlsx" | "sdf";
+export type UploadFormat = "csv" | "tsv" | "xlsx" | "sdf" | "smi" | "mol";
 
 /** Metadata of an uploaded file. */
 export interface Upload {

@@ -300,7 +300,11 @@ class ColumnRole(StrEnum):
     NAME = "name"
     SMILES = "smiles"
     INCHI = "inchi"
+    MOL_BLOCK = "mol_block"
     INCHIKEY = "inchikey"
+    PUBCHEM_CID = "pubchem_cid"
+    CHEMBL_ID = "chembl_id"
+    LOOKUP_NAME = "lookup_name"
     MOLECULAR_FORMULA = "molecular_formula"
     MOLECULAR_WEIGHT = "molecular_weight"
     TARGET = "target"
@@ -312,7 +316,25 @@ class ColumnRole(StrEnum):
 
 
 #: Roles that identify a structure; an upload's mapping needs at least one.
-STRUCTURE_ROLES = frozenset({ColumnRole.SMILES, ColumnRole.INCHI})
+#: SMILES, InChI and MOL blocks are read directly; the others are looked up
+#: in PubChem or ChEMBL (see :data:`LOOKUP_ROLES`).
+STRUCTURE_ROLES = frozenset(
+    {
+        ColumnRole.SMILES,
+        ColumnRole.INCHI,
+        ColumnRole.MOL_BLOCK,
+        ColumnRole.INCHIKEY,
+        ColumnRole.PUBCHEM_CID,
+        ColumnRole.CHEMBL_ID,
+        ColumnRole.LOOKUP_NAME,
+    }
+)
+
+#: Structure roles whose values are sent to PubChem or ChEMBL to find the
+#: structure, so only when the user maps a column to one of them.
+LOOKUP_ROLES = frozenset(
+    {ColumnRole.INCHIKEY, ColumnRole.PUBCHEM_CID, ColumnRole.CHEMBL_ID, ColumnRole.LOOKUP_NAME}
+)
 
 
 class SourceSpec(_Contract):
@@ -353,7 +375,10 @@ def _check_mapping(mapping: dict[str, ColumnRole]) -> None:
     """Require a structure column and at most one column per role."""
     roles = [role for role in mapping.values() if role is not ColumnRole.IGNORE]
     if not STRUCTURE_ROLES.intersection(roles):
-        raise ValueError("column_mapping needs a SMILES or InChI column")
+        raise ValueError(
+            "column_mapping needs a column that identifies the structure: SMILES, InChI, "
+            "MOL block, InChIKey, PubChem CID, ChEMBL ID or a name to look up"
+        )
     repeated = sorted({role.value for role in roles if roles.count(role) > 1})
     if repeated:
         raise ValueError(f"each role can be assigned to one column only: {repeated}")
@@ -366,6 +391,8 @@ class UploadFormat(StrEnum):
     TSV = "tsv"
     XLSX = "xlsx"
     SDF = "sdf"
+    SMI = "smi"
+    MOL = "mol"
 
 
 class Upload(_Contract):
@@ -415,14 +442,27 @@ class UploadPreview(_Contract):
 
 
 class RawRecord(_Contract):
-    """Unvalidated connector output. Numeric fields may still be strings."""
+    """Unvalidated connector output. Numeric fields may still be strings.
+
+    A record identifies its structure by ``smiles``, ``inchi`` or
+    ``mol_block``, or by an identifier (``inchikey``, ``pubchem_cid``,
+    ``chembl_id``, ``lookup_name``) that structure resolution looks up before
+    validation. Resolution records where the structure came from in
+    ``structure_source``, or why none was found in ``structure_error``.
+    """
 
     source: SourceType
     source_record_id: str
     name: str | None = None
     smiles: str | None = None
     inchi: str | None = None
+    mol_block: str | None = None
     inchikey: str | None = None
+    pubchem_cid: str | None = None
+    chembl_id: str | None = None
+    lookup_name: str | None = None
+    structure_source: str | None = None
+    structure_error: str | None = None
     molecular_formula: str | None = None
     molecular_weight: str | float | None = None
     target: str | None = None

@@ -1,0 +1,18 @@
+{
+  "molecules": [
+    {
+      "molecule_chembl_id": "CHEMBL25",
+      "pref_name": "ASPIRIN",
+      "molecule_structures": {
+        "canonical_smiles": "CC(=O)Oc1ccccc1C(=O)O",
+        "standard_inchi_key": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"
+      }
+    },
+    {
+      "molecule_chembl_id": "CHEMBL1201580",
+      "pref_name": "INSULIN GLARGINE",
+      "molecule_structures": null
+    }
+  ],
+  "page_meta": {"limit": 3, "next": null, "offset": 0, "previous": null, "total_count": 2}
+}

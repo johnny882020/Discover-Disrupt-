@@ -9,13 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from dndlabs.core.exceptions import IngestionError
 from dndlabs.core.logging import get_logger
 from dndlabs.core.schemas import RawRecord, SourceSpec, SourceType
+from dndlabs.ingestion.http import RETRYABLE_STATUS, RetryPolicy, send_with_retries
 
 logger = get_logger(__name__)
 
 PROPERTIES = ("Title", "MolecularFormula", "MolecularWeight", "SMILES", "ConnectivitySMILES",
               "InChI", "InChIKey")  # fmt: skip
-
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class PubChemProperties(BaseModel):
@@ -108,9 +107,7 @@ class PubChemConnector:
         """
         self._client = client
         self._batch_size = batch_size
-        self._max_retries = max_retries
-        self._backoff = backoff_seconds
-        self._sleep = sleep
+        self._retry = RetryPolicy(max_retries, backoff_seconds, sleep)
 
     async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
         """Fetch compounds listed in ``spec`` by CID.
@@ -138,7 +135,7 @@ class PubChemConnector:
         response = self._request(path)
         if response.is_error:
             raise IngestionError(
-                f"PubChem request failed ({response.status_code}): {_fault_message(response)}"
+                f"PubChem request failed ({response.status_code}): {fault_message(response)}"
             )
         try:
             parsed = _PropertyResponse.model_validate_json(response.content)
@@ -148,31 +145,16 @@ class PubChemConnector:
 
     def _request(self, path: str) -> httpx.Response:
         """GET with retries on transient errors."""
-        delay = self._backoff
-        for attempt in range(self._max_retries + 1):
-            try:
-                response = self._client.get(path)
-            except httpx.TransportError as exc:
-                if attempt == self._max_retries:
-                    raise IngestionError(f"PubChem unreachable: {exc}") from exc
-                logger.warning("pubchem transport error, retrying", extra={"error": str(exc)})
-            else:
-                if response.status_code not in _RETRYABLE_STATUS:
-                    return response
-                if attempt == self._max_retries:
-                    raise IngestionError(
-                        f"PubChem unavailable after {attempt + 1} attempts "
-                        f"({response.status_code}): {_fault_message(response)}"
-                    )
-                logger.warning(
-                    "pubchem busy, retrying", extra={"status_code": response.status_code}
-                )
-            self._sleep(delay)
-            delay *= 2
-        raise IngestionError("unreachable retry state")  # pragma: no cover
+        response = send_with_retries(lambda: self._client.get(path), "PubChem", self._retry)
+        if response.status_code in RETRYABLE_STATUS:
+            raise IngestionError(
+                f"PubChem unavailable after {self._retry.max_retries + 1} attempts "
+                f"({response.status_code}): {fault_message(response)}"
+            )
+        return response
 
 
-def _fault_message(response: httpx.Response) -> str:
+def fault_message(response: httpx.Response) -> str:
     """Extract the PUG REST ``Fault`` message, falling back to the body text."""
     try:
         fault = response.json().get("Fault", {})

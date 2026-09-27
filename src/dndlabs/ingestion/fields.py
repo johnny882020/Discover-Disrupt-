@@ -15,7 +15,11 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "name": ("name", "compound_name", "title"),
     "smiles": ("smiles", "canonical_smiles", "isomeric_smiles"),
     "inchi": ("inchi",),
+    "mol_block": ("mol_block", "molblock", "molfile", "ctab"),
     "inchikey": ("inchikey", "inchi_key"),
+    "pubchem_cid": ("pubchem_cid",),
+    "chembl_id": ("chembl_id",),
+    "lookup_name": ("lookup_name",),
     "molecular_formula": ("molecular_formula", "formula"),
     "molecular_weight": ("molecular_weight", "mw", "mol_weight"),
     "target": ("target", "target_name", "target_chembl_id"),
@@ -27,7 +31,10 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 _ALIAS_TO_FIELD = {alias: field for field, aliases in FIELD_ALIASES.items() for alias in aliases}
 
-IDENTIFIER_FIELDS = ("smiles", "inchi")
+#: Fields that identify a record's structure, read directly or looked up.
+IDENTIFIER_FIELDS = (
+    "smiles", "inchi", "mol_block", "inchikey", "pubchem_cid", "chembl_id", "lookup_name",
+)  # fmt: skip
 NUMERIC_FIELDS = ("molecular_weight", "activity_value")
 
 
@@ -62,11 +69,16 @@ def canonical_field(column: str) -> str | None:
     return _ALIAS_TO_FIELD.get(normalize_header(column))
 
 
-def _clean(value: Any) -> Any:
-    """Normalize blank strings to ``None`` and strip whitespace."""
+def _clean(value: Any, field: str | None = None) -> Any:
+    """Normalize blank strings to ``None`` and strip whitespace.
+
+    A MOL block keeps its layout: its first line (the title) may be blank,
+    and removing it would make the block unreadable.
+    """
     if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
+        if not value.strip():
+            return None
+        return value if field == "mol_block" else value.strip()
     return value
 
 
@@ -97,8 +109,8 @@ def build_raw_record(source: SourceType, row: Mapping[str, Any], fallback_id: st
     fields: dict[str, Any] = {}
     extra: dict[str, Any] = {}
     for column, value in row.items():
-        cleaned = _clean(value)
         field = canonical_field(column)
+        cleaned = _clean(value, field)
         if field is None:
             extra[column] = cleaned
         elif fields.get(field) is None:
@@ -134,8 +146,8 @@ def build_mapped_record(
     fields: dict[str, Any] = {}
     extra: dict[str, Any] = {}
     for column, value in row.items():
-        cleaned = _clean(value)
         role = mapping.get(column)
+        cleaned = _clean(value, role.value if role is not None else None)
         if role is None:
             extra[column] = cleaned
         elif role is not ColumnRole.IGNORE:

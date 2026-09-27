@@ -129,3 +129,54 @@ async def test_upload_run_reads_the_orgs_file_with_the_run_mapping() -> None:
 
     with pytest.raises(NotFoundError):  # another org's upload is refused before a run exists
         service.submit(uuid.uuid4(), spec)
+
+
+async def test_structures_are_resolved_before_validation() -> None:
+    import httpx
+    from tests.conftest import FIXTURES
+
+    from dndlabs.core.schemas import ColumnRole
+    from dndlabs.ingestion.http import RetryPolicy
+    from dndlabs.ingestion.resolution import LookupStructureResolver
+    from dndlabs.ingestion.uploads import UploadConnector, UploadService
+
+    def pubchem(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=(FIXTURES / "pubchem" / "properties_3.json").read_bytes()
+        )
+
+    def offline(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("ChEMBL must not be called")
+
+    repos = fake_repositories()
+    uploads = UploadService(repos.uploads, repos.mapping_templates)
+    upload = uploads.store(ORG_ID, "lab.csv", b"id,cid\nA-1,2244\nA-2,999\n").upload
+    service = PipelineService(
+        connectors=DictProvider(UploadConnector(repos.uploads)),
+        validator=Validator(),
+        repositories=repos,
+        resolver=LookupStructureResolver(
+            httpx.Client(base_url="https://pubchem.test", transport=httpx.MockTransport(pubchem)),
+            httpx.Client(base_url="https://chembl.test", transport=httpx.MockTransport(offline)),
+            retry=RetryPolicy(sleep=lambda _: None),
+        ),
+    )
+    spec = SourceSpec(
+        source=SourceType.UPLOAD,
+        upload_id=upload.id,
+        column_mapping={"id": ColumnRole.SOURCE_RECORD_ID, "cid": ColumnRole.PUBCHEM_CID},
+    )
+
+    finished = await service.execute(ORG_ID, service.submit(ORG_ID, spec).id)
+
+    assert finished.status is RunStatus.SUCCEEDED
+    dataset = repos.datasets.get(ORG_ID, finished.dataset_id)  # type: ignore[arg-type]
+    [record] = dataset.records
+    assert (record.source_record_id, record.inchikey) == ("A-1", "BSYNRYMUTXBXSQ-UHFFFAOYSA-N")
+    report = repos.reports.get_for_dataset(ORG_ID, finished.dataset_id)  # type: ignore[arg-type]
+    lookups = {(i.source_record_id, i.severity.value, i.message) for i in report.issues
+               if i.rule == "structure_lookup"}  # fmt: skip
+    assert lookups == {
+        ("A-1", "warning", "structure from PubChem CID 2244"),
+        ("A-2", "error", "PubChem has no compound with CID 999"),
+    }

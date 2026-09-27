@@ -34,6 +34,9 @@ explicitly in the PR that makes it.
 SourceSpec → Connector.fetch (or fetch_for_org) → RawRecord[]
                                    │
                                    ▼
+             StructureResolver.resolve (MOL blocks; PubChem/ChEMBL lookups)
+                                   │
+                                   ▼
                              Validator.run → NormalizedRecord[] + QualityReport
                                    │
                    DatasetRepository.create (records persisted — required for the FKs below)
@@ -64,10 +67,10 @@ any feature vector or enrichment result, since both reference
 | `InvitationCreate` / `AdminInvitationCreate` / `InvitationCreated` / `InvitationToken` / `InvitationPreview` / `InvitationAccept` / `PasswordChange` | Invitation and password request/response bodies; emails are normalized (trimmed, lowercased) on input |
 | `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
 | `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `upload_id` + `column_mapping`, `dataset_name` — cross-validated per source |
-| `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `name`, `activity_value`, … or `ignore`); a mapping needs `smiles` or `inchi` and uses each other role once |
+| `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`, `lookup_name`, `name`, `activity_value`, … or `ignore`); a mapping needs one of the `STRUCTURE_ROLES` and uses each other role once. `LOOKUP_ROLES` are the structure roles resolved by a PubChem/ChEMBL lookup |
 | `Upload` / `UploadFormat` / `UploadPreview` | A stored file's metadata (`csv` / `tsv` / `xlsx` / `sdf`, size, SHA-256); its columns, first rows, row count and suggested mapping |
 | `MappingTemplateCreate` / `MappingTemplate` | A named, org-saved column mapping, suggested for uploads whose headers include its columns |
-| `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra` |
+| `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra`. Carries the structure as `smiles`/`inchi`/`mol_block` or an identifier to look up, plus resolution's `structure_source` or `structure_error` |
 | `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id` |
 | `ValidationIssue` | `rule`, `severity` (`error` / `warning`), `source_record_id`, `field`, `message` |
 | `QualityReport` | Counts, `issues_by_rule`, `issues`, `pass_rate` for one run |
@@ -98,6 +101,10 @@ class ValidationRule(Protocol):
     name: str
 
     def apply(self, raw: RawRecord, record: NormalizedRecord) -> RuleOutcome: ...
+
+
+class StructureResolver(Protocol):
+    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]: ...
 
 
 class Featurizer(Protocol):
@@ -247,7 +254,8 @@ left it.
 
 | # | Rule | Errors (record rejected) | Warnings (record kept) |
 |---|---|---|---|
-| 1 | `schema` | No SMILES or InChI; molecular weight not numeric or ≤ 0 | — |
+| 0 | `structure_lookup` | The structure could not be resolved from the record's MOL block or identifiers (the reason is the message) | Structure looked up (the source is the message, e.g. "structure from PubChem CID 2244") |
+| 1 | `schema` | No structure and no identifier to look up; molecular weight not numeric or ≤ 0 | — |
 | 2 | `compound_identity` | Unparsable SMILES/InChI; SMILES and InChI describe different compounds | Supplied InChIKey/formula disagrees with the structure (computed value used) |
 | 3 | `standardization` | — | Structure changed by standardization (salts/solvents stripped, charges neutralized; the submitted SMILES is kept in the message); multi-component structure (mixture) |
 | 4 | `unit_normalization` | Value not numeric or negative; missing/unsupported unit; unsupported relation operator | Unit given without a value |
@@ -295,9 +303,20 @@ explicit or absent, never approximated.
 |---|---|---|
 | PubChem | `ingestion/pubchem.py` | PUG REST property endpoint. CIDs batched (default 100). Exponential backoff on 429/5xx/transport errors. |
 | ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...`, paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same backoff pattern as PubChem. |
-| Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
+| Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF, SMILES, MOL) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
 | CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases matched ignoring case, spacing and punctuation (`fields.normalize_header`); unknown columns go into `extra`. |
 | JSON | `ingestion/json_connector.py` | Server-side path (operators). A top-level list, or `{"records": [...]}` with flat scalar values. |
+
+Every run's records then pass through structure resolution
+(`ingestion/resolution.py`, `LookupStructureResolver`), before validation.
+Records with SMILES or InChI are untouched. Otherwise a MOL block is read
+locally, then the record's InChIKey, PubChem CID, name (PubChem PUG REST)
+or ChEMBL ID (`/molecule.json`) is looked up. Lookups are de-duplicated,
+batched where the service allows it, throttled and capped per run
+(`DNDLABS_STRUCTURE_LOOKUP_LIMIT`). An unavailable service marks the
+affected records unresolved rather than failing the run, as enrichment
+does. PubChem, ChEMBL and resolution share one retry helper
+(`ingestion/http.py`).
 | UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
 ## Exceptions (`core/exceptions.py`)
@@ -429,12 +448,13 @@ loaded — or if it cannot load or parse the SMILES — the SMILES text is shown
 instead.
 
 **Uploads.** The Run page's default source is a file: drag-and-drop or
-choose a CSV, TSV, Excel or SD file (`design-system/FileDrop.tsx`). The
+choose a CSV, TSV, Excel, SD, SMILES or MOL file (`design-system/FileDrop.tsx`). The
 upload's preview opens in `uploads/MappingEditor.tsx`, which shows the first
 rows with structures drawn and a role selector per column, pre-set from the
 server's suggestion. The mapping is checked in the browser with the same
 rules as the server (`uploads/columnRoles.ts`) and can be saved as a named
-template for future uploads.
+template for future uploads. When a column is mapped to a lookup role, the
+editor states that its values will be sent to PubChem or ChEMBL.
 
 **Theme.** Light and dark follow the operating system's colour scheme;
 `<html data-theme="light|dark">` forces one. The Tailwind `dark:` variant

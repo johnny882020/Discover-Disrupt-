@@ -5,7 +5,7 @@
  */
 import type { ColumnMapping, ColumnRole, UploadPreview } from "../api/types";
 import { MoleculeView } from "../design-system/MoleculeView";
-import { ROLE_OPTIONS, UNMAPPED_LABEL, mappingProblem } from "./columnRoles";
+import { ROLE_OPTIONS, UNMAPPED_LABEL, lookupColumns, mappingProblem } from "./columnRoles";
 
 /** Preview rows shown in the table. */
 const SHOWN_ROWS = 8;
@@ -22,6 +22,7 @@ function formatSize(bytes: number): string {
 
 export function MappingEditor({ preview, mapping, onChange }: MappingEditorProps): React.JSX.Element {
   const problem = mappingProblem(mapping);
+  const lookedUp = lookupColumns(mapping);
 
   function setRole(column: string, value: string): void {
     const next = { ...mapping };
@@ -97,6 +98,12 @@ export function MappingEditor({ preview, mapping, onChange }: MappingEditorProps
       {preview.row_count > SHOWN_ROWS ? (
         <p className="text-xs text-ink/60 dark:text-paper/60">
           Showing {SHOWN_ROWS} of {preview.row_count} rows.
+        </p>
+      ) : null}
+      {lookedUp.length > 0 ? (
+        <p className="text-sm text-ink/70 dark:text-paper/70">
+          Values in {lookedUp.map((column) => `“${column}”`).join(", ")} will be sent to PubChem or ChEMBL to find
+          the structures, for rows without one. Unrecognized values are reported in the quality report.
         </p>
       ) : null}
       {problem ? (

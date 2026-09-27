@@ -148,7 +148,7 @@ async def test_connector_is_org_scoped_and_checks_columns(
     ("mapping", "message"),
     [
         (None, "requires upload_id and column_mapping"),
-        ({"A": ColumnRole.NAME}, "needs a SMILES or InChI column"),
+        ({"A": ColumnRole.NAME}, "needs a column that identifies the structure"),
         ({"A": ColumnRole.SMILES, "B": ColumnRole.SMILES}, "one column only"),
     ],
 )

@@ -1,8 +1,11 @@
-"""Read uploaded or on-disk tables (CSV, TSV, XLSX, SDF) into a uniform shape.
+"""Read uploaded or on-disk tables (CSV, TSV, XLSX, SDF, SMILES, MOL) into a uniform shape.
 
 Every reader returns a :class:`Table`: header names plus rows of strings
 (``""`` for a missing value), with fully blank rows dropped. Nothing is
 interpreted here — which column holds what is decided by a column mapping.
+Cell values are kept exactly as written (headers are trimmed): whitespace
+can be significant, as in a MOL block's blank title line, and values are
+cleaned per field when records are built (``ingestion/fields.py``).
 """
 
 import csv
@@ -29,6 +32,9 @@ _EXTENSIONS: dict[str, UploadFormat] = {
     ".xlsx": UploadFormat.XLSX,
     ".sdf": UploadFormat.SDF,
     ".sd": UploadFormat.SDF,
+    ".smi": UploadFormat.SMI,
+    ".smiles": UploadFormat.SMI,
+    ".mol": UploadFormat.MOL,
 }
 
 
@@ -78,6 +84,10 @@ def read_table(data: bytes, fmt: UploadFormat, max_rows: int) -> Table:
         table = _read_xlsx(data)
     elif fmt is UploadFormat.SDF:
         table = _read_sdf(data)
+    elif fmt is UploadFormat.SMI:
+        table = _read_smi(_decode(data))
+    elif fmt is UploadFormat.MOL:
+        table = _read_mol(_decode(data))
     else:
         text = _decode(data)
         table = read_delimited(text, "\t" if fmt is UploadFormat.TSV else None)
@@ -121,7 +131,7 @@ def read_delimited(text: str, delimiter: str | None = None) -> Table:
         raise IngestionError(f"cannot parse delimited text: {exc}") from exc
     columns = [str(c).strip() for c in frame.columns]
     rows = [
-        {column: str(value).strip() for column, value in zip(columns, values, strict=True)}
+        {column: str(value) for column, value in zip(columns, values, strict=True)}
         for values in frame.itertuples(index=False, name=None)
     ]
     return Table(columns=columns, rows=_without_blank_rows(rows))
@@ -149,7 +159,7 @@ def _read_xlsx(data: bytes) -> Table:
         ]
     finally:
         workbook.close()
-    values = [row for row in values if any(row)]
+    values = [row for row in values if any(cell.strip() for cell in row)]
     if not values:
         return Table(columns=[], rows=[])
     columns = _unique_headers(values[0])
@@ -164,7 +174,7 @@ def _cell_text(value: object) -> str:
     """Render a spreadsheet cell as text (whole-number floats without ``.0``)."""
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-    return str(value).strip()
+    return str(value)
 
 
 def _read_sdf(data: bytes) -> Table:
@@ -182,7 +192,7 @@ def _read_sdf(data: bytes) -> Table:
             rows.append({"smiles": "", "name": ""})
             continue
         row = {
-            "smiles": _sdf_smiles(mol),
+            "smiles": mol_to_smiles(mol),
             "name": str(mol.GetProp("_Name")).strip() if mol.HasProp("_Name") else "",
         }
         for prop in mol.GetPropNames():
@@ -196,7 +206,35 @@ def _read_sdf(data: bytes) -> Table:
     return Table(columns=columns, rows=filled)
 
 
-def _sdf_smiles(mol: Chem.Mol) -> str:
+def _read_smi(text: str) -> Table:
+    """Read a SMILES file: one ``SMILES [name]`` per line, whitespace-separated.
+
+    Blank lines and ``#`` comments are skipped, as is a first line whose
+    first field is the word ``smiles`` (a header).
+    """
+    rows: list[dict[str, str]] = []
+    for number, line in enumerate(text.splitlines()):
+        fields = line.split(maxsplit=1)
+        if not fields or fields[0].startswith("#"):
+            continue
+        if number == 0 and fields[0].lower() == "smiles":
+            continue
+        rows.append({"smiles": fields[0], "name": fields[1].strip() if len(fields) > 1 else ""})
+    if not rows:
+        raise IngestionError("the SMILES file contains no structures")
+    return Table(columns=["smiles", "name"], rows=rows)
+
+
+def _read_mol(text: str) -> Table:
+    """Read a MOL file: a single molecule, as one row of SMILES and name."""
+    mol = Chem.MolFromMolBlock(text, sanitize=False, removeHs=False)
+    if mol is None:
+        raise IngestionError("cannot read the MOL file")
+    name = text.splitlines()[0].strip() if text.strip() else ""
+    return Table(columns=["smiles", "name"], rows=[{"smiles": mol_to_smiles(mol), "name": name}])
+
+
+def mol_to_smiles(mol: Chem.Mol) -> str:
     """Canonical SMILES of a sanitized copy, or the SMILES as written if RDKit rejects it."""
     sanitized = Chem.Mol(mol)
     failed = Chem.SanitizeMol(sanitized, catchErrors=True)
@@ -215,5 +253,5 @@ def _unique_headers(cells: list[str]) -> list[str]:
 
 
 def _without_blank_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Drop rows whose every value is empty."""
-    return [row for row in rows if any(value for value in row.values())]
+    """Drop rows whose every value is empty or whitespace."""
+    return [row for row in rows if any(value.strip() for value in row.values())]

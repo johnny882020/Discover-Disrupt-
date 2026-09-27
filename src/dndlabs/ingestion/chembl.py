@@ -9,10 +9,9 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from dndlabs.core.exceptions import IngestionError
 from dndlabs.core.logging import get_logger
 from dndlabs.core.schemas import RawRecord, SourceSpec, SourceType
+from dndlabs.ingestion.http import RetryPolicy, send_with_retries
 
 logger = get_logger(__name__)
-
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class ChemblActivity(BaseModel):
@@ -92,9 +91,7 @@ class ChemblConnector:
         """
         self._client = client
         self._page_size = page_size
-        self._max_retries = max_retries
-        self._backoff = backoff_seconds
-        self._sleep = sleep
+        self._retry = RetryPolicy(max_retries, backoff_seconds, sleep)
 
     async def fetch(self, spec: SourceSpec) -> AsyncIterator[RawRecord]:
         """Fetch activities for ``spec.chembl_target``, paginating as needed.
@@ -129,31 +126,15 @@ class ChemblConnector:
 
     def _get_page(self, path: str) -> _ActivityResponse:
         """GET one page, with retries on transient errors."""
-        delay = self._backoff
-        for attempt in range(self._max_retries + 1):
-            try:
-                response = self._client.get(path)
-            except httpx.TransportError as exc:
-                if attempt == self._max_retries:
-                    raise IngestionError(f"ChEMBL unreachable: {exc}") from exc
-                logger.warning("chembl transport error, retrying", extra={"error": str(exc)})
-                self._sleep(delay)
-                delay *= 2
-                continue
-            if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
-                logger.warning("chembl busy, retrying", extra={"status_code": response.status_code})
-                self._sleep(delay)
-                delay *= 2
-                continue
-            if response.is_error:
-                raise IngestionError(
-                    f"ChEMBL request failed ({response.status_code}): {response.text[:200]}"
-                )
-            try:
-                return _ActivityResponse.model_validate_json(response.content)
-            except ValidationError as exc:
-                raise IngestionError(f"unexpected ChEMBL response shape: {exc}") from exc
-        raise IngestionError("unreachable retry state")  # pragma: no cover
+        response = send_with_retries(lambda: self._client.get(path), "ChEMBL", self._retry)
+        if response.is_error:
+            raise IngestionError(
+                f"ChEMBL request failed ({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            return _ActivityResponse.model_validate_json(response.content)
+        except ValidationError as exc:
+            raise IngestionError(f"unexpected ChEMBL response shape: {exc}") from exc
 
 
 def _normalize_next_path(next_path: str | None) -> str | None:

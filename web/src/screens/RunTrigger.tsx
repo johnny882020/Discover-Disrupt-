@@ -24,7 +24,7 @@ const SOURCE_LABELS: Record<Source, string> = {
   chembl: "ChEMBL target",
 };
 
-const ACCEPTED_FILES = ".csv,.tsv,.tab,.txt,.xlsx,.sdf,.sd";
+const ACCEPTED_FILES = ".csv,.tsv,.tab,.txt,.xlsx,.sdf,.sd,.smi,.smiles,.mol";
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -192,7 +192,7 @@ export function RunTrigger(): React.JSX.Element {
             <div className="flex flex-col gap-2">
               <FileDrop
                 accept={ACCEPTED_FILES}
-                hint="CSV, TSV, Excel (.xlsx) or SD file, up to 25 MB"
+                hint="CSV, TSV, Excel (.xlsx), SD, SMILES or MOL file, up to 25 MB"
                 disabled={uploadFile.isPending}
                 onFile={handleFile}
               />

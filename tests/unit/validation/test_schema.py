@@ -35,3 +35,8 @@ def test_bad_molecular_weight(weight: str) -> None:
 def test_thousands_separator_accepted() -> None:
     r = raw(smiles="C", molecular_weight="1,202.6")
     assert SchemaRule().apply(r, seed(r)).record.molecular_weight == 1202.6
+
+
+def test_a_failed_lookup_is_left_to_the_structure_lookup_rule() -> None:
+    r = raw(pubchem_cid="999", structure_error="PubChem has no compound with CID 999")
+    assert SchemaRule().apply(r, seed(r)).issues == []

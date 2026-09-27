@@ -4,6 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from dndlabs.core.schemas import (
+    LOOKUP_ROLES,
+    STRUCTURE_ROLES,
+    ColumnRole,
     NormalizedRecord,
     PipelineRun,
     QualityReport,
@@ -47,3 +50,14 @@ def test_quality_report_pass_rate_bounds() -> None:
 def test_normalized_record_requires_dataset_id() -> None:
     with pytest.raises(ValidationError):
         NormalizedRecord(source=SourceType.CSV, source_record_id="1")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("role", sorted(STRUCTURE_ROLES))
+def test_any_structure_role_satisfies_an_upload_mapping(role: ColumnRole) -> None:
+    spec = SourceSpec(source=SourceType.UPLOAD, upload_id=uuid.uuid4(), column_mapping={"A": role})
+    assert spec.column_mapping == {"A": role}
+
+
+def test_lookup_roles_are_structure_roles_that_leave_the_platform() -> None:
+    assert LOOKUP_ROLES < STRUCTURE_ROLES
+    assert ColumnRole.MOL_BLOCK not in LOOKUP_ROLES

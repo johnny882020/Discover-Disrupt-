@@ -84,7 +84,7 @@ for operators. Every body may also carry `dataset_name`. Returns `202` with a `P
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/uploads` | Multipart field `file` (CSV, TSV, XLSX or SDF) → `UploadPreview` (201) |
+| POST | `/uploads` | Multipart field `file` (CSV, TSV, XLSX, SDF, SMILES or MOL) → `UploadPreview` (201) |
 | GET | `/uploads/{id}/preview` | `UploadPreview` for an earlier upload |
 | GET | `/mapping-templates` | The org's saved column mappings (`MappingTemplate[]`, by name) |
 | POST | `/mapping-templates` | `{"name", "mapping"}` → `MappingTemplate` (201); replaces a template of the same name |
@@ -96,21 +96,46 @@ a `suggested_mapping` and the `template` it came from, if any. The
 suggestion comes from the saved template whose columns best match the file's
 headers; otherwise from known header names, matched regardless of case,
 spacing and punctuation (`Compound ID`, `Canonical SMILES`, `Activity
-Value`, `Units`, …), then from column contents (SMILES, InChI, InChIKey).
+Value`, `Units`, `Molfile`, `PubChem CID`, …), then from column contents
+(SMILES, InChI, MOL blocks, InChIKeys, ChEMBL IDs). Names and PubChem CIDs
+are never suggested from contents: a lookup role sends values to PubChem,
+so it is always the user's choice.
 Units are read from a unit column, not from a header such as `IC50 (nM)`.
 
 A `column_mapping` assigns each column one role: `source_record_id`, `name`,
-`smiles`, `inchi`, `inchikey`, `molecular_formula`, `molecular_weight`,
-`target`, `assay_type`, `activity_value`, `activity_unit`,
-`activity_relation` or `ignore`. It must include `smiles` or `inchi`, and a
-role (other than `ignore`) may be used once. Unmapped columns are kept in
-each record's `extra`; `ignore`d ones are dropped.
+`smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`,
+`lookup_name`, `molecular_formula`, `molecular_weight`, `target`,
+`assay_type`, `activity_value`, `activity_unit`, `activity_relation` or
+`ignore`. A role (other than `ignore`) may be used once, and the mapping
+must include a column that identifies the structure:
+
+| Role | Structure from |
+|---|---|
+| `smiles`, `inchi` | The value itself |
+| `mol_block` | The MOL block (V2000/V3000) in the cell, read by RDKit |
+| `inchikey` | PubChem lookup by InChIKey |
+| `pubchem_cid` | PubChem lookup by CID |
+| `chembl_id` | ChEMBL lookup by molecule ID |
+| `lookup_name` | PubChem lookup by name (IUPAC, trade or common); a name matching several different compounds is rejected as ambiguous |
+
+A row with SMILES or InChI is never looked up. Otherwise the MOL block is
+tried first, then each identifier in the order above until one resolves.
+Lookups are batched, throttled to PubChem's 5 requests per second, and
+capped at 1,000 distinct identifiers per run
+(`DNDLABS_STRUCTURE_LOOKUP_LIMIT`). The quality report gives every
+looked-up structure a `structure_lookup` warning naming its source (e.g.
+"structure from PubChem CID 2244"). A row that cannot be resolved is
+rejected with the reason (not found, ambiguous, service unavailable, over
+the limit). Unmapped columns are kept in each record's `extra`; `ignore`d
+ones are dropped.
 
 Files are limited to 25 MiB and 100,000 rows by default
 (`DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS`). An SDF's structures
 become a `smiles` column, each molecule's title line a `name` column, and
-its data fields further columns. Excel files use the first worksheet, with the first
-non-empty row as headers.
+its data fields further columns. A SMILES file (`.smi`, `.smiles`) has one
+`SMILES [name]` per line; a MOL file (`.mol`) holds one molecule. Both give
+`smiles` and `name` columns. Excel files use the first worksheet, with the
+first non-empty row as headers.
 
 ## Datasets
 
@@ -149,6 +174,6 @@ logged server-side only, never returned to the client.
 | `403` | Authenticated but not allowed: managing members, invitations or org data without the `admin` role, removing yourself, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
 | `404` | Unknown run, dataset, upload or mapping template, or one that belongs to a different org |
 | `409` | Invitation for an email that is already a member of the org, redemption for an email that already has an account, or a change that would leave the org without an admin |
-| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, a column mapping without a structure column, an invalid email), a password that fails the policy, or an uploaded file that is empty, too large, of an unsupported type or unreadable |
+| `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, a column mapping without a column that identifies the structure, an invalid email), a password that fails the policy, or an uploaded file that is empty, too large, of an unsupported type or unreadable |
 | `429` | Sign-in locked after repeated failures; retry after the `Retry-After` seconds |
 | `500` | Internal error (e.g. storage failure); detail is logged, not returned |

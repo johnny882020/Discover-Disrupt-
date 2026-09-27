@@ -1,4 +1,4 @@
-"""Pipeline orchestrator: ingest -> validate -> filter/featurize -> enrich -> store."""
+"""Pipeline orchestrator: ingest, resolve structures, validate, featurize, enrich, store."""
 
 import uuid
 from collections.abc import Sequence
@@ -12,6 +12,7 @@ from dndlabs.core.protocols import (
     Featurizer,
     OrgScopedConnector,
     Repositories,
+    StructureResolver,
 )
 from dndlabs.core.schemas import (
     Dataset,
@@ -73,6 +74,7 @@ class PipelineService:
         repositories: Repositories,
         featurizer: Featurizer | None = None,
         enrichment_client: EnrichmentClient | None = None,
+        resolver: StructureResolver | None = None,
     ) -> None:
         """Wire the service.
 
@@ -82,11 +84,13 @@ class PipelineService:
             repositories: Storage.
             featurizer: Feature extractor; the featurize stage is skipped if ``None``.
             enrichment_client: Enrichment client; a null client is used if ``None``.
+            resolver: Structure resolver; records are validated as fetched if ``None``.
         """
         self._connectors = connectors
         self._validator = validator
         self._repos = repositories
         self._featurizer = featurizer
+        self._resolver = resolver
         self._enrichment = EnrichmentService(enrichment_client)
 
     def enrichment_enabled(self) -> bool:
@@ -157,7 +161,7 @@ class PipelineService:
             logger.exception("background run failed", extra={"run_id": str(run_id)})
 
     async def _execute_stages(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
-        """Run ingest, validate, featurize, enrich and store for ``run``."""
+        """Run ingest, structure resolution, validate, featurize, enrich and store for ``run``."""
         connector = self._connectors.get(run.spec.source)
         records = (
             connector.fetch_for_org(org_id, run.spec)
@@ -165,6 +169,8 @@ class PipelineService:
             else connector.fetch(run.spec)
         )
         raws = [raw async for raw in records]
+        if self._resolver is not None:
+            raws = await self._resolver.resolve(raws)
 
         dataset_id = new_id()
         outcome = self._validator.run(run.id, dataset_id, raws)

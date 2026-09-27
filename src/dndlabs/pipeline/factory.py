@@ -13,9 +13,11 @@ from dndlabs.enrichment.client import HttpGenMolClient, build_nim_client
 from dndlabs.enrichment.null_client import NullEnrichmentClient
 from dndlabs.ingestion.chembl import ChemblConnector, build_chembl_client
 from dndlabs.ingestion.csv_connector import CsvConnector
+from dndlabs.ingestion.http import RetryPolicy
 from dndlabs.ingestion.json_connector import JsonConnector
 from dndlabs.ingestion.pubchem import PubChemConnector, build_pubchem_client
 from dndlabs.ingestion.registry import ConnectorRegistry
+from dndlabs.ingestion.resolution import LookupStructureResolver
 from dndlabs.ingestion.uploads import UploadConnector, UploadLimits, UploadService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
@@ -134,6 +136,13 @@ def build_container(
         repositories=repositories,
         featurizer=RdkitFeaturizer(),
         enrichment_client=enrichment_client,
+        resolver=LookupStructureResolver(
+            pubchem_http,
+            chembl_http,
+            lookup_limit=settings.structure_lookup_limit,
+            batch_size=settings.pubchem_batch_size,
+            retry=RetryPolicy(settings.pubchem_max_retries, settings.pubchem_backoff_seconds),
+        ),
     )
     return Container(
         settings=settings,
