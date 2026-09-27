@@ -136,12 +136,15 @@ UNKNOWN = "00000000-0000-0000-0000-00000000abcd"
     ],
 )
 def test_malformed_arguments_exit_cleanly(cli_env: Path, args: list[str], option: str) -> None:
-    result = runner.invoke(app, args)
+    # Plain, wide output: on CI, Rich forces colour (GITHUB_ACTIONS), and
+    # ANSI codes or wrapping would split the option name in the error box.
+    result = runner.invoke(app, args, env={"NO_COLOR": "1", "COLUMNS": "200"})
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     # A usage error (exit 2) naming the argument, not a ValueError traceback.
-    assert result.exit_code == 2, result.output
+    assert result.exit_code == 2, output
     assert not isinstance(result.exception, ValueError)
-    assert "Invalid value" in result.output
-    assert option.lower() in result.output.lower()
+    assert "Invalid value" in output
+    assert option.lower() in output.lower()
 
 
 def test_export_jsonl_names_the_file_by_format(
