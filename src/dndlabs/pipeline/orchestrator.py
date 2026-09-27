@@ -16,10 +16,14 @@ from typing import Protocol
 
 from dndlabs.core.exceptions import (
     DndLabsError,
+    EnrichmentError,
+    IngestionError,
     NotFoundError,
     PipelineError,
     RunDeletedError,
     RunInterruptedError,
+    StorageError,
+    ValidationError,
 )
 from dndlabs.core.logging import get_logger
 from dndlabs.core.protocols import (
@@ -326,14 +330,24 @@ class PipelineService:
         return cancelled
 
     def _mark_failed(self, org_id: uuid.UUID, run: PipelineRun, exc: Exception) -> None:
-        """Record a failure on the run, never masking the original error."""
+        """Record a failure on the run, never masking the original error.
+
+        The run's ``error`` is returned to API clients, so it gets a fixed
+        message for the kind of failure (:func:`_client_error`); the
+        exception's own text, which may carry driver messages, server paths
+        or third-party response fragments, is only logged.
+        """
         logger.error("run failed", extra={"run_id": str(run.id), "error": str(exc)})
         try:
             self._repos.datasets.delete_for_run(org_id, run.id)
             self._repos.runs.update(
                 org_id,
                 run.model_copy(
-                    update={"status": RunStatus.FAILED, "error": str(exc), "finished_at": utcnow()}
+                    update={
+                        "status": RunStatus.FAILED,
+                        "error": _client_error(exc),
+                        "finished_at": utcnow(),
+                    }
                 ),
             )
         except NotFoundError:
@@ -356,6 +370,22 @@ class PipelineService:
 
 class _RunDeletedError(Exception):
     """The run's row was deleted while it executed (internal; see ``execute``)."""
+
+
+def _client_error(exc: Exception) -> str:
+    """The client-safe explanation stored on a failed run, by kind of failure."""
+    if isinstance(exc, IngestionError):
+        return (
+            "the source could not be read (unreadable data or an unavailable "
+            "service); check the source and start the run again"
+        )
+    if isinstance(exc, ValidationError):
+        return "validation could not be completed; start the run again"
+    if isinstance(exc, StorageError):
+        return "the results could not be stored; start the run again"
+    if isinstance(exc, EnrichmentError):
+        return "enrichment could not be completed; start the run again"
+    return "the run stopped because of an internal error; start it again"
 
 
 class _CancelledError(Exception):

@@ -51,17 +51,17 @@ async def test_enrich_batch_handles_http_error() -> None:
 
     client = _client(httpx.MockTransport(handler))
     [result] = await client.enrich_batch([EnrichmentRequest(record_id=RECORD_ID, smiles="CCO")])
-    assert result.status == "failed"
-    assert result.error is not None
+    assert (result.status, result.error) == ("failed", "GenMol returned HTTP 500")
 
 
 async def test_enrich_batch_handles_malformed_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"unexpected": True})
+        return httpx.Response(200, json={"unexpected": "secret-looking value"})
 
     client = _client(httpx.MockTransport(handler))
     [result] = await client.enrich_batch([EnrichmentRequest(record_id=RECORD_ID, smiles="CCO")])
-    assert result.status == "failed"
+    # The reason reaches API clients: it must not quote GenMol's response body.
+    assert (result.status, result.error) == ("failed", "GenMol returned an unexpected response")
 
 
 async def test_enrich_batch_one_failure_does_not_affect_others() -> None:

@@ -85,6 +85,22 @@ def _from_response_body(body: bytes, scoring: str) -> list[GeneratedCandidate]:
     ]
 
 
+def _client_error(exc: Exception) -> str:
+    """A client-safe reason for a failed call.
+
+    The result is returned to API clients, so it names the kind of failure
+    only; the exception text (which can quote GenMol's response body) is
+    logged instead.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"GenMol returned HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "GenMol did not respond in time"
+    if isinstance(exc, httpx.HTTPError):
+        return "GenMol could not be reached"
+    return "GenMol returned an unexpected response"
+
+
 class HttpGenMolClient:
     """Calls a hosted NVIDIA BioNeMo GenMol NIM for property-guided generation."""
 
@@ -152,7 +168,9 @@ class HttpGenMolClient:
                 "genmol enrichment failed",
                 extra={"record_id": str(request.record_id), "error": str(exc)},
             )
-            return EnrichmentResult(record_id=request.record_id, status="failed", error=str(exc))
+            return EnrichmentResult(
+                record_id=request.record_id, status="failed", error=_client_error(exc)
+            )
         return EnrichmentResult(
             record_id=request.record_id,
             status="enriched",

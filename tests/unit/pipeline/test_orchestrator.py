@@ -96,7 +96,9 @@ async def test_ingestion_failure_marks_run_failed() -> None:
         await _execute(service, run)
     failed = service._repos.runs.get(ORG_ID, run.id)  # type: ignore[attr-defined]
     assert failed.status is RunStatus.FAILED
-    assert failed.error == "source down"
+    # The client sees a fixed explanation, never the exception's own text.
+    assert failed.error is not None and "source down" not in failed.error
+    assert failed.error.startswith("the source could not be read")
 
 
 async def test_an_unclaimed_run_is_not_executed() -> None:

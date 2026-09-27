@@ -46,7 +46,10 @@ Runs move through `pending → running → succeeded | failed | cancelled`. A ba
 never fails a run; it is recorded as a `ValidationIssue` on the quality
 report. A run is marked `failed` only on infrastructure errors (ingestion,
 storage), after repeated unexpected worker stops (see below), or when it
-was lost before revision `0008`; the error is persisted on the run row.
+was lost before revision `0008`. The run's `error` is a fixed explanation
+for the kind of failure (`_client_error` in `pipeline/orchestrator.py`); the
+exception text is logged only, like a failed enrichment's reason
+(`enrichment/client.py`).
 
 Ordering constraint: the dataset and its records must be persisted before
 any feature vector or enrichment result, since both reference

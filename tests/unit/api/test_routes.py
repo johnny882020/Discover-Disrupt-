@@ -164,7 +164,9 @@ def test_failed_run_reports_error(client: TestClient, auth_headers: dict[str, st
         if status["status"] == "failed":
             break
         time.sleep(0.05)
-    assert "cannot parse JSON" in status["error"]
+    # A fixed explanation: the parser's message (with a server path) stays in the logs.
+    assert status["error"].startswith("the source could not be read")
+    assert "x.json" not in status["error"]
 
 
 def test_org_isolation(

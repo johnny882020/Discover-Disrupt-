@@ -262,7 +262,10 @@ reachable and migrated.
 
 `{"detail": "<message>"}`. Every `500` response body carries a fixed
 generic message (`"internal server error"`); the underlying exception is
-logged server-side only, never returned to the client.
+logged server-side only, never returned to the client. The same holds for
+the `error` of a failed run or enrichment result: it names the kind of
+failure (for example "the source could not be read …" or "GenMol returned
+HTTP 503"), never the exception's own text.
 
 | Status | Meaning |
 |---|---|
