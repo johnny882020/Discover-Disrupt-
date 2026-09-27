@@ -19,3 +19,8 @@ def test_keys_are_unique() -> None:
     a, _ = generate_key()
     b, _ = generate_key()
     assert a != b
+
+
+def test_a_corrupt_stored_hash_rejects_the_key() -> None:
+    raw, _ = generate_key()
+    assert not verify_key(raw, "not-an-argon2-hash")

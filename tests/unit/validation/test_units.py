@@ -66,3 +66,19 @@ def test_unit_without_value_warns() -> None:
     r = raw(activity_unit="nM")
     [issue] = RULE.apply(r, seed(r)).issues
     assert issue.severity is Severity.WARNING
+
+
+@pytest.mark.parametrize(("value", "expected"), [("1,200", 1200.0), ("12,500.5", 12500.5)])
+def test_thousands_separators_are_read(value: str, expected: float) -> None:
+    r = raw(activity_value=value, activity_unit="nM")
+    outcome = RULE.apply(r, seed(r))
+    assert outcome.issues == []
+    assert outcome.record.activity_value_nm == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("value", ["1,5", "1,2,3", "12,50", ",5"])
+def test_an_ambiguous_comma_is_rejected_not_misread(value: str) -> None:
+    # "1,5" is 1.5 in many locales; reading it as 15 would be silently wrong.
+    r = raw(activity_value=value, activity_unit="nM")
+    [issue] = RULE.apply(r, seed(r)).issues
+    assert issue.severity is Severity.ERROR and issue.field == "activity_value"
