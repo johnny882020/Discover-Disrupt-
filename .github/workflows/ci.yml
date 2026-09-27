@@ -70,6 +70,10 @@ jobs:
       - name: Build local-dev web image
         run: docker build -t dndlabs-web:ci web
       - name: Validate docker-compose.yml
+        # compose requires the admin secret (no default); any value of the
+        # right length validates the file, and nothing is started here.
+        env:
+          DNDLABS_ADMIN_BOOTSTRAP_SECRET: compose-config-validation-only
         run: docker compose config --quiet
 
   e2e:
