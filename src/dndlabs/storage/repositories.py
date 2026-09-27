@@ -25,7 +25,9 @@ from dndlabs.core.exceptions import (
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     ApiKeyRecord,
+    AssayFormat,
     ColumnRole,
+    ControlType,
     Dataset,
     DatasetFilter,
     DatasetWithRecords,
@@ -1120,8 +1122,8 @@ class SqlDatasetRepository:
             The stored dataset.
 
         Raises:
-            StorageError: If a record has no ``record_key``, or on a
-                duplicate key within the dataset.
+            StorageError: If a record has no ``record_key``, or two records
+                share a compound and measurement context within the dataset.
         """
         with self._sessions.transaction() as session:
             session.add(
@@ -1252,6 +1254,9 @@ def _record_to_row(
         molecular_weight=record.molecular_weight,
         target=record.target,
         assay_type=record.assay_type,
+        assay_format=record.assay_format.value if record.assay_format else None,
+        control=record.control.value if record.control else None,
+        context_key=record.context_key(),
         activity_value_nm=record.activity_value_nm,
         activity_relation=record.activity_relation,
     )
@@ -1273,6 +1278,8 @@ def _record_from_row(row: NormalizedRecordRow) -> NormalizedRecord:
         molecular_weight=row.molecular_weight,
         target=row.target,
         assay_type=row.assay_type,
+        assay_format=AssayFormat(row.assay_format) if row.assay_format else None,
+        control=ControlType(row.control) if row.control else None,
         activity_value_nm=row.activity_value_nm,
         activity_relation=row.activity_relation,
     )

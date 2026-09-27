@@ -10,6 +10,8 @@ from dndlabs.core.exceptions import NotFoundError, StorageError
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
     AlertFamily,
+    AssayFormat,
+    ControlType,
     Dataset,
     DatasetFilter,
     EnrichmentResult,
@@ -330,3 +332,39 @@ def test_features_for_returns_only_the_orgs_vectors(
     assert found[records[0].id].alerts == [alert]
     assert found[records[1].id].alerts == []
     assert repos.features.features_for(uuid.uuid4(), ids) == {}
+
+
+def test_a_compound_may_repeat_across_measurement_contexts(repos: Repositories) -> None:
+    org = _org(repos)
+    dataset_id = uuid.uuid4()
+
+    def dataset(records: list[NormalizedRecord]) -> Dataset:
+        return Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=repos.runs.create(_run(org.id)).id,
+            name="demo",
+            source=SourceType.CSV,
+            record_count=len(records),
+        )
+
+    key = "A" * 27
+    bio = _record(dataset_id, key, "1").model_copy(
+        update={"assay_format": AssayFormat.BIOCHEMICAL, "control": ControlType.POSITIVE}
+    )
+    cell = _record(dataset_id, key, "2").model_copy(update={"assay_format": AssayFormat.CELL_BASED})
+    repos.datasets.create(dataset([bio, cell]), [bio, cell])
+    stored = {r.source_record_id: r for r in repos.datasets.get(org.id, dataset_id).records}
+    assert (stored["1"].assay_format, stored["1"].control) == (
+        AssayFormat.BIOCHEMICAL,
+        ControlType.POSITIVE,
+    )
+    assert stored["2"].assay_format is AssayFormat.CELL_BASED
+
+    dataset_id = uuid.uuid4()
+    same = [
+        _record(dataset_id, key, "1").model_copy(update={"assay_format": AssayFormat.CELL_BASED}),
+        _record(dataset_id, key, "2").model_copy(update={"assay_format": AssayFormat.CELL_BASED}),
+    ]
+    with pytest.raises(StorageError):
+        repos.datasets.create(dataset(same), same)

@@ -29,8 +29,8 @@ and ADME/Tox. Line numbers below are the guide's own.
 | Guide section (lines) | What a project must show | Status today | Planned in |
 |---|---|---|---|
 | Hit/lead properties (32–38, 55–61) | MW < 500, clogP < 5, Lipinski, rotatable bonds < 10, PSA < 140 Å² (< 90 Å² for CNS), for the majority and for the 5 most potent compounds | Done: shown per compound and summarized over all compounds, actives and the 5 most potent | R2 |
-| Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Potency classes and the count of actives done; no assay format yet | R2 |
-| Assays and controls (14–15, 24–25, 44, 47) | Named assays (binding, competition, selectivity) with positive and negative controls | No assay metadata | R2 |
+| Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Done: potency classes, the count of actives, and potency per assay format | R2 |
+| Assays and controls (14–15, 24–25, 44, 47) | Named assays (binding, competition, selectivity) with positive and negative controls | Done: assay format and control flag; a compound can be recorded against several targets. No selectivity view yet | R2; selectivity view R3 |
 | Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | Done: reactive-metabolite, PAINS and Brenk alerts, highlighted on the structure | R2 |
 | Novelty, SAR, series (28–31, 52–54) | Novel scaffold, SAR-amenable, pharmacophore, 1–2 series | None | R3 |
 | ADME/Tox (35, 58, 64–67, 77–92) | Solubility at pH 7.4, plasma protein binding, CYP inhibition, PXR, hERG, PAMPA, Caco-2, metabolic stability, cytotoxicity, micronucleus, AMES | None; one activity per record | R3: measured results plus ADMET-AI predictions |
@@ -106,8 +106,11 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 - **Liabilities** *(done)*: PAINS, Brenk and reactive-metabolite alerts,
   highlighted on the structure; filters to hide PAINS and reactive-metabolite
   alerts.
-- **Assay metadata:** assay format (biochemical / cell-based), readout and
-  control flag as column roles, so potency is judged per assay format.
+- **Assay metadata** *(done)*: assay format (biochemical / cell-based) and
+  control flag as column roles. A compound is kept once per measurement
+  context (target, assay, format, control); its potency is the class most
+  of its measurements reach, judged per assay format, with controls left
+  out.
 - **Actionable quality report:** issues grouped by cause; bulk fixes (map
   an unknown unit once); edit and re-validate a rejected row; re-run only
   failed records.
@@ -118,7 +121,8 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 ### R3 — Lead-phase evidence
 
 - **Series and SAR:** Bemis–Murcko series with counts and activity ranges;
-  SAR tables and activity cliffs; key pharmacophore features.
+  SAR tables and activity cliffs; selectivity across targets; key
+  pharmacophore features.
 - **Novelty check:** actives and scaffolds against PubChem, ChEMBL and
   SureChEMBL patents.
 - **Measured ADME/Tox results:** several endpoints per compound (e.g.

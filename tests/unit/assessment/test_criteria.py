@@ -2,9 +2,11 @@ import uuid
 
 import pytest
 
-from dndlabs.assessment.criteria import assess, compound_profile, most_potent, potency_class
+from dndlabs.assessment.criteria import assess, compound_profile, majority_class, potency_class
 from dndlabs.core.schemas import (
     AlertFamily,
+    AssayFormat,
+    ControlType,
     Criterion,
     NormalizedRecord,
     PotencyClass,
@@ -94,11 +96,19 @@ def test_profile_without_descriptors_has_no_criteria() -> None:
         assert profile.potency_class is PotencyClass.OPTIMIZED
 
 
-def test_most_potent_ranks_by_value_and_skips_lower_bounds() -> None:
-    records = [
-        _record(v, r) for v, r in [(900, "="), (5, ">"), (40, "<"), (7_000, "="), (None, "=")]
-    ]
-    assert [r.activity_value_nm for r in most_potent(records, count=2)] == [40, 900]
+@pytest.mark.parametrize(
+    ("classes", "expected"),
+    [
+        ([PotencyClass.HIT, PotencyClass.HIT, PotencyClass.INACTIVE], PotencyClass.HIT),
+        ([PotencyClass.LEAD, PotencyClass.INACTIVE], PotencyClass.INACTIVE),  # no majority better
+        ([PotencyClass.OPTIMIZED, PotencyClass.LEAD, PotencyClass.HIT], PotencyClass.LEAD),
+        ([PotencyClass.UNKNOWN, PotencyClass.HIT], PotencyClass.HIT),  # unknown is not counted
+        ([PotencyClass.UNKNOWN], PotencyClass.UNKNOWN),
+        ([], PotencyClass.UNKNOWN),
+    ],
+)
+def test_majority_class(classes: list[PotencyClass], expected: PotencyClass) -> None:
+    assert majority_class(classes) is expected
 
 
 def test_assess_summarizes_all_actives_and_most_potent() -> None:
@@ -115,7 +125,7 @@ def test_assess_summarizes_all_actives_and_most_potent() -> None:
 
     result = assess(DATASET, records, features)
 
-    assert result.compounds == 6
+    assert (result.compounds, result.measurements, result.controls) == (6, 6, 0)
     assert result.actives == 4
     assert result.potency_classes == {
         PotencyClass.OPTIMIZED: 2,
@@ -146,3 +156,43 @@ def test_alerts_are_carried_and_judged() -> None:
     assert clean.criteria[Criterion.NO_PAINS] is True
     assert clean.criteria[Criterion.NO_REACTIVE_METABOLITES] is True
     assert [a.name for a in clean.alerts] == ["phenol_ester"]  # Brenk only: not a criterion
+
+
+def _measurement(
+    key: str,
+    value: float,
+    assay_format: AssayFormat | None = None,
+    control: ControlType | None = None,
+    smiles: str = ASPIRIN,
+) -> NormalizedRecord:
+    return _record(value, smiles=smiles).model_copy(
+        update={"record_key": key, "assay_format": assay_format, "control": control}
+    )
+
+
+def test_compounds_are_classed_by_majority_per_format_and_controls_are_excluded() -> None:
+    bio, cell = AssayFormat.BIOCHEMICAL, AssayFormat.CELL_BASED
+    records = [
+        _measurement("A", 50, bio),  # A: optimized biochemically...
+        _measurement("A", 20_000, cell),  # ...but inactive in cells
+        _measurement("B", 800, bio),
+        _measurement("B", 900, bio),
+        _measurement("S", 1, bio, ControlType.POSITIVE, smiles=CYCLOSPORIN),  # a control
+    ]
+    result = assess(DATASET, records, {r.id: _features(r) for r in records})
+
+    assert (result.compounds, result.measurements, result.controls) == (2, 4, 1)
+    # A: one optimized and one inactive measurement, so no majority is better than inactive.
+    assert result.potency_classes[PotencyClass.INACTIVE] == 1
+    assert result.potency_classes[PotencyClass.LEAD] == 1  # B
+    assert result.actives == 1
+    formats = {f.assay_format: f for f in result.by_format}
+    assert set(formats) == {bio, cell}
+    assert (formats[bio].compounds, formats[bio].actives) == (2, 2)
+    assert formats[bio].potency_classes[PotencyClass.OPTIMIZED] == 1
+    assert (formats[cell].compounds, formats[cell].actives) == (1, 0)
+    # The control is the most potent value but is never ranked or assessed.
+    assert result.most_potent_ids == [records[0].id, records[2].id]
+    mw = next(c for c in result.criteria if c.criterion is Criterion.MW)
+    assert (mw.all_compounds.passing, mw.all_compounds.evaluated) == (2, 2)  # per compound
+    assert len(result.profiles) == 5  # one per record, controls included

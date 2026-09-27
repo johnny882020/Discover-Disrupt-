@@ -40,6 +40,8 @@ const ALIASES: Record<string, ColumnRole> = {
   unit: "activity_unit",
   units: "activity_unit",
   standard_type: "assay_type",
+  assay_format: "assay_format",
+  control: "control",
 };
 
 /** Uploaded CSV contents, keyed by upload id. */

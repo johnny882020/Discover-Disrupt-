@@ -8,7 +8,9 @@
  *    report, and exports it.
  * 2. An admin manages the team: invites a member, issues them a
  *    password-reset link, and removes them.
- * 3. The org's API key signs in to the web app as well.
+ * 3. An upload measuring one compound in two assay formats, plus a control,
+ *    is judged per format with the control left out.
+ * 4. The org's API key signs in to the web app as well.
  *
  * Each test provisions its own org and invitation, so retries and repeated
  * runs against the same database never collide. Requires a running API
@@ -224,6 +226,46 @@ test.describe("full pipeline workflow", () => {
     await page.getByLabel("Password").fill(resetPassword);
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page.getByRole("alert")).toHaveText("invalid email or password");
+  });
+
+  test("judge potency per assay format, leaving controls out", async ({ page, request }) => {
+    const org = await provisionOrg(request);
+    // Aspirin twice (biochemical 50 nM, cell-based 2 µM), ibuprofen once, and
+    // a positive control; every column's role is suggested from its header.
+    const csv = [
+      "compound_id,smiles,target,assay_format,control,activity_value,activity_unit",
+      "A1,CC(=O)Oc1ccccc1C(=O)O,COX-1,biochemical,no,50,nM",
+      "A1,CC(=O)Oc1ccccc1C(=O)O,COX-1,cell-based,no,2000,nM",
+      "I1,CC(C)Cc1ccc(cc1)C(C)C(=O)O,COX-1,biochemical,,5000,nM",
+      "C1,Cn1cnc2c1c(=O)n(C)c(=O)n2C,COX-1,biochemical,positive,10,nM",
+    ].join("\n");
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /use an api key instead/i }).click();
+    await page.getByLabel("API key").fill(org.apiKey);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("link", { name: /new pipeline run/i }).click();
+    await page.getByLabel(/csv, tsv, excel/i).setInputFiles({
+      name: "assay_contexts.csv",
+      mimeType: "text/csv",
+      buffer: Buffer.from(csv),
+    });
+    await expect(page.getByLabel("Role for column assay_format")).toHaveValue("assay_format");
+    await expect(page.getByLabel("Role for column control")).toHaveValue("control");
+    await page.getByLabel(/dataset name/i).fill(`E2E assay contexts ${Date.now()}`);
+    await page.getByRole("button", { name: /start run/i }).click();
+    await expect(page).toHaveURL(/\/datasets\/[^/]+$/);
+
+    // Both aspirin measurements are kept; the compound is a hit, since only
+    // one of its two measurements reaches the optimized class.
+    await expect(page.getByText(/2 compounds from 3 measurements; 1 control record is not assessed/)).toBeVisible();
+    await expect(page.getByText("Hit (< 10 µM): 2")).toBeVisible();
+    const formats = page.getByRole("table", { name: "Potency by assay format" });
+    const biochemical = formats.getByRole("row", { name: /Biochemical/ });
+    await expect(biochemical.getByRole("cell")).toHaveText(["2", "1", "0", "1", "0", "0", "2"]);
+    const cellBased = formats.getByRole("row", { name: /Cell-based/ });
+    await expect(cellBased.getByRole("cell")).toHaveText(["1", "0", "0", "1", "0", "0", "1"]);
+    await expect(page.getByText("Positive control")).toBeVisible();
   });
 
   test("sign in with an organization API key", async ({ page, request }) => {

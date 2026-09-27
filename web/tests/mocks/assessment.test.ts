@@ -30,4 +30,20 @@ describe("mock assessment", () => {
     expect(result.actives).toBe(RECORDS_ASPIRIN.length);
     expect(result.most_potent_ids).toHaveLength(5);
   });
+
+  it("classes a compound by the majority of its measurements, per format, without controls", () => {
+    const base = RECORDS_ASPIRIN[0];
+    const records: NormalizedRecord[] = [
+      { ...base, id: "a1", record_key: "A", activity_value_nm: 50, assay_format: "biochemical" },
+      { ...base, id: "a2", record_key: "A", activity_value_nm: 20_000, assay_format: "cell_based" },
+      { ...base, id: "c1", record_key: "C", activity_value_nm: 1, assay_format: "biochemical", control: "positive" },
+    ];
+    const result = buildAssessment("d", records);
+    expect([result.compounds, result.measurements, result.controls]).toEqual([1, 2, 1]);
+    expect(result.potency_classes.inactive).toBe(1);
+    expect(result.by_format.map((f) => [f.assay_format, f.actives])).toEqual([
+      ["biochemical", 1],
+      ["cell_based", 0],
+    ]);
+  });
 });

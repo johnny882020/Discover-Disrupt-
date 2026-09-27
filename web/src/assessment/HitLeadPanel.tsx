@@ -3,13 +3,18 @@
  * classes, the count of actives, and computed-property criteria over all
  * compounds, the actives and the five most potent.
  */
-import type { CriterionShare, DatasetAssessment } from "../api/types";
+import type { AssayFormat, CriterionShare, DatasetAssessment } from "../api/types";
 import { Badge } from "../design-system/Badge";
 import { Card } from "../design-system/Card";
 import { POTENCY_CLASSES } from "./potency";
 
 /** The guide's bar for confidence that a candidate can be found. */
 const ENOUGH_ACTIVES = 10;
+
+const FORMAT_LABELS: Record<AssayFormat, string> = {
+  biochemical: "Biochemical",
+  cell_based: "Cell-based",
+};
 
 function ShareCell({ share }: { share: CriterionShare }): React.JSX.Element {
   if (share.evaluated === 0) {
@@ -25,13 +30,20 @@ function ShareCell({ share }: { share: CriterionShare }): React.JSX.Element {
 }
 
 export function HitLeadPanel({ assessment }: { assessment: DatasetAssessment }): React.JSX.Element {
-  const { actives } = assessment;
+  const { actives, compounds, measurements, controls } = assessment;
+  // Shown once any format is given; measurements without one keep their own row.
+  const formats = assessment.by_format.some((f) => f.assay_format !== null) ? assessment.by_format : [];
   return (
     <Card>
       <h2 className="text-lg font-medium">Hit/lead criteria</h2>
       <p className="mt-1 text-sm text-ink/60 dark:text-paper/60">
-        Potency from activity values (IC50, Ki, …). Properties computed with RDKit from the standardized
-        structures.
+        Potency from activity values (IC50, Ki, …); a compound measured more than once takes the class the
+        majority of its measurements reach. Properties computed with RDKit from the standardized structures.
+      </p>
+      <p className="mt-2 text-sm">
+        {compounds} {compounds === 1 ? "compound" : "compounds"} from {measurements}{" "}
+        {measurements === 1 ? "measurement" : "measurements"}
+        {controls > 0 ? `; ${controls} control ${controls === 1 ? "record is" : "records are"} not assessed` : ""}.
       </p>
 
       <ul className="mt-4 flex flex-wrap gap-2" aria-label="Potency classes">
@@ -49,6 +61,42 @@ export function HitLeadPanel({ assessment }: { assessment: DatasetAssessment }):
           ? " — more than 10, enough to give confidence a candidate can be found."
           : " — more than 10 actives give more confidence that a candidate can be found."}
       </p>
+
+      {formats.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full border-collapse text-sm" aria-label="Potency by assay format">
+            <thead>
+              <tr className="border-b border-ink/15 dark:border-paper/20">
+                {["Assay format", "Compounds", ...POTENCY_CLASSES.map((p) => p.label), "Actives"].map((header) => (
+                  <th
+                    key={header}
+                    scope="col"
+                    className="py-2 pr-4 text-left text-xs font-medium uppercase tracking-wide text-ink/60 dark:text-paper/60"
+                  >
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {formats.map((f) => (
+                <tr key={f.assay_format ?? "none"} className="border-b border-ink/8 dark:border-paper/10">
+                  <th scope="row" className="py-2 pr-4 text-left font-normal">
+                    {f.assay_format ? FORMAT_LABELS[f.assay_format] : "Not given"}
+                  </th>
+                  <td className="py-2 pr-4">{f.compounds}</td>
+                  {POTENCY_CLASSES.map((p) => (
+                    <td key={p.potency} className="py-2 pr-4">
+                      {f.potency_classes[p.potency] ?? 0}
+                    </td>
+                  ))}
+                  <td className="py-2 pr-4">{f.actives}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
 
       <div className="mt-4 overflow-x-auto">
         <table className="w-full border-collapse text-sm">
@@ -86,7 +134,8 @@ export function HitLeadPanel({ assessment }: { assessment: DatasetAssessment }):
         </table>
       </div>
       <p className="mt-2 text-xs text-ink/60 dark:text-paper/60">
-        Green: met by the majority of the group. Compounds without a computed structure are not counted.
+        Green: met by the majority of the group. Counted per compound; compounds without a computed structure
+        and control records are not counted.
       </p>
     </Card>
   );

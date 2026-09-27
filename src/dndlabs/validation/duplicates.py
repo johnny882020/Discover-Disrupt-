@@ -1,4 +1,4 @@
-"""Duplicate detection across a dataset by canonical identifier."""
+"""Duplicate detection across a dataset: the same compound in the same measurement context."""
 
 from collections.abc import Sequence
 
@@ -7,7 +7,12 @@ from dndlabs.validation.issues import warning
 
 
 class DuplicateRule:
-    """Drops records whose ``record_key`` (InChIKey) was already seen.
+    """Drops a record whose compound and measurement context were already seen.
+
+    The compound is the ``record_key`` (standardized InChIKey); the context
+    is the target, assay type, assay format and control role
+    (:meth:`NormalizedRecord.context_key`). A compound measured in a
+    biochemical and a cell-based assay therefore keeps both records.
 
     Attributes:
         name: Rule name used in reports.
@@ -24,12 +29,12 @@ class DuplicateRule:
         Returns:
             Kept and dropped records with one warning per duplicate.
         """
-        first_seen: dict[str, NormalizedRecord] = {}
+        first_seen: dict[tuple[str, str], NormalizedRecord] = {}
         kept: list[NormalizedRecord] = []
         dropped: list[NormalizedRecord] = []
         issues: list[ValidationIssue] = []
         for record in records:
-            key = record.record_key
+            key = (record.record_key, record.context_key()) if record.record_key else None
             original = first_seen.get(key) if key else None
             if original is None:
                 if key:
@@ -41,7 +46,8 @@ class DuplicateRule:
                 warning(
                     self.name,
                     record,
-                    f"duplicate of {original.source_record_id} (InChIKey {key})",
+                    f"duplicate of {original.source_record_id} "
+                    f"(InChIKey {record.record_key}, same target and assay)",
                     "record_key",
                 )
             )

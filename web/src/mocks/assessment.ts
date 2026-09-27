@@ -58,29 +58,78 @@ function share(group: CompoundProfile[], criterion: Criterion): CriterionShare {
   return { passing: evaluated.filter((p) => p.criteria[criterion]).length, evaluated: evaluated.length };
 }
 
+const RANKED: PotencyClass[] = ["optimized", "lead", "hit", "inactive"];
+
+/** The most potent class the majority of measurements reach (as the API computes it). */
+function majorityClass(classes: PotencyClass[]): PotencyClass {
+  const ranks = classes.filter((c) => RANKED.includes(c)).map((c) => RANKED.indexOf(c));
+  for (let rank = 0; rank < RANKED.length; rank += 1) {
+    if (ranks.filter((r) => r <= rank).length * 2 > ranks.length) return RANKED[rank];
+  }
+  return "unknown";
+}
+
+function classCounts(classes: PotencyClass[]): Record<PotencyClass, number> {
+  const counts = { optimized: 0, lead: 0, hit: 0, inactive: 0, unknown: 0 } as Record<PotencyClass, number>;
+  for (const klass of classes) counts[klass] += 1;
+  return counts;
+}
+
 export function buildAssessment(datasetId: string, records: NormalizedRecord[]): DatasetAssessment {
   const profiles = records.map(profile);
-  const actives = profiles.filter((p) => ACTIVE.includes(p.potency_class));
-  const ranked = records
-    .filter((r) => r.activity_value_nm !== null && r.activity_relation !== ">" && r.activity_relation !== ">=")
-    .sort((a, b) => (a.activity_value_nm ?? 0) - (b.activity_value_nm ?? 0))
-    .slice(0, 5)
-    .map((r) => r.id);
-  const top = profiles.filter((p) => ranked.includes(p.record_id));
-  const classes = { optimized: 0, lead: 0, hit: 0, inactive: 0, unknown: 0 } as Record<PotencyClass, number>;
-  for (const p of profiles) classes[p.potency_class] += 1;
+  const byId = new Map(profiles.map((p) => [p.record_id, p]));
+  const tested = records.filter((r) => r.control === null);
+  const compounds = new Map<string, NormalizedRecord[]>();
+  for (const r of tested) {
+    const key = r.record_key ?? `record:${r.id}`;
+    compounds.set(key, [...(compounds.get(key) ?? []), r]);
+  }
+  const overall = (members: NormalizedRecord[]) =>
+    majorityClass(members.map((m) => byId.get(m.id)?.potency_class ?? "unknown"));
+  const classes = new Map([...compounds].map(([key, members]) => [key, overall(members)]));
+  const representative = new Map([...compounds].map(([key, members]) => [key, byId.get(members[0].id)!]));
+  const actives = [...classes].filter(([, c]) => ACTIVE.includes(c)).map(([key]) => key);
+  const ranked = (r: NormalizedRecord) =>
+    r.activity_value_nm !== null && r.activity_relation !== ">" && r.activity_relation !== ">=";
+  const best = [...compounds]
+    .map(([key, members]) => {
+      const values = members.filter(ranked).sort((a, b) => (a.activity_value_nm ?? 0) - (b.activity_value_nm ?? 0));
+      return { key, record: values[0] };
+    })
+    .filter((b) => b.record !== undefined)
+    .sort((a, b) => (a.record.activity_value_nm ?? 0) - (b.record.activity_value_nm ?? 0))
+    .slice(0, 5);
+  const byFormat = (["biochemical", "cell_based", null] as const)
+    .map((assayFormat) => {
+      const inFormat = [...compounds]
+        .map(([, members]) => members.filter((m) => m.assay_format === assayFormat))
+        .filter((members) => members.length > 0)
+        .map(overall);
+      const counts = classCounts(inFormat);
+      return {
+        assay_format: assayFormat,
+        compounds: inFormat.length,
+        potency_classes: counts,
+        actives: ACTIVE.reduce((sum, c) => sum + counts[c], 0),
+      };
+    })
+    .filter((f) => f.compounds > 0);
+  const group = (keys: string[]) => keys.map((key) => representative.get(key)!);
   return {
     dataset_id: datasetId,
-    compounds: profiles.length,
-    potency_classes: classes,
+    compounds: compounds.size,
+    measurements: tested.length,
+    controls: records.length - tested.length,
+    potency_classes: classCounts([...classes.values()]),
     actives: actives.length,
-    most_potent_ids: ranked,
+    by_format: byFormat,
+    most_potent_ids: best.map((b) => b.record.id),
     criteria: (Object.keys(LABELS) as Criterion[]).map((criterion) => ({
       criterion,
       label: LABELS[criterion],
-      all_compounds: share(profiles, criterion),
-      actives: share(actives, criterion),
-      most_potent: share(top, criterion),
+      all_compounds: share(group([...compounds.keys()]), criterion),
+      actives: share(group(actives), criterion),
+      most_potent: share(group(best.map((b) => b.key)), criterion),
     })),
     profiles,
   };

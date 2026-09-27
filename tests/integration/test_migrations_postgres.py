@@ -13,6 +13,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
+from sqlalchemy import exc as sa_exc
 
 from dndlabs.core.exceptions import StorageError
 from dndlabs.storage.database import (
@@ -201,6 +202,60 @@ def test_vectors_stored_before_0006_read_back_without_alerts(database_url: str) 
     assert (stored.descriptors, stored.alerts) == ({"logp": 1.0}, None)
     command.downgrade(config, "0005")
     command.upgrade(config, "head")
+
+
+def test_0007_keeps_existing_records_and_allows_one_per_context(database_url: str) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0006")
+    org_id, run_id, dataset_id = (uuid.uuid4() for _ in range(3))
+    insert_record = text(
+        "INSERT INTO normalized_records (id, org_id, dataset_id, record_key, source, "
+        "source_record_id) VALUES (:id, :o, :d, 'K', 'csv', :sid)"
+    )
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO organizations (id, name, created_at, is_active) "
+                "VALUES (:o, 'A', now(), true)"
+            ),
+            {"o": org_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO pipeline_runs "
+                "(id, org_id, source, status, request_payload, created_at) "
+                "VALUES (:r, :o, 'csv', 'succeeded', '{}', now())"
+            ),
+            {"r": run_id, "o": org_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO datasets (id, org_id, run_id, name, source, record_count, created_at) "
+                "VALUES (:d, :o, :r, 'd', 'csv', 1, now())"
+            ),
+            {"d": dataset_id, "o": org_id, "r": run_id},
+        )
+        conn.execute(insert_record, {"id": uuid.uuid4(), "o": org_id, "d": dataset_id, "sid": "1"})
+
+    command.upgrade(config, "head")
+
+    with engine.begin() as conn:
+        assert conn.execute(text("SELECT context_key FROM normalized_records")).scalar_one() == ""
+        # Another context for the same compound is now allowed...
+        conn.execute(
+            text(
+                "INSERT INTO normalized_records (id, org_id, dataset_id, record_key, source, "
+                "source_record_id, context_key) VALUES (:id, :o, :d, 'K', 'csv', '2', 'ctx')"
+            ),
+            {"id": uuid.uuid4(), "o": org_id, "d": dataset_id},
+        )
+    # ...but not a second record in the same context.
+    with pytest.raises(sa_exc.IntegrityError), engine.begin() as conn:
+        conn.execute(insert_record, {"id": uuid.uuid4(), "o": org_id, "d": dataset_id, "sid": "3"})
+    engine.dispose()
 
 
 @pytest.mark.parametrize("check", ALL_CHECKS + UPLOAD_CHECKS, ids=lambda c: c.__name__)

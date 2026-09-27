@@ -221,7 +221,12 @@ class NormalizedRecordRow(Base):
     """A normalized, model-ready record."""
 
     __tablename__ = "normalized_records"
-    __table_args__ = (UniqueConstraint("dataset_id", "record_key", name="uq_dataset_record_key"),)
+    # One record per compound and measurement context (NormalizedRecord.context_key).
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "record_key", "context_key", name="uq_dataset_record_context"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True)
     org_id: Mapped[uuid.UUID] = mapped_column(GUID(), index=True)
@@ -239,6 +244,9 @@ class NormalizedRecordRow(Base):
     molecular_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     target: Mapped[str | None] = mapped_column(String(255), nullable=True)
     assay_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    assay_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    control: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    context_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
     activity_value_nm: Mapped[float | None] = mapped_column(Float, nullable=True)
     activity_relation: Mapped[str | None] = mapped_column(String(4), nullable=True)
 

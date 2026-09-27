@@ -99,6 +99,8 @@ export const handlers = [
       molecular_weight: 180 + i,
       target: body.chembl_target ?? null,
       assay_type: null,
+      assay_format: null,
+      control: null,
       activity_value_nm: null,
       activity_relation: null,
     }));

@@ -5,6 +5,7 @@ models. Changing a field here is a contract change: update
 docs/architecture.md and flag it explicitly.
 """
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -309,6 +310,8 @@ class ColumnRole(StrEnum):
     MOLECULAR_WEIGHT = "molecular_weight"
     TARGET = "target"
     ASSAY_TYPE = "assay_type"
+    ASSAY_FORMAT = "assay_format"
+    CONTROL = "control"
     ACTIVITY_VALUE = "activity_value"
     ACTIVITY_UNIT = "activity_unit"
     ACTIVITY_RELATION = "activity_relation"
@@ -467,14 +470,35 @@ class RawRecord(_Contract):
     molecular_weight: str | float | None = None
     target: str | None = None
     assay_type: str | None = None
+    assay_format: str | None = None
+    control: str | None = None
     activity_value: str | float | None = None
     activity_unit: str | None = None
     activity_relation: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class AssayFormat(StrEnum):
+    """Whether a measurement comes from an isolated-target or a cellular assay."""
+
+    BIOCHEMICAL = "biochemical"
+    CELL_BASED = "cell_based"
+
+
+class ControlType(StrEnum):
+    """A reference compound's role in its assay."""
+
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+
+
 class NormalizedRecord(_Contract):
-    """A validated, normalized, model-ready compound record."""
+    """A validated, normalized, model-ready measurement of a compound.
+
+    ``record_key`` identifies the compound (standardized InChIKey); a dataset
+    can hold several records of one compound, one per measurement context
+    (see :meth:`context_key`).
+    """
 
     id: uuid.UUID = Field(default_factory=new_id)
     dataset_id: uuid.UUID
@@ -489,8 +513,31 @@ class NormalizedRecord(_Contract):
     molecular_weight: float | None = None
     target: str | None = None
     assay_type: str | None = None
+    assay_format: AssayFormat | None = None
+    control: ControlType | None = None
     activity_value_nm: float | None = None
     activity_relation: str | None = None
+
+    def context_key(self) -> str:
+        """Identify the measurement context: target, assay type, format and control.
+
+        Two records of the same compound (``record_key``) are duplicates only
+        when their contexts match, so a compound can hold, say, a biochemical
+        and a cell-based result.
+
+        Returns:
+            ``""`` when the record has no context at all, else a stable
+            SHA-256 hex digest of the context.
+        """
+        parts = (
+            (self.target or "").strip().lower(),
+            (self.assay_type or "").strip().lower(),
+            self.assay_format.value if self.assay_format else "",
+            self.control.value if self.control else "",
+        )
+        if not any(parts):
+            return ""
+        return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
 class Severity(StrEnum):
@@ -763,13 +810,30 @@ class CriterionSummary(_Contract):
     most_potent: CriterionShare
 
 
-class DatasetAssessment(_Contract):
-    """Hit-to-lead view of a dataset: potency classes, criteria, per-compound profiles."""
+class FormatPotency(_Contract):
+    """Potency of the compounds measured in one assay format (``None``: not given)."""
 
-    dataset_id: uuid.UUID
+    assay_format: AssayFormat | None
     compounds: int
     potency_classes: dict[PotencyClass, int]
     actives: int
+
+
+class DatasetAssessment(_Contract):
+    """Hit-to-lead view of a dataset: potency classes, criteria, per-record profiles.
+
+    Counts are per compound (``record_key``), control records excluded; a
+    compound's potency class is the one met by the majority of its
+    measurements. ``profiles`` has one entry per record (measurement).
+    """
+
+    dataset_id: uuid.UUID
+    compounds: int
+    measurements: int
+    controls: int
+    potency_classes: dict[PotencyClass, int]
+    actives: int
+    by_format: list[FormatPotency]
     most_potent_ids: list[uuid.UUID]
     criteria: list[CriterionSummary]
     profiles: list[CompoundProfile]
