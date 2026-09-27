@@ -8,13 +8,13 @@ request context, never from a request body or query string.
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, text, update
 from sqlalchemy.engine import CursorResult, Result
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from dndlabs.core.exceptions import (
     ConflictError,
@@ -24,6 +24,7 @@ from dndlabs.core.exceptions import (
 )
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
+    FINISHED_STATUSES,
     ApiKeyRecord,
     AssayFormat,
     ColumnRole,
@@ -41,6 +42,8 @@ from dndlabs.core.schemas import (
     PipelineRun,
     QualityReport,
     Role,
+    RunProgress,
+    RunStage,
     RunStatus,
     SourceSpec,
     SourceType,
@@ -50,6 +53,7 @@ from dndlabs.core.schemas import (
     User,
     UserCredentials,
     UserSession,
+    utcnow,
 )
 from dndlabs.storage.database import SessionFactory
 from dndlabs.storage.models import (
@@ -989,7 +993,13 @@ class SqlMappingTemplateRepository:
 
 
 class SqlRunRepository:
-    """Stores :class:`PipelineRun` metadata, scoped by organization."""
+    """Stores :class:`PipelineRun` metadata and serves as the run queue.
+
+    Organization-facing methods are scoped by ``org_id``. The queue methods
+    (``claim_next``, ``fail_exhausted``, ``renew_lease``, ``release``) serve
+    the run worker, which executes every organization's runs, each under the
+    ``org_id`` the claimed run carries.
+    """
 
     def __init__(self, sessions: SessionFactory) -> None:
         """Create the repository.
@@ -1015,17 +1025,25 @@ class SqlRunRepository:
                     org_id=run.org_id,
                     source=run.spec.source.value,
                     status=run.status.value,
+                    stage=run.stage.value,
+                    progress=run.progress.model_dump(),
+                    attempts=run.attempts,
+                    cancel_requested=run.cancel_requested,
                     dataset_id=run.dataset_id,
                     request_payload=run.spec.model_dump(mode="json"),
                     error=run.error,
                     created_at=run.created_at,
+                    started_at=run.started_at,
                     finished_at=run.finished_at,
                 )
             )
         return run
 
     def update(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
-        """Update an existing run.
+        """Update an existing run's outcome.
+
+        Writes ``status``, ``stage``, ``progress``, ``dataset_id``, ``error``
+        and ``finished_at``; a finished run also gives up its lease.
 
         Args:
             org_id: Owning organization (enforced).
@@ -1038,16 +1056,17 @@ class SqlRunRepository:
             NotFoundError: If the run does not exist for this org.
         """
         with self._sessions.transaction() as session:
-            row = session.scalars(
-                select(RunRow).where(RunRow.id == run.id, RunRow.org_id == org_id)
-            ).first()
-            if row is None:
-                raise NotFoundError(f"run {run.id} not found for org {org_id}")
+            row = self._row(session, org_id, run.id)
             row.status = run.status.value
+            row.stage = run.stage.value
+            row.progress = run.progress.model_dump()
             row.dataset_id = run.dataset_id
             row.error = run.error
             row.finished_at = run.finished_at
-        return run
+            if run.status in FINISHED_STATUSES:
+                row.worker_id = None
+                row.lease_expires_at = None
+            return _run_from_row(row)
 
     def get(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
         """Fetch a run by id, scoped to an organization.
@@ -1063,12 +1082,7 @@ class SqlRunRepository:
             NotFoundError: If the run does not exist for this org.
         """
         with self._sessions.transaction() as session:
-            row = session.scalars(
-                select(RunRow).where(RunRow.id == run_id, RunRow.org_id == org_id)
-            ).first()
-            if row is None:
-                raise NotFoundError(f"run {run_id} not found for org {org_id}")
-            return _run_from_row(row)
+            return _run_from_row(self._row(session, org_id, run_id))
 
     def list_for_org(self, org_id: uuid.UUID) -> list[PipelineRun]:
         """List runs for an organization, newest first.
@@ -1085,6 +1099,263 @@ class SqlRunRepository:
             )
             return [_run_from_row(r) for r in rows]
 
+    def request_cancel(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
+        """Cancel a run: a pending one at once, a running one at its next checkpoint.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: Run to cancel.
+
+        Returns:
+            The run after the request; a finished run is returned unchanged.
+
+        Raises:
+            NotFoundError: If the run does not exist for this org.
+        """
+        with self._sessions.transaction() as session:
+            row = self._row(session, org_id, run_id)
+            if row.status == RunStatus.PENDING.value:
+                row.status = RunStatus.CANCELLED.value
+                row.cancel_requested = True
+                row.finished_at = utcnow()
+            elif row.status == RunStatus.RUNNING.value:
+                row.cancel_requested = True
+            return _run_from_row(row)
+
+    def claim(
+        self, org_id: uuid.UUID, run_id: uuid.UUID, worker_id: str, lease_seconds: float
+    ) -> PipelineRun | None:
+        """Atomically claim one pending run for ``worker_id``.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+
+        Returns:
+            The claimed run, or ``None`` if it is no longer pending.
+        """
+        now = utcnow()
+        with self._sessions.transaction() as session:
+            claimed = session.execute(
+                update(RunRow)
+                .where(
+                    RunRow.id == run_id,
+                    RunRow.org_id == org_id,
+                    RunRow.status == RunStatus.PENDING.value,
+                )
+                .values(
+                    status=RunStatus.RUNNING.value,
+                    attempts=RunRow.attempts + 1,
+                    worker_id=worker_id,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                    started_at=func.coalesce(RunRow.started_at, now),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if _rowcount(claimed) != 1:
+                return None
+            return _run_from_row(self._row(session, org_id, run_id))
+
+    def claim_next(
+        self, worker_id: str, lease_seconds: float, max_lost_leases: int
+    ) -> PipelineRun | None:
+        """Atomically claim the next runnable run for ``worker_id``.
+
+        Among runnable runs, the one whose organization has the fewest runs
+        executing right now goes first, oldest first on a tie.
+
+        Args:
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+            max_lost_leases: Unexpected worker stops after which a run is
+                failed rather than claimed again.
+
+        Returns:
+            The claimed run, or ``None`` if nothing is runnable.
+        """
+        while True:
+            now = utcnow()
+            with self._sessions.transaction() as session:
+                # Fair share: plain FIFO would let one organization's backlog
+                # of 100 runs hold every other organization's runs behind it.
+                # Ordering by how many runs the candidate's organization is
+                # executing now (live leases only) interleaves organizations,
+                # and created_at keeps each organization first-in, first-out.
+                executing = aliased(RunRow)
+                org_load = (
+                    select(func.count())
+                    .select_from(executing)
+                    .where(
+                        executing.org_id == RunRow.org_id,
+                        executing.status == RunStatus.RUNNING.value,
+                        executing.lease_expires_at >= now,
+                    )
+                    .scalar_subquery()
+                )
+                # SKIP LOCKED: concurrent workers on PostgreSQL skip a row
+                # another worker is claiming instead of queueing behind it.
+                # (SQLite ignores FOR UPDATE; its writers are serialized.)
+                candidate = session.execute(
+                    select(RunRow.id, RunRow.status, RunRow.attempts, RunRow.lost_leases)
+                    .where(_runnable(now, max_lost_leases))
+                    .order_by(org_load, RunRow.created_at)
+                    .limit(1)
+                    .with_for_update(skip_locked=True)
+                ).first()
+                if candidate is None:
+                    return None
+                resumed_after_crash = candidate.status == RunStatus.RUNNING.value
+                # The claim is conditional on the state that was read (and on
+                # the run still being runnable), so it is atomic on any
+                # database even without row locks: of two workers that read
+                # the same candidate, only one update matches.
+                claimed = session.execute(
+                    update(RunRow)
+                    .where(
+                        RunRow.id == candidate.id,
+                        RunRow.status == candidate.status,
+                        RunRow.attempts == candidate.attempts,
+                        RunRow.lost_leases == candidate.lost_leases,
+                        _runnable(now, max_lost_leases),
+                    )
+                    .values(
+                        status=RunStatus.RUNNING.value,
+                        attempts=candidate.attempts + 1,
+                        # Its previous worker's lease ran out: that worker
+                        # stopped without handing the run back.
+                        lost_leases=candidate.lost_leases + (1 if resumed_after_crash else 0),
+                        worker_id=worker_id,
+                        lease_expires_at=now + timedelta(seconds=lease_seconds),
+                        started_at=func.coalesce(RunRow.started_at, now),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if _rowcount(claimed) == 1:
+                    row = session.get(RunRow, candidate.id, populate_existing=True)
+                    assert row is not None
+                    return _run_from_row(row)
+            # Another worker claimed it between our read and update; try the next.
+
+    def fail_exhausted(self, max_lost_leases: int) -> list[PipelineRun]:
+        """Fail runs whose worker has now stopped unexpectedly ``max_lost_leases`` times.
+
+        Args:
+            max_lost_leases: Which unexpected worker stop fails a run (3: the third).
+
+        Returns:
+            The runs marked failed.
+        """
+        now = utcnow()
+        with self._sessions.transaction() as session:
+            rows = list(
+                session.scalars(
+                    select(RunRow)
+                    .where(_lease_expired(now), RunRow.lost_leases + 1 >= max_lost_leases)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for row in rows:
+                # This expiry is itself a lost lease: count it, so the stored
+                # counter and the message agree.
+                row.lost_leases += 1
+                row.status = RunStatus.FAILED.value
+                row.error = (
+                    f"the run's worker stopped unexpectedly {row.lost_leases} times; start it again"
+                )
+                row.finished_at = now
+                row.worker_id = None
+                row.lease_expires_at = None
+                # A failed run keeps no output; its crashed attempt may have
+                # stored part of a dataset that no retry will now replace.
+                _delete_run_output(session, row.org_id, row.id)
+            return [_run_from_row(r) for r in rows]
+
+    def renew_lease(self, run_id: uuid.UUID, worker_id: str, lease_seconds: float) -> bool:
+        """Extend a running run's lease, if ``worker_id`` still holds it.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker executing it.
+            lease_seconds: New lease length from now.
+
+        Returns:
+            Whether the lease was renewed.
+        """
+        with self._sessions.transaction() as session:
+            result = session.execute(
+                update(RunRow)
+                .where(
+                    RunRow.id == run_id,
+                    RunRow.worker_id == worker_id,
+                    RunRow.status == RunStatus.RUNNING.value,
+                )
+                .values(lease_expires_at=utcnow() + timedelta(seconds=lease_seconds))
+                .execution_options(synchronize_session=False)
+            )
+            return _rowcount(result) == 1
+
+    def release(self, run_id: uuid.UUID, worker_id: str) -> None:
+        """Hand an unfinished run back to the queue after a clean stop.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker that held it.
+        """
+        # Back to pending rather than an expired lease: the next poll claims
+        # it as an ordinary pending run, and a planned restart (deploy) is not
+        # counted as a lost lease. Stage, progress and attempts are kept so
+        # the run's history stays visible while it waits.
+        with self._sessions.transaction() as session:
+            row = session.scalars(
+                select(RunRow)
+                .where(
+                    RunRow.id == run_id,
+                    RunRow.worker_id == worker_id,
+                    RunRow.status == RunStatus.RUNNING.value,
+                )
+                .with_for_update()
+            ).first()
+            if row is None:  # finished, deleted, or taken over by another worker
+                return
+            # A cancellation requested before the stop is honoured here: the
+            # user asked for the run to end, so it must not start over.
+            if row.cancel_requested:
+                row.status = RunStatus.CANCELLED.value
+                row.finished_at = utcnow()
+            else:
+                row.status = RunStatus.PENDING.value
+            row.worker_id = None
+            row.lease_expires_at = None
+            # A pending run holds no output: the stopped attempt's partial
+            # dataset goes now (the next attempt would delete it anyway), so
+            # cancelling the run while it waits leaves nothing behind.
+            _delete_run_output(session, row.org_id, row.id)
+
+    @staticmethod
+    def _row(session: Session, org_id: uuid.UUID, run_id: uuid.UUID) -> RunRow:
+        """The run's row, scoped to its organization."""
+        row = session.scalars(
+            select(RunRow).where(RunRow.id == run_id, RunRow.org_id == org_id)
+        ).first()
+        if row is None:
+            raise NotFoundError(f"run {run_id} not found for org {org_id}")
+        return row
+
+
+def _lease_expired(now: datetime) -> ColumnElement[bool]:
+    """Running runs whose worker stopped renewing the lease (crashed, killed, hung)."""
+    return and_(RunRow.status == RunStatus.RUNNING.value, RunRow.lease_expires_at < now)
+
+
+def _runnable(now: datetime, max_lost_leases: int) -> ColumnElement[bool]:
+    """Runs a worker may claim: pending, or an expired lease short of the limit."""
+    return or_(
+        RunRow.status == RunStatus.PENDING.value,
+        and_(_lease_expired(now), RunRow.lost_leases + 1 < max_lost_leases),
+    )
+
 
 def _run_from_row(row: RunRow) -> PipelineRun:
     """Convert a run row to its contract."""
@@ -1093,9 +1364,14 @@ def _run_from_row(row: RunRow) -> PipelineRun:
         org_id=row.org_id,
         spec=SourceSpec.model_validate(row.request_payload),
         status=RunStatus(row.status),
+        stage=RunStage(row.stage),
+        progress=RunProgress.model_validate(row.progress or {}),
+        attempts=row.attempts,
+        cancel_requested=row.cancel_requested,
         dataset_id=row.dataset_id,
         error=row.error,
         created_at=_as_utc(row.created_at),
+        started_at=_as_utc(row.started_at) if row.started_at else None,
         finished_at=_as_utc(row.finished_at) if row.finished_at else None,
     )
 
@@ -1233,6 +1509,38 @@ class SqlDatasetRepository:
             session.execute(delete(RunRow).where(RunRow.org_id == org_id))
             session.execute(delete(UploadRow).where(UploadRow.org_id == org_id))
             return len(dataset_ids)
+
+    def delete_for_run(self, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+        """Delete the dataset a run produced, with everything that references it.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+
+        Returns:
+            Whether a dataset was deleted.
+        """
+        with self._sessions.transaction() as session:
+            return _delete_run_output(session, org_id, run_id)
+
+
+def _delete_run_output(session: Session, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+    """Delete the dataset ``run_id`` produced and everything referencing it, if any."""
+    dataset_id = session.scalars(
+        select(DatasetRow.id).where(DatasetRow.org_id == org_id, DatasetRow.run_id == run_id)
+    ).first()
+    if dataset_id is None:
+        return False
+    record_ids = select(NormalizedRecordRow.id).where(NormalizedRecordRow.dataset_id == dataset_id)
+    session.execute(
+        delete(EnrichmentResultRow).where(EnrichmentResultRow.record_id.in_(record_ids))
+    )
+    session.execute(delete(FeatureVectorRow).where(FeatureVectorRow.record_id.in_(record_ids)))
+    session.execute(delete(ValidationIssueRow).where(ValidationIssueRow.dataset_id == dataset_id))
+    session.execute(delete(QualityReportRow).where(QualityReportRow.dataset_id == dataset_id))
+    session.execute(delete(NormalizedRecordRow).where(NormalizedRecordRow.dataset_id == dataset_id))
+    session.execute(delete(DatasetRow).where(DatasetRow.id == dataset_id))
+    return True
 
 
 def _record_to_row(

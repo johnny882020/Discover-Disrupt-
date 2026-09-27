@@ -1,4 +1,9 @@
-/** Triggers a dataset export download via the API. */
+/**
+ * Triggers a dataset export download via the API.
+ *
+ * The file is fetched with the credential header and saved from a Blob,
+ * because a plain link to the export URL could not authenticate.
+ */
 import { useMutation } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import type { ExportFormat } from "../api/types";

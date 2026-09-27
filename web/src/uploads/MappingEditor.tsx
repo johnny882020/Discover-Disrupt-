@@ -26,6 +26,7 @@ export function MappingEditor({ preview, mapping, onChange }: MappingEditorProps
 
   function setRole(column: string, value: string): void {
     const next = { ...mapping };
+    // "Keep as extra data" is expressed by leaving the column out of the mapping.
     if (value === "") {
       delete next[column];
     } else {
@@ -107,7 +108,7 @@ export function MappingEditor({ preview, mapping, onChange }: MappingEditorProps
         </p>
       ) : null}
       {problem ? (
-        <p role="status" className="text-sm text-danger">
+        <p role="status" className="text-sm text-danger dark:text-danger-bright">
           {problem}
         </p>
       ) : null}

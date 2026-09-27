@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, status
+from fastapi import APIRouter, status
 
 from dndlabs.api.dependencies import CurrentOrg, Services
 from dndlabs.core.schemas import PipelineRun, SourceSpec
@@ -11,23 +11,19 @@ router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 
 @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
-def run_pipeline(
-    spec: SourceSpec, background: BackgroundTasks, org: CurrentOrg, services: Services
-) -> PipelineRun:
-    """Start a pipeline run in the background.
+def run_pipeline(spec: SourceSpec, org: CurrentOrg, services: Services) -> PipelineRun:
+    """Queue a pipeline run; the API's run worker executes it.
 
     Args:
         spec: What to ingest.
-        background: FastAPI background task queue.
         org: The authenticated org context.
         services: Injected services.
 
     Returns:
-        The pending run; poll ``GET /pipelines/runs/{id}`` for completion.
+        The pending run; poll ``GET /pipelines/runs/{id}`` for its stage,
+        counts and outcome.
     """
-    run = services.service.submit(org.org_id, spec)
-    background.add_task(services.service.execute_in_background, org.org_id, run.id)
-    return run
+    return services.service.submit(org.org_id, spec)
 
 
 @router.get("/runs")
@@ -57,3 +53,21 @@ def get_run(run_id: uuid.UUID, org: CurrentOrg, services: Services) -> PipelineR
         The run, including ``dataset_id`` once it has succeeded.
     """
     return services.repositories.runs.get(org.org_id, run_id)
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel_run(run_id: uuid.UUID, org: CurrentOrg, services: Services) -> PipelineRun:
+    """Cancel a run: a queued one at once, a running one at its next checkpoint.
+
+    A running run stops at its next checkpoint and keeps nothing it stored;
+    a finished run is returned unchanged.
+
+    Args:
+        run_id: Run identifier.
+        org: The authenticated org context.
+        services: Injected services.
+
+    Returns:
+        The run after the request.
+    """
+    return services.repositories.runs.request_cancel(org.org_id, run_id)

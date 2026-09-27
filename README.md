@@ -24,12 +24,16 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
   neutralized), activity values converted to nanomolar, duplicates removed
   across sources and salt forms.
 - **Quality reports** that explain every rejected record.
+- **Durable runs:** queued and executed in the background with a live stage
+  stepper and record counts; shared fairly between organizations, resumed
+  after a restart or deploy, and cancellable.
 - **Hit/lead criteria:** potency classes (hit, lead, optimized), judged
-  per assay format (biochemical, cell-based) with controls left out, and
-  computed properties (MW, cLogP, TPSA, Lipinski, rotatable bonds, QED),
-  each judged over all compounds, the actives and the five most potent.
-- **Liability alerts:** PAINS, Brenk and reactive-metabolite groups,
-  highlighted on each structure.
+  per assay format (biochemical, cell-based) with controls left out;
+  computed properties (MW, cLogP, TPSA, Lipinski, rotatable bonds, QED);
+  each criterion judged over all compounds, the actives and the five most
+  potent.
+- **Liability alerts:** PAINS, Brenk and reactive-metabolite groups; PAINS
+  and reactive-metabolite atoms highlighted on each structure.
 - **Structure depiction** in the browser with RDKit.js.
 - **Featurization:** RDKit descriptors and Morgan fingerprints per compound.
 - **AI enrichment (optional):** candidate analogs from NVIDIA BioNeMo GenMol.
@@ -80,7 +84,7 @@ npm run lint && npm run typecheck && npm test -- --run && npm run build
 
 The full command list — PostgreSQL migration tests, live API tests and
 Playwright end-to-end tests — is in [CLAUDE.md](CLAUDE.md). CI runs all of
-them on every pull request.
+them except the opt-in live tests on every push and pull request.
 
 **Stack:** Python 3.11+, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL, RDKit ·
 React 18, TypeScript, Vite · Docker, Render.

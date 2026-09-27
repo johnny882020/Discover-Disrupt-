@@ -44,7 +44,13 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
         """Build services on startup and release them on shutdown."""
         if services is not None:
             app.state.services = services
-            yield
+            if services.worker is not None:
+                await services.worker.start()
+            try:
+                yield
+            finally:
+                if services.worker is not None:
+                    await services.worker.stop()
             return
         settings = get_settings()
         configure_logging(settings.log_level, settings.log_json)
@@ -57,10 +63,13 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             uploads=container.uploads,
             assessment=container.assessment,
             settings=settings,
+            worker=container.worker,
         )
+        await container.worker.start()
         try:
             yield
         finally:
+            await container.worker.stop()
             container.close()
 
     app = FastAPI(

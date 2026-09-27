@@ -121,7 +121,7 @@ function InviteForm({ onCreated }: { onCreated: (link: OneTimeLink) => void }): 
         </select>
       </label>
       {invite.isError ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {authErrorMessage(invite.error)}
         </p>
       ) : null}
@@ -218,12 +218,12 @@ function MembersTable({
     <div className="flex flex-col gap-3">
       <h2 className="font-display text-xl">Members</h2>
       {error ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {authErrorMessage(error)}
         </p>
       ) : null}
       {members.isError ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {authErrorMessage(members.error)}
         </p>
       ) : members.data ? (
@@ -243,7 +243,7 @@ function PendingInvitations(): React.JSX.Element {
     <div className="flex flex-col gap-3">
       <h2 className="font-display text-xl">Pending invitations</h2>
       {revoke.isError ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {authErrorMessage(revoke.error)}
         </p>
       ) : null}

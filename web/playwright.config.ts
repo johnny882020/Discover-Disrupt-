@@ -22,6 +22,13 @@ export default defineConfig({
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH }
       : undefined,
   },
+  projects: [
+    { name: "workflows", testIgnore: "screenshots.spec.ts" },
+    // After the workflows, never beside them: its long run occupies the API's
+    // run worker (one run at a time by default), which would leave the
+    // workflows' own runs queued past their timeouts.
+    { name: "screenshots", testMatch: "screenshots.spec.ts", dependencies: ["workflows"] },
+  ],
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {

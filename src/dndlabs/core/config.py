@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     #: Distinct identifiers (InChIKey, CID, ChEMBL ID, name) looked up per run.
     structure_lookup_limit: int = Field(default=1000, ge=0)
 
+    #: Run worker (in the API process): poll interval when idle, lease length
+    #: (renewed every third of it), how many times a run's worker may stop
+    #: unexpectedly (crash, kill, hang: its lease expired) before the run
+    #: fails, runs executed at once, and how long shutdown waits for runs to
+    #: stop. A clean shutdown hands its runs back and never counts.
+    worker_poll_seconds: float = Field(default=2.0, gt=0)
+    worker_lease_seconds: float = Field(default=120.0, ge=10)
+    worker_max_lost_leases: int = Field(default=3, ge=1)
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
+    worker_shutdown_grace_seconds: float = Field(default=20.0, ge=0)
+
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)
     pubchem_batch_size: int = Field(default=100, ge=1, le=500)

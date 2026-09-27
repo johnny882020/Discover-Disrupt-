@@ -68,11 +68,18 @@ export const handlers = [
         dataset_name: body.dataset_name ?? null,
       },
       status: "succeeded",
+      stage: "done",
+      progress: { fetched: 3, resolved: 0, validated: 3, accepted: 3, rejected: 0, duplicates: 0, featurized: 3, enriched: 0 },
+      attempts: 1,
+      cancel_requested: false,
       dataset_id: datasetId,
       error: null,
       created_at: now,
+      started_at: now,
       finished_at: now,
     };
+    // The run worker finishes the run before the first poll; the POST itself
+    // only queues it.
     runsStore.unshift(run);
 
     const dataset: Dataset = {
@@ -120,7 +127,37 @@ export const handlers = [
     };
     ENRICHMENT_RESULTS[datasetId] = [];
 
-    return HttpResponse.json(run, { status: 202 });
+    const queued: PipelineRun = {
+      ...run,
+      status: "pending",
+      stage: "queued",
+      progress: { fetched: 0, resolved: 0, validated: 0, accepted: 0, rejected: 0, duplicates: 0, featurized: 0, enriched: 0 },
+      attempts: 0,
+      dataset_id: null,
+      started_at: null,
+      finished_at: null,
+    };
+    return HttpResponse.json(queued, { status: 202 });
+  }),
+
+  http.post(`${BASE}/pipelines/runs/:id/cancel`, ({ request, params }) => {
+    const org = authenticate(request);
+    if (!org) {
+      return HttpResponse.json(UNAUTHORIZED, { status: 401 });
+    }
+    const index = runsStore.findIndex((r) => r.id === params.id && r.org_id === org.org_id);
+    if (index < 0) {
+      return HttpResponse.json({ detail: "Run not found." }, { status: 404 });
+    }
+    const run = runsStore[index];
+    const updated: PipelineRun =
+      run.status === "pending"
+        ? { ...run, status: "cancelled", cancel_requested: true, finished_at: new Date().toISOString() }
+        : run.status === "running"
+          ? { ...run, cancel_requested: true }
+          : run;
+    runsStore[index] = updated;
+    return HttpResponse.json(updated);
   }),
 
   http.get(`${BASE}/pipelines/runs`, ({ request }) => {

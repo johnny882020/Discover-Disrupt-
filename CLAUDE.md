@@ -8,6 +8,7 @@ Read [docs/architecture.md](docs/architecture.md) before changing code.
 ```bash
 pip install -e ".[dev]"
 pytest --cov=dndlabs                      # backend tests + coverage
+pytest tests/docs                         # doc/code consistency
 DNDLABS_TEST_POSTGRES_URL=postgresql+psycopg://… pytest tests/integration  # migrations on real Postgres (CI runs this)
 ruff check . && ruff format --check .
 mypy src/                                 # strict
@@ -40,5 +41,17 @@ docker compose up --build                 # full stack locally
 - **Logging:** `core.logging.get_logger`, never `print()`. It redacts secret-shaped fields (keys, tokens, passwords) and `Bearer` tokens — don't work around that, and never log a raw credential.
 - **Config:** `core.config.Settings` (`DNDLABS_*` env vars) only. No hardcoded values or committed secrets.
 - **Storage ordering:** a dataset's records must be persisted before any feature vector or enrichment result that references them (foreign key) — see `pipeline/orchestrator.py`'s stage order.
-- **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `tests/scripts/` covers `scripts/`; `web/tests/` mirrors `web/src/`.
+- **Comments:** every module docstring states its responsibility; every non-obvious decision has a why-comment next to it. The code is the source of truth — docs summarize and name the module; they don't restate internals.
+- **Tests:** ship with the code in the same commit. `tests/unit/` mirrors `src/dndlabs/` 1:1; `tests/scripts/` covers `scripts/`; `tests/docs/` covers `docs/`; `web/tests/` mirrors `web/src/`.
 - **Contracts:** changes to `core/schemas.py`, `core/protocols.py` or the DB schema update `docs/architecture.md` and get a new Alembic revision (never reuse a revision id — a reused `0001` once left production without its schema); NVIDIA contract changes update `docs/nvidia-nim.md`.
+
+## Verify every change
+
+1. Re-read your diff adversarially.
+2. Run the scoped fast checks (tests, lint, types for what you touched).
+3. Run the deterministic doc/code evals: `pytest tests/docs`.
+4. UI changes: screenshot verification (`web/e2e/screenshots.spec.ts`; PNGs in `web/e2e/screenshots/`, reviewed before a PR).
+5. Runtime changes: the real stack — API + worker, Postgres, Playwright, smoke test, post-deploy check.
+6. Prompt changes: the suite in `evals/prompts/`, run 3× per change; a finding counts only if at least 2 of 3 runs report it.
+
+The workflow is in `.claude/skills/verify/SKILL.md`. Parallel work uses at most five agents at a time, each owning a disjoint set of paths.

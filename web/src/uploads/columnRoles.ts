@@ -34,7 +34,8 @@ const STRUCTURE_ROLES: ColumnRole[] = ["smiles", "inchi", "mol_block", ...LOOKUP
 
 /**
  * Why a mapping cannot be used for a run, or `null` if it can. Mirrors the
- * server's rules, which remain authoritative.
+ * server's rules, which remain authoritative: checking here lets the form
+ * explain the problem and keep "Start run" disabled without a round trip.
  */
 export function mappingProblem(mapping: ColumnMapping): string | null {
   const roles = Object.values(mapping).filter((role) => role !== "ignore");

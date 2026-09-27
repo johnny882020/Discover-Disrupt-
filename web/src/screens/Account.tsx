@@ -75,12 +75,12 @@ function ChangePasswordForm(): React.JSX.Element {
         onChange={(e) => setConfirmation(e.target.value)}
       />
       {error ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {error}
         </p>
       ) : null}
       {done ? (
-        <p role="status" className="text-sm text-success">
+        <p role="status" className="text-sm text-success dark:text-success-bright">
           Password changed. You&apos;ve been signed out everywhere else.
         </p>
       ) : null}

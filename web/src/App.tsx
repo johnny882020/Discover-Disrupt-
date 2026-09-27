@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 });
 
 const NAV_LINK = ({ isActive }: { isActive: boolean }): string =>
-  isActive ? "text-accent" : "hover:text-accent";
+  isActive ? "text-accent dark:text-accent-bright" : "hover:text-accent dark:hover:text-accent-bright";
 
 function AppShell(): React.JSX.Element {
   const { org, signOut } = useSession();
@@ -41,7 +41,7 @@ function AppShell(): React.JSX.Element {
             <NavLink to="/account" className={NAV_LINK}>
               Account
             </NavLink>
-            <button type="button" onClick={() => void signOut()} className="hover:text-accent">
+            <button type="button" onClick={() => void signOut()} className="hover:text-accent dark:hover:text-accent-bright">
               Sign out
             </button>
           </nav>

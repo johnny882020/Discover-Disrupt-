@@ -23,7 +23,7 @@ async def test_pubchem_sample_end_to_end(container: Container) -> None:
             source=SourceType.PUBCHEM, identifiers=["2244", "3672", "2519"], dataset_name="nsaids"
         ),
     )
-    finished = await container.service.execute(org.id, run.id)
+    finished = await container.worker.run_now(run)
     assert finished.status is RunStatus.SUCCEEDED
 
     report = container.repositories.reports.get_for_dataset(org.id, finished.dataset_id)
@@ -54,7 +54,7 @@ async def test_chembl_target_end_to_end(container: Container) -> None:
     run = container.service.submit(
         org.id, SourceSpec(source=SourceType.CHEMBL, chembl_target="CHEMBL204")
     )
-    finished = await container.service.execute(org.id, run.id)
+    finished = await container.worker.run_now(run)
     assert finished.status is RunStatus.SUCCEEDED
     dataset = container.repositories.datasets.get(org.id, finished.dataset_id)
     assert len(dataset.records) == 3
@@ -69,7 +69,7 @@ async def test_malformed_csv_end_to_end(container: Container) -> None:
         org.id,
         SourceSpec(source=SourceType.CSV, csv_path=str(FIXTURES / "lab_export_malformed.csv")),
     )
-    finished = await container.service.execute(org.id, run.id)
+    finished = await container.worker.run_now(run)
     report = container.repositories.reports.get_for_dataset(org.id, finished.dataset_id)
     assert report.total_records == 5
     assert report.accepted_records == 3
@@ -83,7 +83,7 @@ async def test_json_upload_end_to_end(container: Container) -> None:
         org.id,
         SourceSpec(source=SourceType.JSON, json_path=str(FIXTURES / "data_lake_upload.json")),
     )
-    finished = await container.service.execute(org.id, run.id)
+    finished = await container.worker.run_now(run)
     report = container.repositories.reports.get_for_dataset(org.id, finished.dataset_id)
     assert report.accepted_records == 1
     assert report.rejected_records == 1
@@ -94,7 +94,7 @@ async def test_two_orgs_are_fully_isolated(container: Container) -> None:
     run_a = container.service.submit(
         org_a.id, SourceSpec(source=SourceType.PUBCHEM, identifiers=["2244"])
     )
-    finished_a = await container.service.execute(org_a.id, run_a.id)
+    finished_a = await container.worker.run_now(run_a)
 
     assert container.repositories.datasets.list_for_org(org_b.id) == []
     with pytest.raises(Exception, match="not found"):
@@ -111,7 +111,7 @@ async def test_export_is_schema_valid_csv(container: Container) -> None:
     run = container.service.submit(
         org.id, SourceSpec(source=SourceType.PUBCHEM, identifiers=["2244"])
     )
-    finished = await container.service.execute(org.id, run.id)
+    finished = await container.worker.run_now(run)
     dataset = container.repositories.datasets.get(org.id, finished.dataset_id)
     assessment = container.assessment.assess(org.id, dataset.dataset.id)
     profiles = {p.record_id: p for p in assessment.profiles}

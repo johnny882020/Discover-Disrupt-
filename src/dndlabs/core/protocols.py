@@ -6,7 +6,7 @@ tenants. See docs/architecture.md.
 """
 
 import uuid
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -98,11 +98,18 @@ class StructureResolver(Protocol):
     from; records that cannot be resolved get ``structure_error`` instead.
     """
 
-    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]:
+    async def resolve(
+        self,
+        raws: Sequence[RawRecord],
+        checkpoint: Callable[[int], None] | None = None,
+    ) -> list[RawRecord]:
         """Resolve structures; never raises for an unresolvable record.
 
         Args:
             raws: Records from a connector.
+            checkpoint: Called with the number of records resolved so far
+                after each lookup, so a run can stop mid-stage; whatever it
+                raises propagates and stops resolution.
 
         Returns:
             The same records, in order, with structures filled in or an
@@ -687,7 +694,11 @@ class RunRepository(Protocol):
         ...
 
     def update(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
-        """Update an existing run.
+        """Update an existing run's outcome.
+
+        Writes ``status``, ``stage``, ``progress``, ``dataset_id``, ``error``
+        and ``finished_at``. ``attempts`` and ``cancel_requested`` belong to
+        the queue and to cancellation, and are never overwritten here.
 
         Args:
             org_id: Owning organization (enforced).
@@ -724,6 +735,116 @@ class RunRepository(Protocol):
 
         Returns:
             The runs.
+        """
+        ...
+
+    def request_cancel(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
+        """Cancel a run: a pending one at once, a running one at its next checkpoint.
+
+        A finished run is returned unchanged.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: Run to cancel.
+
+        Returns:
+            The run after the request.
+
+        Raises:
+            NotFoundError: If the run does not exist for this org.
+        """
+        ...
+
+    def claim(
+        self, org_id: uuid.UUID, run_id: uuid.UUID, worker_id: str, lease_seconds: float
+    ) -> PipelineRun | None:
+        """Atomically claim one pending run for ``worker_id`` (e.g. the CLI's own run).
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+
+        Returns:
+            The claimed run, or ``None`` if it is no longer pending.
+        """
+        ...
+
+    # The queue methods below serve the run worker, which executes every
+    # organization's runs; each run it claims carries its own ``org_id``,
+    # which scopes everything the worker then does for it.
+
+    def claim_next(
+        self, worker_id: str, lease_seconds: float, max_lost_leases: int
+    ) -> PipelineRun | None:
+        """Atomically claim the next runnable run for ``worker_id``.
+
+        Runnable: pending, or running under a lease that has expired (its
+        worker crashed, was killed or hung) unless that worker was the
+        ``max_lost_leases``-th to stop that way (see :meth:`fail_exhausted`).
+        Among runnable runs, the one whose organization has the fewest runs
+        executing right now is taken first, oldest first on a tie, so one
+        organization's backlog cannot hold up everyone else's runs.
+
+        The run becomes ``running`` with one more attempt and a new lease.
+        Concurrent callers never claim the same run.
+
+        Args:
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+            max_lost_leases: Unexpected worker stops after which a run is
+                failed rather than claimed again.
+
+        Returns:
+            The claimed run, or ``None`` if nothing is runnable.
+        """
+        ...
+
+    def fail_exhausted(self, max_lost_leases: int) -> list[PipelineRun]:
+        """Fail runs whose worker has now stopped unexpectedly ``max_lost_leases`` times.
+
+        A run counts a lost lease each time its lease expires while it is
+        running; with ``max_lost_leases=3`` the third such stop fails it
+        instead of letting it be claimed again, and deletes whatever its
+        attempts stored. Clean shutdowns hand runs back with :meth:`release`
+        and never count.
+
+        Args:
+            max_lost_leases: Which unexpected worker stop fails a run (3: the third).
+
+        Returns:
+            The runs marked failed.
+        """
+        ...
+
+    def renew_lease(self, run_id: uuid.UUID, worker_id: str, lease_seconds: float) -> bool:
+        """Extend a running run's lease, if ``worker_id`` still holds it.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker executing it.
+            lease_seconds: New lease length from now.
+
+        Returns:
+            Whether the lease was renewed (``False``: the run finished, was
+            deleted, or another worker took it over).
+        """
+        ...
+
+    def release(self, run_id: uuid.UUID, worker_id: str) -> None:
+        """Hand an unfinished run back to the queue after a clean stop.
+
+        The run becomes ``pending`` again, keeping its stage, progress and
+        attempts, so the next poll claims it at once; unlike an expired
+        lease, this does not count against it. Whatever the stopped attempt
+        stored is deleted (the next attempt starts from the source anyway).
+        A run whose cancellation was requested ends ``cancelled`` instead.
+        Does nothing if ``worker_id`` no longer holds the run.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker that held it.
         """
         ...
 
@@ -792,6 +913,21 @@ class DatasetRepository(Protocol):
 
         Returns:
             Number of datasets deleted.
+        """
+        ...
+
+    def delete_for_run(self, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+        """Delete the dataset a run produced, with everything that references it.
+
+        Used before a run is executed again, so an interrupted attempt never
+        leaves a partial dataset behind.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+
+        Returns:
+            Whether a dataset was deleted.
         """
         ...
 

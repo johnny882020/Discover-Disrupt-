@@ -2,7 +2,7 @@
 
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from dndlabs.core.logging import get_logger
 from dndlabs.core.protocols import ValidationRule
@@ -72,20 +72,27 @@ class Validator:
         self,
         record_rules: Sequence[ValidationRule] | None = None,
         dataset_rules: Sequence[object] | None = None,
+        checkpoint_every: int = 500,
     ) -> None:
         """Configure the validator.
 
         Args:
             record_rules: Record rules; defaults to :func:`default_record_rules`.
             dataset_rules: Dataset rules; defaults to ``[DuplicateRule()]``.
+            checkpoint_every: Records between calls to a run's ``checkpoint``.
         """
+        self._checkpoint_every = checkpoint_every
         self._record_rules = list(record_rules or default_record_rules())
         self._dataset_rules = list(
             dataset_rules if dataset_rules is not None else [DuplicateRule()]
         )
 
     def run(
-        self, run_id: uuid.UUID, dataset_id: uuid.UUID, raws: Sequence[RawRecord]
+        self,
+        run_id: uuid.UUID,
+        dataset_id: uuid.UUID,
+        raws: Sequence[RawRecord],
+        checkpoint: Callable[[int], None] | None = None,
     ) -> ValidationOutcome:
         """Validate and normalize a batch of raw records.
 
@@ -93,6 +100,9 @@ class Validator:
             run_id: Run the records belong to (copied into the report).
             dataset_id: Dataset the accepted records will belong to.
             raws: Raw records from a connector.
+            checkpoint: Called with the number of records validated so far,
+                every ``checkpoint_every`` records; whatever it raises stops
+                validation (a cancelled or interrupted run).
 
         Returns:
             Accepted records and the quality report.
@@ -100,7 +110,9 @@ class Validator:
         issues: list[ValidationIssue] = []
         candidates: list[NormalizedRecord] = []
         rejected = 0
-        for raw in raws:
+        for done, raw in enumerate(raws, start=1):
+            if checkpoint is not None and done % self._checkpoint_every == 0:
+                checkpoint(done)
             record, record_issues = self._apply_record_rules(raw, dataset_id)
             issues.extend(record_issues)
             if any(i.severity is Severity.ERROR for i in record_issues):

@@ -1,3 +1,7 @@
+/**
+ * `useSession`: read the current session. Kept apart from `SessionContext.tsx`
+ * so that file exports only its component (React Fast Refresh requires it).
+ */
 import { useContext } from "react";
 import { SessionContextInternal, type SessionState } from "./sessionContextValue";
 

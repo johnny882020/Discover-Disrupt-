@@ -31,7 +31,7 @@ and ADME/Tox. Line numbers below are the guide's own.
 | Hit/lead properties (32–38, 55–61) | MW < 500, clogP < 5, Lipinski, rotatable bonds < 10, PSA < 140 Å² (< 90 Å² for CNS), for the majority and for the 5 most potent compounds | Done: shown per compound and summarized over all compounds, actives and the 5 most potent | R2 |
 | Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Done: potency classes, the count of actives, and potency per assay format | R2 |
 | Assays and controls (14–15, 24–25, 44, 47) | Named assays (binding, competition, selectivity) with positive and negative controls | Done: assay format and control flag; a compound can be recorded against several targets. No selectivity view yet | R2; selectivity view R3 |
-| Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | Done: reactive-metabolite, PAINS and Brenk alerts, highlighted on the structure | R2 |
+| Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | Done: reactive-metabolite, PAINS and Brenk alerts; reactive-metabolite and PAINS atoms highlighted on the structure | R2 |
 | Novelty, SAR, series (28–31, 52–54) | Novel scaffold, SAR-amenable, pharmacophore, 1–2 series | None | R3 |
 | ADME/Tox (35, 58, 64–67, 77–92) | Solubility at pH 7.4, plasma protein binding, CYP inhibition, PXR, hERG, PAMPA, Caco-2, metabolic stability, cytotoxicity, micronucleus, AMES | None; one activity per record | R3: measured results plus ADMET-AI predictions |
 | PK (69–72, 95) | Cmax, Tmax, t½, AUC; single and multiple dose; rodent, then non-rodent | None | R3 |
@@ -104,18 +104,25 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
   and over all compounds, the actives and the 5 most potent. Potency
   classes: hit < 10 µM, lead < 1 µM, optimized < 100 nM. Count of actives.
 - **Liabilities** *(done)*: PAINS, Brenk and reactive-metabolite alerts,
-  highlighted on the structure; filters to hide PAINS and reactive-metabolite
+  PAINS and reactive-metabolite atoms highlighted on the structure; filters to hide PAINS and reactive-metabolite
   alerts.
 - **Assay metadata** *(done)*: assay format (biochemical / cell-based) and
   control flag as column roles. A compound is kept once per measurement
   context (target, assay, format, control); its potency is the class most
   of its measurements reach, judged per assay format, with controls left
   out.
-- **Actionable quality report:** issues grouped by cause; bulk fixes (map
-  an unknown unit once); edit and re-validate a rejected row; re-run only
-  failed records.
-- **Background job queue** (Postgres-backed) with a live run stepper and
-  per-stage record counts.
+- **Actionable quality report:** issues grouped by cause, with an
+  explanation of each; bulk fixes (e.g. map an unknown unit once) with a
+  preview; edit a rejected row and re-validate it through the full
+  pipeline; edit an accepted record (re-validated); mass-concentration
+  units (µg/mL, mg/L, ng/mL) converted with the standardized molecular
+  weight; dismiss a row with a reason; an audit trail of every edit;
+  unmapped upload columns kept, shown and exported.
+- **Background job queue** *(done)*: runs are queued in Postgres and
+  executed by a worker in the API process under a renewable lease, shared
+  fairly between organizations, resumed after a restart or deploy (clean
+  stops never count as failures), and cancellable; a live run stepper shows
+  each stage with its record counts.
 - **Onboarding:** first-run checklist, a sample dataset, useful empty states.
 
 ### R3 — Lead-phase evidence
@@ -169,17 +176,17 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 
 ## Architecture changes
 
-- **Job queue and worker process** — runs move out of the API process
-  (Postgres-backed, no new infrastructure).
+- **Worker process** — the run worker (Postgres-backed queue, done in R2)
+  moves out of the API process into its own service once runs outgrow the
+  free instance; the queue needs no change for that.
 - **Model worker** — a separate service holding PyTorch, ADMET-AI and
   Chemprop (about 2 GB RAM, a paid instance). Required from R3; R1 and R2
   run on the current free tier.
 - **Schema** — new Alembic revisions for assays, measured results, PK
   parameters, predictions, projects and assessments, dataset versions and
   trained models.
-- **Contracts** — new protocols (`StructureResolver`, `PropertyPredictor`,
-  `JobQueue`, `TargetInformation`) with in-memory fakes, documented in
-  [architecture.md](architecture.md).
+- **Contracts** — new protocols (`PropertyPredictor`, `TargetInformation`)
+  with in-memory fakes, documented in [architecture.md](architecture.md).
 
 ## Success measures
 

@@ -13,6 +13,7 @@ from dndlabs.ingestion.uploads import UploadConnector, UploadService
 from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
+from dndlabs.pipeline.worker import RunWorker
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
 from dndlabs.validation.validator import Validator
 
@@ -44,6 +45,7 @@ def services() -> ApiServices:
         settings=Settings(
             admin_bootstrap_secret="test-admin-secret", frontend_origin="http://localhost:5173"
         ),
+        worker=RunWorker(runner, repos.runs, poll_seconds=0.01),
     )
 
 

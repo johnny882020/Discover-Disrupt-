@@ -134,8 +134,18 @@ jobs:
         working-directory: web
         run: npx playwright install --with-deps chromium
       - name: Run e2e
+        # Runs every spec in web/e2e; screenshots.spec.ts runs after the
+        # workflows (see the projects in playwright.config.ts).
         working-directory: web
         run: npx playwright test
+      - name: Upload screenshots
+        # Always, so a failing layout check still leaves the captures to inspect.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: web/e2e/screenshots/
+          retention-days: 7
       - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v7

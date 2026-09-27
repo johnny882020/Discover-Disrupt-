@@ -26,6 +26,7 @@ from dndlabs.storage.repositories import SqlOrganizationRepository, build_sql_re
 from tests.account_repository_checks import ALL_CHECKS
 from tests.conftest import HEAD_REVISION
 from tests.legacy_mvp import LEGACY_RUN_ID, apply_legacy_mvp_schema
+from tests.run_queue_checks import RUN_QUEUE_CHECKS
 from tests.upload_repository_checks import UPLOAD_CHECKS
 
 SERVER_URL = os.environ.get("DNDLABS_TEST_POSTGRES_URL", "")
@@ -258,7 +259,9 @@ def test_0007_keeps_existing_records_and_allows_one_per_context(database_url: st
     engine.dispose()
 
 
-@pytest.mark.parametrize("check", ALL_CHECKS + UPLOAD_CHECKS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize(
+    "check", [*ALL_CHECKS, *UPLOAD_CHECKS, *RUN_QUEUE_CHECKS], ids=lambda c: c.__name__
+)
 def test_account_repositories_on_postgres(database_url: str, check: Callable[..., None]) -> None:
     run_migrations(database_url)
     engine = create_db_engine(database_url)
@@ -266,3 +269,84 @@ def test_account_repositories_on_postgres(database_url: str, check: Callable[...
         check(build_sql_repositories(engine))
     finally:
         engine.dispose()
+
+
+def test_0008_fails_runs_the_old_background_tasks_lost(database_url: str) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0007")
+    org_id = uuid.uuid4()
+    runs = {status: uuid.uuid4() for status in ("pending", "running", "succeeded", "failed")}
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO organizations (id, name, created_at, is_active) "
+                "VALUES (:o, 'A', now(), true)"
+            ),
+            {"o": org_id},
+        )
+        for status, run_id in runs.items():
+            conn.execute(
+                text(
+                    "INSERT INTO pipeline_runs "
+                    "(id, org_id, source, status, request_payload, created_at) "
+                    "VALUES (:r, :o, 'csv', :s, '{}', now())"
+                ),
+                {"r": run_id, "o": org_id, "s": status},
+            )
+
+    command.upgrade(config, "head")
+
+    with engine.begin() as conn:
+        rows = {
+            r.id: r
+            for r in conn.execute(
+                text(
+                    "SELECT id, status, stage, progress, attempts, lost_leases, error "
+                    "FROM pipeline_runs"
+                )
+            )
+        }
+    for lost in ("pending", "running"):
+        assert rows[runs[lost]].status == "failed"
+        assert "start it again" in rows[runs[lost]].error
+    assert (rows[runs["succeeded"]].status, rows[runs["succeeded"]].stage) == ("succeeded", "done")
+    assert (rows[runs["failed"]].stage, rows[runs["failed"]].error) == ("queued", None)
+    assert all(r.progress == {} and r.attempts == 0 and r.lost_leases == 0 for r in rows.values())
+    engine.dispose()
+    command.downgrade(config, "0007")
+    command.upgrade(config, "head")
+
+
+def test_concurrent_workers_never_claim_the_same_run(database_url: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from dndlabs.core.schemas import Organization, PipelineRun, SourceSpec, SourceType
+
+    run_migrations(database_url)
+    engine = create_db_engine(database_url)
+    try:
+        repos = build_sql_repositories(engine)
+        # Several organizations, so the fair-share ordering (a correlated
+        # subquery under FOR UPDATE SKIP LOCKED) is exercised concurrently too.
+        orgs = [repos.organizations.create(Organization(name=f"Org {i}")) for i in range(4)]
+        spec = SourceSpec(source=SourceType.PUBCHEM, identifiers=["1"])
+        created = {
+            repos.runs.create(PipelineRun(org_id=orgs[i % 4].id, spec=spec)).id for i in range(40)
+        }
+
+        def claim_all(worker: str) -> list[uuid.UUID]:
+            claimed = []
+            while (run := repos.runs.claim_next(worker, 60, max_lost_leases=3)) is not None:
+                claimed.append(run.id)
+            return claimed
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(claim_all, [f"w{i}" for i in range(8)]))
+    finally:
+        engine.dispose()
+    everything = [run_id for claimed in results for run_id in claimed]
+    assert len(everything) == len(set(everything)) == len(created)
+    assert set(everything) == created

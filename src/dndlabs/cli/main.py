@@ -96,7 +96,7 @@ def run(
     spec = _build_spec(source, ids, path, chembl_target, name)
     with _container() as container:
         run_record = container.service.submit(uuid.UUID(org_id), spec)
-        finished = asyncio.run(container.service.execute(uuid.UUID(org_id), run_record.id))
+        finished = asyncio.run(container.worker.run_now(run_record))
         typer.echo(format_run(finished))
         if finished.dataset_id:
             report = container.repositories.reports.get_for_dataset(

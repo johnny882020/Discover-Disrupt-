@@ -40,6 +40,7 @@ def app(container: Container) -> FastAPI:
             uploads=container.uploads,
             assessment=container.assessment,
             settings=container.settings,
+            worker=container.worker,
         )
     )
 

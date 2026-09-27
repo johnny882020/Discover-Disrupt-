@@ -79,6 +79,22 @@ class PipelineError(DndLabsError):
     """Raised when the pipeline orchestrator cannot complete a run."""
 
 
+class RunInterruptedError(PipelineError):
+    """Raised when a run stops early because its worker is shutting down or lost it.
+
+    It is not a failure: after a clean stop the worker returns the run to
+    ``pending``; after a lost lease the queue resumes it once the lease expires.
+    """
+
+
+class RunDeletedError(PipelineError):
+    """Raised when a run's organization data was deleted while the run executed.
+
+    Nothing is recorded for the run (its row is gone) and whatever it stored
+    has been removed; the worker simply moves on.
+    """
+
+
 class ExportError(DndLabsError):
     """Raised when a dataset cannot be exported."""
 

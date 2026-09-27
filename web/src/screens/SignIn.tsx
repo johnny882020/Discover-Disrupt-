@@ -96,7 +96,7 @@ export function SignIn(): React.JSX.Element {
             />
           )}
           {error ? (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-sm text-danger dark:text-danger-bright">
               {error}
             </p>
           ) : null}
@@ -106,7 +106,7 @@ export function SignIn(): React.JSX.Element {
           <button
             type="button"
             onClick={() => switchMethod(method === "password" ? "api_key" : "password")}
-            className="text-sm text-ink/60 hover:text-accent dark:text-paper/60"
+            className="text-sm text-ink/60 hover:text-accent dark:hover:text-accent-bright dark:text-paper/60"
           >
             {method === "password" ? "Use an API key instead" : "Use email and password instead"}
           </button>

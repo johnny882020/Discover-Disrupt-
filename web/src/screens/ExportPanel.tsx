@@ -21,7 +21,7 @@ export function ExportPanel(): React.JSX.Element {
 
   if (datasetQuery.isError) {
     return (
-      <p role="alert" className="text-sm text-danger">
+      <p role="alert" className="text-sm text-danger dark:text-danger-bright">
         Could not load this dataset: {datasetQuery.error.message}
       </p>
     );
@@ -62,14 +62,14 @@ export function ExportPanel(): React.JSX.Element {
           </label>
 
           {exportMutation.isError ? (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-sm text-danger dark:text-danger-bright">
               {exportMutation.error instanceof Error
                 ? exportMutation.error.message
                 : "Export failed. Please try again."}
             </p>
           ) : null}
           {exportMutation.isSuccess ? (
-            <p className="text-sm text-success">Download started.</p>
+            <p className="text-sm text-success dark:text-success-bright">Download started.</p>
           ) : null}
 
           <Button onClick={() => void handleExport()} disabled={exportMutation.isPending}>

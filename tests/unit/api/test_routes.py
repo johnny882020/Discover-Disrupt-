@@ -243,3 +243,38 @@ def test_unhandled_exception_is_500_and_never_leaks_its_message(
     assert response.status_code == 500
     assert response.json() == {"detail": "internal server error"}
     assert "unanticipated bug" not in response.text
+
+
+def test_a_run_reports_its_stage_and_counts(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    run = _run_csv(client, auth_headers)
+    assert (run["status"], run["stage"], run["attempts"]) == ("succeeded", "done", 1)
+    assert run["progress"]["fetched"] == 1 and run["progress"]["accepted"] == 1
+    assert run["started_at"] is not None
+
+
+def test_cancel_a_queued_run(
+    services: ApiServices, auth_headers: dict[str, str], org_key: ApiKeyCreated
+) -> None:
+    from dndlabs.core.schemas import Organization
+
+    idle = dataclasses.replace(services, worker=None)  # runs stay queued
+    with TestClient(create_app(idle)) as client:
+        run = client.post(
+            "/api/v1/pipelines/run",
+            json={"source": "csv", "csv_path": "x.csv"},
+            headers=auth_headers,
+        ).json()
+        assert (run["status"], run["stage"]) == ("pending", "queued")
+
+        other = services.auth.issue_key(
+            services.repositories.organizations.create(Organization(name="OtherCo"))
+        )
+        cancel = f"/api/v1/pipelines/runs/{run['id']}/cancel"
+        assert client.post(cancel, headers={"X-API-Key": other.raw_key}).status_code == 404
+        assert client.post(cancel).status_code == 401
+
+        cancelled = client.post(cancel, headers=auth_headers).json()
+        assert (cancelled["status"], cancelled["cancel_requested"]) == ("cancelled", True)
+        assert client.post(cancel, headers=auth_headers).json() == cancelled  # finished: unchanged

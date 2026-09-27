@@ -4,7 +4,8 @@ import { http, HttpResponse } from "msw";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BASE_URL } from "../../src/api/client";
-import type { RunPipelineRequest } from "../../src/api/types";
+import type { PipelineRun, RunPipelineRequest } from "../../src/api/types";
+import { RUN_SUCCEEDED } from "../../src/mocks/data";
 import { server } from "../../src/mocks/server";
 import { createUploadPreview, templatesStore } from "../../src/mocks/uploadHandlers";
 import { RunTrigger } from "../../src/screens/RunTrigger";
@@ -70,6 +71,49 @@ describe("RunTrigger screen", () => {
   afterEach(() => {
     server.events.removeAllListeners();
     for (const id of Object.keys(templatesStore)) delete templatesStore[id];
+  });
+
+  it("shows the queued run's progress and lets the user cancel it", async () => {
+    let current: PipelineRun | null = null;
+    server.use(
+      http.post(`${BASE_URL}/pipelines/run`, () => {
+        current = { ...RUN_SUCCEEDED, id: "run-live", status: "pending", stage: "queued", dataset_id: null };
+        return HttpResponse.json(current, { status: 202 });
+      }),
+      http.get(`${BASE_URL}/pipelines/runs/run-live`, () => {
+        current = current && current.status === "pending"
+          ? {
+              ...current,
+              status: "running",
+              stage: "validating",
+              progress: { ...current.progress, fetched: 2, accepted: 0, rejected: 0 },
+            }
+          : current;
+        return HttpResponse.json(current);
+      }),
+      http.post(`${BASE_URL}/pipelines/runs/run-live/cancel`, () => {
+        current = current ? { ...current, status: "cancelled", cancel_requested: true } : current;
+        return HttpResponse.json(current);
+      }),
+    );
+    const user = userEvent.setup();
+    renderRunTrigger();
+    await user.click(screen.getByRole("radio", { name: /pubchem/i }));
+    await user.type(screen.getByLabelText(/pubchem cids/i), "2244");
+    await user.click(screen.getByRole("button", { name: /start run/i }));
+
+    expect(await screen.findByRole("heading", { name: "Run in progress" })).toBeInTheDocument();
+    const progress = await screen.findByRole("list", { name: "Run progress" });
+    await waitFor(() =>
+      expect(within(progress).getByText("Validating and standardizing").closest("li")).toHaveAttribute(
+        "aria-current",
+        "step",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The run was cancelled; nothing was saved.");
+    expect(screen.queryByRole("heading", { name: "Run in progress" })).not.toBeInTheDocument();
   });
 
   it("uploads a file, lets the user map columns, and runs it", async () => {

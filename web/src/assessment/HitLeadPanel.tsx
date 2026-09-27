@@ -20,6 +20,7 @@ function ShareCell({ share }: { share: CriterionShare }): React.JSX.Element {
   if (share.evaluated === 0) {
     return <span className="text-ink/50 dark:text-paper/50">—</span>;
   }
+  // Strictly more than half: a tie is not "met by the majority" (see the legend).
   const majority = share.passing * 2 > share.evaluated;
   const percent = Math.round((share.passing / share.evaluated) * 100);
   return (

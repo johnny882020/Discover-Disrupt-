@@ -13,7 +13,18 @@ export type SourceType = "pubchem" | "chembl" | "csv" | "json" | "upload";
 export type ExportFormat = "csv" | "jsonl";
 
 /** Lifecycle state of a pipeline run. */
-export type RunStatus = "pending" | "running" | "succeeded" | "failed";
+export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+
+/** The pipeline stage a run is in, in execution order. */
+export type RunStage =
+  | "queued"
+  | "fetching"
+  | "resolving"
+  | "validating"
+  | "storing"
+  | "featurizing"
+  | "enriching"
+  | "done";
 
 /** Severity of a validation issue. */
 export type Severity = "error" | "warning";
@@ -231,15 +242,38 @@ export interface UploadPreview {
   template: MappingTemplate | null;
 }
 
-/** Metadata of a pipeline run. */
+/** Record counts a run has reached so far. */
+export interface RunProgress {
+  fetched: number;
+  resolved: number;
+  /** Records validated so far, while validating. */
+  validated: number;
+  accepted: number;
+  rejected: number;
+  duplicates: number;
+  featurized: number;
+  enriched: number;
+}
+
+/**
+ * A pipeline run. Runs are queued and executed by the API's run worker;
+ * `attempts` counts executions started. A run stopped cleanly (deploy,
+ * restart, idle shutdown) goes back to `pending` with its stage, counts and
+ * `attempts` kept, and restarts from the beginning when picked up again.
+ */
 export interface PipelineRun {
   id: string;
   org_id: string;
   spec: SourceSpec;
   status: RunStatus;
+  stage: RunStage;
+  progress: RunProgress;
+  attempts: number;
+  cancel_requested: boolean;
   dataset_id: string | null;
   error: string | null;
   created_at: string;
+  started_at: string | null;
   finished_at: string | null;
 }
 

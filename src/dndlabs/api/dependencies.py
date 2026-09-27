@@ -14,6 +14,7 @@ from dndlabs.ingestion.uploads import UploadService
 from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
+from dndlabs.pipeline.worker import RunWorker
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class ApiServices:
         uploads: Upload service.
         assessment: Hit-to-lead assessment service.
         settings: Application settings.
+        worker: Executes queued runs; started and stopped with the app.
+            ``None`` leaves runs queued (tests that inspect pending runs).
     """
 
     repositories: Repositories
@@ -37,6 +40,7 @@ class ApiServices:
     uploads: UploadService
     assessment: AssessmentService
     settings: Settings
+    worker: RunWorker | None = None
 
 
 def get_services(request: Request) -> ApiServices:

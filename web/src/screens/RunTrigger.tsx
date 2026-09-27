@@ -11,7 +11,8 @@ import { Button } from "../design-system/Button";
 import { Card } from "../design-system/Card";
 import { FileDrop } from "../design-system/FileDrop";
 import { TextField } from "../design-system/TextField";
-import { useRun, useTriggerRun } from "../hooks/useRunStatus";
+import { useCancelRun, useRun, useTriggerRun } from "../hooks/useRunStatus";
+import { RunProgress } from "../runs/RunProgress";
 import { useDeleteTemplate, useMappingTemplates, useSaveTemplate, useUploadFile } from "../hooks/useUploads";
 import { MappingEditor } from "../uploads/MappingEditor";
 import { mappingProblem } from "../uploads/columnRoles";
@@ -86,20 +87,25 @@ export function RunTrigger(): React.JSX.Element {
   const [saveMapping, setSaveMapping] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  // The POST only returns the *submitted* run (status pending/running,
-  // dataset_id still null) — the pipeline finishes in the background.
-  // Poll the run's own status until it's terminal before navigating.
+  // The POST only queues the run; the API's run worker executes it. Poll the
+  // run's stage and counts until it finishes, then open its dataset.
   const [pendingRunId, setPendingRunId] = useState<string | null>(null);
   const pendingRun = useRun(pendingRunId ?? undefined);
+  const cancelRun = useCancelRun();
 
   useEffect(() => {
     if (!pendingRun.data) {
       return;
     }
+    // Clearing the run id on a terminal status stops polling and re-enables
+    // the form; a success leaves this page for the new dataset instead.
     if (pendingRun.data.status === "succeeded") {
       navigate(`/datasets/${pendingRun.data.dataset_id ?? ""}`);
     } else if (pendingRun.data.status === "failed") {
       setFormError(pendingRun.data.error ?? "The run failed.");
+      setPendingRunId(null);
+    } else if (pendingRun.data.status === "cancelled") {
+      setFormError("The run was cancelled; nothing was saved.");
       setPendingRunId(null);
     }
   }, [pendingRun.data, navigate]);
@@ -202,7 +208,7 @@ export function RunTrigger(): React.JSX.Element {
                 </p>
               ) : null}
               {uploadFile.isError ? (
-                <p role="alert" className="text-sm text-danger">
+                <p role="alert" className="text-sm text-danger dark:text-danger-bright">
                   {errorMessage(uploadFile.error, "The file could not be uploaded.")}
                 </p>
               ) : null}
@@ -217,7 +223,7 @@ export function RunTrigger(): React.JSX.Element {
                   <input type="checkbox" checked={saveMapping} onChange={(e) => setSaveMapping(e.target.checked)} />
                   Save this mapping for future uploads
                 </label>
-                <button type="button" onClick={resetUpload} className="text-ink/60 hover:text-accent dark:text-paper/60">
+                <button type="button" onClick={resetUpload} className="text-ink/60 hover:text-accent dark:hover:text-accent-bright dark:text-paper/60">
                   Choose a different file
                 </button>
               </div>
@@ -266,7 +272,7 @@ export function RunTrigger(): React.JSX.Element {
           </div>
 
           {formError ? (
-            <p role="alert" className="text-sm text-danger">
+            <p role="alert" className="text-sm text-danger dark:text-danger-bright">
               {formError}
             </p>
           ) : null}
@@ -278,6 +284,25 @@ export function RunTrigger(): React.JSX.Element {
           </div>
         </form>
       </Card>
+      {isWaiting && pendingRun.data ? (
+        <Card className="max-w-3xl">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-medium">Run in progress</h2>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={cancelRun.isPending || pendingRun.data.cancel_requested}
+              onClick={() => cancelRun.mutate(pendingRun.data.id)}
+            >
+              Cancel run
+            </Button>
+          </div>
+          <RunProgress run={pendingRun.data} />
+          <p className="mt-3 text-sm text-ink/60 dark:text-paper/60">
+            You can leave this page; the run continues and appears on the dashboard.
+          </p>
+        </Card>
+      ) : null}
       {source === "upload" ? <SavedMappings /> : null}
     </div>
   );

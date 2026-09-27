@@ -1,4 +1,8 @@
-/** QualityReport: data-quality summary and issue list for one dataset. */
+/**
+ * QualityReport: data-quality summary and issue list for one dataset.
+ * Rejected records surface here as validation issues rather than as run
+ * failures, so this is where a user finds out what was dropped and why.
+ */
 import { useParams } from "react-router-dom";
 import { Badge } from "../design-system/Badge";
 import { Card } from "../design-system/Card";
@@ -24,7 +28,7 @@ export function QualityReport(): React.JSX.Element {
 
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-danger">
+      <p role="alert" className="text-sm text-danger dark:text-danger-bright">
         Could not load the quality report: {query.error.message}
       </p>
     );
@@ -70,23 +74,27 @@ export function QualityReport(): React.JSX.Element {
         {report.issues.length === 0 ? (
           <p className="text-sm text-ink/60 dark:text-paper/60">No issues to review.</p>
         ) : (
-          <Table
-            columns={[
-              {
-                key: "severity",
-                header: "Severity",
-                cell: (issue) => (
-                  <Badge tone={issue.severity === "error" ? "danger" : "warning"}>{issue.severity}</Badge>
-                ),
-              },
-              { key: "rule", header: "Rule", cell: (issue) => <span className="font-mono">{issue.rule}</span> },
-              { key: "record", header: "Record", cell: (issue) => issue.source_record_id },
-              { key: "field", header: "Field", cell: (issue) => issue.field ?? "—" },
-              { key: "message", header: "Message", cell: (issue) => issue.message },
-            ]}
-            rows={report.issues}
-            getRowKey={(issue) => `${issue.rule}-${issue.source_record_id}-${issue.field ?? ""}-${issue.message}`}
-          />
+          // Five columns do not fit a phone: scroll inside the card, not the page.
+          <div className="overflow-x-auto">
+            <Table
+              columns={[
+                {
+                  key: "severity",
+                  header: "Severity",
+                  cell: (issue) => (
+                    <Badge tone={issue.severity === "error" ? "danger" : "warning"}>{issue.severity}</Badge>
+                  ),
+                },
+                { key: "rule", header: "Rule", cell: (issue) => <span className="font-mono">{issue.rule}</span> },
+                { key: "record", header: "Record", cell: (issue) => issue.source_record_id },
+                { key: "field", header: "Field", cell: (issue) => issue.field ?? "—" },
+                { key: "message", header: "Message", cell: (issue) => issue.message },
+              ]}
+              rows={report.issues}
+              // Issues have no id of their own; key on everything that identifies one.
+              getRowKey={(issue) => `${issue.rule}-${issue.source_record_id}-${issue.field ?? ""}-${issue.message}`}
+            />
+          </div>
         )}
       </Card>
     </div>

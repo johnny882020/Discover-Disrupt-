@@ -45,6 +45,7 @@ export function TokenPasswordScreen<T extends { email: string }>({
 }: TokenPasswordScreenProps<T>): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
+  // Captured once: the effect below strips it from the URL straight away.
   const [token] = useState<string | null>(() => tokenFromHash(location.hash));
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -61,6 +62,8 @@ export function TokenPasswordScreen<T extends { email: string }>({
     queryKey: ["token-preview", previewPath, token],
     queryFn: () => apiClient.post<T>(previewPath, { token }, null),
     enabled: token !== null,
+    // A rejected token will not become valid, so retrying only delays the
+    // message; and a single-use token is never re-previewed once shown.
     retry: false,
     staleTime: Infinity,
   });
@@ -90,11 +93,11 @@ export function TokenPasswordScreen<T extends { email: string }>({
   if (!token || preview.isError) {
     body = (
       <div className="flex flex-col gap-3">
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           {token ? authErrorMessage(preview.error) : "This link is incomplete."}
         </p>
         <p className="text-sm text-ink/60 dark:text-paper/60">{invalidHint}</p>
-        <Link to="/" className="text-sm text-accent hover:underline">
+        <Link to="/" className="text-sm text-accent dark:text-accent-bright hover:underline">
           Go to sign in
         </Link>
       </div>
@@ -129,7 +132,7 @@ export function TokenPasswordScreen<T extends { email: string }>({
           onChange={(e) => setConfirmation(e.target.value)}
         />
         {error ? (
-          <p role="alert" className="text-sm text-danger">
+          <p role="alert" className="text-sm text-danger dark:text-danger-bright">
             {error}
           </p>
         ) : null}
