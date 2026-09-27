@@ -3,7 +3,14 @@ import uuid
 import pytest
 
 from dndlabs.assessment.criteria import assess, compound_profile, most_potent, potency_class
-from dndlabs.core.schemas import Criterion, NormalizedRecord, PotencyClass, SourceType
+from dndlabs.core.schemas import (
+    AlertFamily,
+    Criterion,
+    NormalizedRecord,
+    PotencyClass,
+    SourceType,
+    StoredFeatures,
+)
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
 
 DATASET = uuid.uuid4()
@@ -28,8 +35,9 @@ def _record(
     )
 
 
-def _descriptors(record: NormalizedRecord) -> dict[str, float]:
-    return RdkitFeaturizer().featurize(record).descriptors
+def _features(record: NormalizedRecord) -> StoredFeatures:
+    vector = RdkitFeaturizer().featurize(record)
+    return StoredFeatures(record_id=record.id, descriptors=vector.descriptors, alerts=vector.alerts)
 
 
 @pytest.mark.parametrize(
@@ -56,7 +64,7 @@ def test_potency_class(value: float | None, relation: str | None, expected: Pote
 
 def test_profile_uses_lipinski_counts_and_evaluates_every_criterion() -> None:
     record = _record(250)
-    profile = compound_profile(record, _descriptors(record))
+    profile = compound_profile(record, _features(record))
     assert (profile.hbd, profile.hba) == (1, 4)  # NH+OH and N+O (RDKit's HBA would be 3)
     assert profile.potency_class is PotencyClass.LEAD
     assert profile.lipinski_violations == 0
@@ -65,7 +73,7 @@ def test_profile_uses_lipinski_counts_and_evaluates_every_criterion() -> None:
 
 def test_profile_flags_a_large_compound() -> None:
     record = _record(smiles=CYCLOSPORIN)
-    profile = compound_profile(record, _descriptors(record))
+    profile = compound_profile(record, _features(record))
     assert profile.lipinski_violations is not None and profile.lipinski_violations >= 2
     assert profile.criteria[Criterion.MW] is False
     assert profile.criteria[Criterion.LIPINSKI] is False
@@ -74,8 +82,13 @@ def test_profile_flags_a_large_compound() -> None:
 
 def test_profile_without_descriptors_has_no_criteria() -> None:
     record = _record(20)
-    for descriptors in (None, {"molecular_weight": 180.0}):
-        profile = compound_profile(record, descriptors)
+    full = _features(record)
+    for features in (
+        None,
+        StoredFeatures(record_id=record.id, descriptors={"molecular_weight": 180.0}, alerts=[]),
+        full.model_copy(update={"alerts": None}),  # stored before alerts existed
+    ):
+        profile = compound_profile(record, features)
         assert profile.criteria == {}
         assert profile.molecular_weight is None
         assert profile.potency_class is PotencyClass.OPTIMIZED
@@ -97,10 +110,10 @@ def test_assess_summarizes_all_actives_and_most_potent() -> None:
         _record(),
         _record(3, smiles=CYCLOSPORIN),
     ]
-    descriptors = {r.id: _descriptors(r) for r in records}
-    del descriptors[records[4].id]  # a compound without computed properties
+    features = {r.id: _features(r) for r in records}
+    del features[records[4].id]  # a compound without computed properties
 
-    result = assess(DATASET, records, descriptors)
+    result = assess(DATASET, records, features)
 
     assert result.compounds == 6
     assert result.actives == 4
@@ -118,3 +131,18 @@ def test_assess_summarizes_all_actives_and_most_potent() -> None:
     assert (mw.actives.passing, mw.actives.evaluated) == (3, 4)
     assert (mw.most_potent.passing, mw.most_potent.evaluated) == (4, 5)
     assert [p.record_id for p in result.profiles] == [r.id for r in records]
+
+
+def test_alerts_are_carried_and_judged() -> None:
+    quinone = _record(smiles="O=C1C=CC(=O)C=C1")
+    profile = compound_profile(quinone, _features(quinone))
+    families = {a.family for a in profile.alerts}
+    assert {AlertFamily.PAINS, AlertFamily.REACTIVE_METABOLITE} <= families
+    assert profile.criteria[Criterion.NO_PAINS] is False
+    assert profile.criteria[Criterion.NO_REACTIVE_METABOLITES] is False
+
+    aspirin = _record()
+    clean = compound_profile(aspirin, _features(aspirin))
+    assert clean.criteria[Criterion.NO_PAINS] is True
+    assert clean.criteria[Criterion.NO_REACTIVE_METABOLITES] is True
+    assert [a.name for a in clean.alerts] == ["phenol_ester"]  # Brenk only: not a criterion

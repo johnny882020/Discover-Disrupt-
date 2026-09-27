@@ -27,7 +27,15 @@ describe("MoleculeView", () => {
     const img = await screen.findByRole("img", { name: ASPIRIN });
     expect(img).toHaveAttribute("src", expect.stringMatching(/^data:image\/svg\+xml;charset=utf-8,/));
     expect(img).toHaveAttribute("width", "260");
-    expect(mockedDepict).toHaveBeenCalledWith(expect.anything(), ASPIRIN, { width: 260, height: 180 });
+    expect(mockedDepict).toHaveBeenCalledWith(expect.anything(), ASPIRIN, { width: 260, height: 180 }, []);
+  });
+
+  it("passes the atoms to highlight to the depiction", async () => {
+    mockedLoad.mockResolvedValue({} as Awaited<ReturnType<typeof loadRDKit>>);
+    mockedDepict.mockReturnValue("<svg xmlns='http://www.w3.org/2000/svg'></svg>");
+    render(<MoleculeView smiles={ASPIRIN} highlightAtoms={[4, 5]} />);
+    await screen.findByRole("img", { name: ASPIRIN });
+    expect(mockedDepict).toHaveBeenCalledWith(expect.anything(), ASPIRIN, { width: 160, height: 100 }, [4, 5]);
   });
 
   it("keeps the SMILES text when RDKit.js cannot load", async () => {

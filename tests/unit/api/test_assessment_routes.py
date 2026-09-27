@@ -27,6 +27,8 @@ def test_assessment_profiles_every_compound(
         "rotatable_bonds_under_10",
         "tpsa_under_140",
         "tpsa_under_90",
+        "no_pains_alerts",
+        "no_reactive_metabolite_alerts",
     ]
     mw = body["criteria"][0]
     assert mw["all_compounds"] == {"passing": 1, "evaluated": 1}

@@ -4,11 +4,13 @@ import uuid
 import pandas as pd
 
 from dndlabs.core.schemas import (
+    AlertFamily,
     CompoundProfile,
     ExportFormat,
     NormalizedRecord,
     PotencyClass,
     SourceType,
+    StructuralAlert,
 )
 from dndlabs.pipeline.exporter import EXPORT_COLUMNS, PROPERTY_COLUMNS, DatasetExporter
 
@@ -78,3 +80,18 @@ def test_computed_properties_follow_the_record_fields() -> None:
     ]
     assert list(rows[0]) == list(EXPORT_COLUMNS)
     assert (rows[0]["qed"], rows[1]["qed"]) == (0.55, None)
+
+
+def test_alerts_export_as_readable_text() -> None:
+    records = _records(1)
+    profile = CompoundProfile(
+        record_id=records[0].id,
+        alerts=[
+            StructuralAlert(family=AlertFamily.PAINS, name="quinone_A(370)"),
+            StructuralAlert(family=AlertFamily.REACTIVE_METABOLITE, name="Quinone"),
+        ],
+    )
+    row = json.loads(
+        DatasetExporter().export(records, ExportFormat.JSONL, {records[0].id: profile})
+    )
+    assert row["alerts"] == "PAINS: quinone_A(370); Reactive metabolite: Quinone"

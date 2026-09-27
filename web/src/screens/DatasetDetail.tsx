@@ -1,6 +1,9 @@
 /** DatasetDetail: dataset metadata, hit/lead criteria, its records, and links to reports/export. */
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import type { CompoundProfile } from "../api/types";
+import type { AlertFamily, CompoundProfile } from "../api/types";
+import { AlertBadges } from "../assessment/AlertBadges";
+import { highlightedAtoms } from "../assessment/alerts";
 import { HitLeadPanel } from "../assessment/HitLeadPanel";
 import { potencyInfo } from "../assessment/potency";
 import { Badge } from "../design-system/Badge";
@@ -19,6 +22,16 @@ export function DatasetDetail(): React.JSX.Element {
   const { datasetId } = useParams<{ datasetId: string }>();
   const query = useDataset(datasetId);
   const assessment = useAssessment(datasetId);
+  const [hidden, setHidden] = useState<ReadonlySet<AlertFamily>>(new Set());
+
+  function toggleHidden(family: AlertFamily, hide: boolean): void {
+    setHidden((current) => {
+      const next = new Set(current);
+      if (hide) next.add(family);
+      else next.delete(family);
+      return next;
+    });
+  }
 
   if (query.isLoading) {
     return <p className="text-sm text-ink/60 dark:text-paper/60">Loading dataset…</p>;
@@ -39,6 +52,9 @@ export function DatasetDetail(): React.JSX.Element {
   const { dataset, records } = query.data;
   const profiles = new Map<string, CompoundProfile>(
     (assessment.data?.profiles ?? []).map((profile) => [profile.record_id, profile]),
+  );
+  const shown = records.filter(
+    (r) => !(profiles.get(r.id)?.alerts ?? []).some((alert) => hidden.has(alert.family)),
   );
 
   return (
@@ -75,7 +91,33 @@ export function DatasetDetail(): React.JSX.Element {
       ) : null}
 
       <Card>
-        <h2 className="mb-4 text-lg font-medium">Records</h2>
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-lg font-medium">Records</h2>
+          {records.length > 0 ? (
+            <div className="flex flex-wrap gap-4 text-sm">
+              {(
+                [
+                  ["pains", "Hide PAINS"],
+                  ["reactive_metabolite", "Hide reactive-metabolite alerts"],
+                ] as const
+              ).map(([family, label]) => (
+                <label key={family} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={hidden.has(family)}
+                    onChange={(event) => toggleHidden(family, event.target.checked)}
+                  />
+                  {label}
+                </label>
+              ))}
+              {shown.length < records.length ? (
+                <span className="text-ink/60 dark:text-paper/60">
+                  Showing {shown.length} of {records.length}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {records.length === 0 ? (
           <p className="text-sm text-ink/60 dark:text-paper/60">
             This dataset has no records yet.
@@ -88,7 +130,12 @@ export function DatasetDetail(): React.JSX.Element {
                 {
                   key: "structure",
                   header: "Structure",
-                  cell: (r) => <MoleculeView smiles={r.canonical_smiles} />,
+                  cell: (r) => (
+                    <MoleculeView
+                      smiles={r.canonical_smiles}
+                      highlightAtoms={highlightedAtoms(profiles.get(r.id)?.alerts ?? [])}
+                    />
+                  ),
                 },
                 {
                   key: "mw",
@@ -131,8 +178,16 @@ export function DatasetDetail(): React.JSX.Element {
                   align: "right",
                   cell: (r) => num(profiles.get(r.id)?.lipinski_violations),
                 },
+                {
+                  key: "alerts",
+                  header: "Alerts",
+                  cell: (r) => {
+                    const profile = profiles.get(r.id);
+                    return profile ? <AlertBadges alerts={profile.alerts} /> : "—";
+                  },
+                },
               ]}
-              rows={records}
+              rows={shown}
               getRowKey={(r) => r.id}
             />
           </div>

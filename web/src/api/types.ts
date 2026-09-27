@@ -371,7 +371,19 @@ export type Criterion =
   | "lipinski"
   | "rotatable_bonds_under_10"
   | "tpsa_under_140"
-  | "tpsa_under_90";
+  | "tpsa_under_90"
+  | "no_pains_alerts"
+  | "no_reactive_metabolite_alerts";
+
+/** Source of a structural alert. */
+export type AlertFamily = "pains" | "brenk" | "reactive_metabolite";
+
+/** A flagged substructure; `atoms` index the canonical SMILES as RDKit parses it. */
+export interface StructuralAlert {
+  family: AlertFamily;
+  name: string;
+  atoms: number[];
+}
 
 /** Computed properties of one compound (RDKit) and the criteria it meets. */
 export interface CompoundProfile {
@@ -385,6 +397,7 @@ export interface CompoundProfile {
   rings: number | null;
   qed: number | null;
   lipinski_violations: number | null;
+  alerts: StructuralAlert[];
   potency_class: PotencyClass;
   criteria: Partial<Record<Criterion, boolean>>;
 }

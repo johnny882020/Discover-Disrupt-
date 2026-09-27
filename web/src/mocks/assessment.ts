@@ -19,6 +19,8 @@ const LABELS: Record<Criterion, string> = {
   rotatable_bonds_under_10: "Rotatable bonds < 10",
   tpsa_under_140: "Polar surface area < 140 Å²",
   tpsa_under_90: "Polar surface area < 90 Å² (CNS)",
+  no_pains_alerts: "No PAINS alerts",
+  no_reactive_metabolite_alerts: "No reactive-metabolite alerts",
 };
 const ALL_PASS = Object.fromEntries(Object.keys(LABELS).map((c) => [c, true])) as Record<Criterion, boolean>;
 const ACTIVE: PotencyClass[] = ["optimized", "lead", "hit"];
@@ -44,6 +46,8 @@ function profile(record: NormalizedRecord): CompoundProfile {
     rings: 1,
     qed: 0.55,
     lipinski_violations: 0,
+    // Aspirin's one alert, as RDKit's Brenk catalog reports it.
+    alerts: [{ family: "brenk", name: "phenol_ester", atoms: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }],
     potency_class: potencyClass(record.activity_value_nm, record.activity_relation),
     criteria: ALL_PASS,
   };

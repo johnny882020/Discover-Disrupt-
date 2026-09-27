@@ -9,13 +9,20 @@ from typing import Any
 import pandas as pd
 
 from dndlabs.core.exceptions import ExportError
-from dndlabs.core.schemas import CompoundProfile, ExportFormat, NormalizedRecord
+from dndlabs.core.schemas import AlertFamily, CompoundProfile, ExportFormat, NormalizedRecord
 
 #: Computed properties exported after the record fields (empty when unknown).
 PROPERTY_COLUMNS: tuple[str, ...] = (
     "clogp", "tpsa", "hbd", "hba", "rotatable_bonds", "rings", "qed",
-    "lipinski_violations", "potency_class",
+    "lipinski_violations", "alerts", "potency_class",
 )  # fmt: skip
+
+#: How each alert family is named in exported text.
+ALERT_FAMILY_LABELS: dict[AlertFamily, str] = {
+    AlertFamily.PAINS: "PAINS",
+    AlertFamily.BRENK: "Brenk",
+    AlertFamily.REACTIVE_METABOLITE: "Reactive metabolite",
+}
 
 #: Column order of exported files (stable contract for downstream models).
 EXPORT_COLUMNS: tuple[str, ...] = (*NormalizedRecord.model_fields, *PROPERTY_COLUMNS)
@@ -58,5 +65,11 @@ class DatasetExporter:
 
 def _row(record: NormalizedRecord, profile: CompoundProfile | None) -> dict[str, Any]:
     """One export row: the record's fields, then its properties, in column order."""
-    properties = profile.model_dump(mode="json") if profile is not None else {}
+    properties: dict[str, Any] = {}
+    if profile is not None:
+        properties = profile.model_dump(mode="json")
+        # One text field, e.g. "PAINS: quinone_A(370); Brenk: chinone_1".
+        properties["alerts"] = "; ".join(
+            f"{ALERT_FAMILY_LABELS[a.family]}: {a.name}" for a in profile.alerts
+        )
     return {**record.model_dump(mode="json"), **{c: properties.get(c) for c in PROPERTY_COLUMNS}}

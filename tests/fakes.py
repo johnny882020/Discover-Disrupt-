@@ -29,6 +29,7 @@ from dndlabs.core.schemas import (
     Role,
     SourceSpec,
     SourceType,
+    StoredFeatures,
     Upload,
     User,
     UserCredentials,
@@ -395,12 +396,14 @@ class FakeFeatures:
         self.owners.update({v.record_id: org_id for v in vectors})
         return len(vectors)
 
-    def descriptors_for(
+    def features_for(
         self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
-    ) -> dict[uuid.UUID, dict[str, float]]:
+    ) -> dict[uuid.UUID, StoredFeatures]:
         wanted = set(record_ids)
         return {
-            v.record_id: dict(v.descriptors)
+            v.record_id: StoredFeatures(
+                record_id=v.record_id, descriptors=dict(v.descriptors), alerts=list(v.alerts)
+            )
             for v in self.items
             if v.record_id in wanted and self.owners.get(v.record_id) == org_id
         }

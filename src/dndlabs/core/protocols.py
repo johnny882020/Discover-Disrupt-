@@ -33,6 +33,7 @@ from dndlabs.core.schemas import (
     RuleOutcome,
     SourceSpec,
     SourceType,
+    StoredFeatures,
     Upload,
     User,
     UserCredentials,
@@ -841,10 +842,10 @@ class FeatureRepository(Protocol):
         """
         ...
 
-    def descriptors_for(
+    def features_for(
         self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
-    ) -> dict[uuid.UUID, dict[str, float]]:
-        """Return the stored descriptors of the given records.
+    ) -> dict[uuid.UUID, StoredFeatures]:
+        """Return the stored descriptors and alerts of the given records.
 
         Args:
             org_id: Owning organization; other organizations' vectors are
@@ -852,7 +853,7 @@ class FeatureRepository(Protocol):
             record_ids: The records.
 
         Returns:
-            Descriptors by record id, for the records that have a vector.
+            Stored features by record id, for the records that have a vector.
         """
         ...
 

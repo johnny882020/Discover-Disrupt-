@@ -37,13 +37,23 @@ export function loadRDKit(): Promise<RDKitModule> {
 const MAX_CACHED = 500;
 const cache = new Map<string, string | null>();
 
+/** Highlight colour for flagged atoms (RGB 0–1): a muted red that reads in both themes. */
+const HIGHLIGHT_COLOUR = [0.93, 0.55, 0.55];
+
 /**
  * Draw a structure as SVG with a transparent background.
  *
+ * @param highlightAtoms Atom indices (as RDKit parses `smiles`) to highlight,
+ *   e.g. the atoms a structural alert matched.
  * @returns The SVG markup, or `null` if RDKit cannot parse the SMILES.
  */
-export function depictSvg(rdkit: RDKitModule, smiles: string, size: DepictionSize): string | null {
-  const key = `${size.width}x${size.height}:${smiles}`;
+export function depictSvg(
+  rdkit: RDKitModule,
+  smiles: string,
+  size: DepictionSize,
+  highlightAtoms: readonly number[] = [],
+): string | null {
+  const key = `${size.width}x${size.height}:${highlightAtoms.join(",")}:${smiles}`;
   const cached = cache.get(key);
   if (cached !== undefined) {
     return cached;
@@ -54,7 +64,13 @@ export function depictSvg(rdkit: RDKitModule, smiles: string, size: DepictionSiz
     try {
       svg = mol.is_valid()
         ? mol.get_svg_with_highlights(
-            JSON.stringify({ width: size.width, height: size.height, backgroundColour: [1, 1, 1, 0] }),
+            JSON.stringify({
+              width: size.width,
+              height: size.height,
+              backgroundColour: [1, 1, 1, 0],
+              atoms: highlightAtoms,
+              highlightColour: HIGHLIGHT_COLOUR,
+            }),
           )
         : null;
     } finally {

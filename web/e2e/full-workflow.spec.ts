@@ -132,6 +132,9 @@ test.describe("full pipeline workflow", () => {
     await expect(page.getByText("Hit (< 10 µM): 2")).toBeVisible();
     await expect(page.getByText("Inactive (≥ 10 µM): 1")).toBeVisible();
     await expect(page.getByRole("row", { name: /MW < 500/ })).toBeVisible();
+    // Structural alerts: aspirin's phenol ester (Brenk); no PAINS among the three.
+    await expect(page.getByText("Brenk: phenol_ester")).toBeVisible();
+    await expect(page.getByRole("row", { name: /No PAINS alerts/ })).toBeVisible();
 
     // Structures are drawn by RDKit.js (WebAssembly), not shown as SMILES text.
     const depiction = page.locator('img[src^="data:image/svg+xml"]').first();

@@ -147,7 +147,7 @@ first non-empty row as headers.
 | GET | `/datasets/{id}/quality-report` | `QualityReport` |
 | GET | `/datasets/{id}/assessment` | `DatasetAssessment`: hit/lead potency classes, criteria and per-compound computed properties |
 | GET | `/datasets/{id}/enrichment` | `{"enrichment_enabled": bool, "results": EnrichmentResult[]}` |
-| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields, then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `potency_class` |
+| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields, then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `alerts` (e.g. `PAINS: quinone_A(370); Brenk: chinone_1`), `potency_class` |
 
 `EnrichmentResult.status` is one of `enriched`, `skipped_no_key`, `failed`.
 
@@ -171,11 +171,25 @@ first non-empty row as headers.
   | `rotatable_bonds_under_10` | Fewer than 10 rotatable bonds |
   | `tpsa_under_140` | Polar surface area < 140 Å² |
   | `tpsa_under_90` | Polar surface area < 90 Å² (CNS penetration) |
+  | `no_pains_alerts` | No PAINS alert |
+  | `no_reactive_metabolite_alerts` | No reactive-metabolite alert |
 
 - **Profiles**: per compound, the computed properties (RDKit, from the
   standardized structure; `hbd`/`hba` are Lipinski's NH + OH and N + O
-  counts), `lipinski_violations`, `potency_class` and `criteria`. A compound
-  without a usable structure has no properties and is not evaluated.
+  counts), `lipinski_violations`, `alerts`, `potency_class` and `criteria`.
+  A compound without a usable structure has no properties and is not
+  evaluated.
+- **Alerts** (`StructuralAlert`: `family`, `name`, `atoms`), from three
+  families:
+  - `pains`: RDKit's 480 PAINS filters (assay-interference compounds);
+  - `brenk`: RDKit's 105 Brenk filters (unwanted groups); listed but not
+    a criterion, as they include common groups such as phenol esters;
+  - `reactive_metabolite`: 15 groups that form reactive metabolites, e.g.
+    anilines, nitroaromatics, thiophenes, furans, quinones and Michael
+    acceptors.
+
+  `atoms` index the atoms of the record's `canonical_smiles` as RDKit
+  parses it, for highlighting.
 
 ## Service and health (no auth)
 
