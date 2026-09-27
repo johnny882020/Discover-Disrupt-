@@ -182,6 +182,8 @@ export type ColumnRole =
   | "molecular_weight"
   | "target"
   | "assay_type"
+  | "assay_format"
+  | "control"
   | "activity_value"
   | "activity_unit"
   | "activity_relation"
@@ -267,9 +269,17 @@ export interface NormalizedRecord {
   molecular_weight: number | null;
   target: string | null;
   assay_type: string | null;
+  assay_format: AssayFormat | null;
+  control: ControlType | null;
   activity_value_nm: number | null;
   activity_relation: string | null;
 }
+
+/** Whether a measurement comes from an isolated-target or a cellular assay. */
+export type AssayFormat = "biochemical" | "cell_based";
+
+/** A reference compound's role in its assay. */
+export type ControlType = "positive" | "negative";
 
 /** A dataset together with its normalized records. */
 export interface DatasetWithRecords {
@@ -417,12 +427,26 @@ export interface CriterionSummary {
   most_potent: CriterionShare;
 }
 
-/** `GET /datasets/{id}/assessment`. */
-export interface DatasetAssessment {
-  dataset_id: string;
+/** Potency of the compounds measured in one assay format (`null`: not given). */
+export interface FormatPotency {
+  assay_format: AssayFormat | null;
   compounds: number;
   potency_classes: Record<PotencyClass, number>;
   actives: number;
+}
+
+/**
+ * `GET /datasets/{id}/assessment`. Counts are per compound, controls excluded;
+ * a compound's class is the one the majority of its measurements reach.
+ */
+export interface DatasetAssessment {
+  dataset_id: string;
+  compounds: number;
+  measurements: number;
+  controls: number;
+  potency_classes: Record<PotencyClass, number>;
+  actives: number;
+  by_format: FormatPotency[];
   most_potent_ids: string[];
   criteria: CriterionSummary[];
   profiles: CompoundProfile[];

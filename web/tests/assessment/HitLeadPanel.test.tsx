@@ -18,8 +18,24 @@ function assessment(overrides: Partial<DatasetAssessment> = {}): DatasetAssessme
   return {
     dataset_id: "d",
     compounds: 4,
+    measurements: 5,
+    controls: 1,
     potency_classes: { optimized: 1, lead: 1, hit: 1, inactive: 0, unknown: 1 },
     actives: 3,
+    by_format: [
+      {
+        assay_format: "biochemical",
+        compounds: 3,
+        potency_classes: { optimized: 1, lead: 1, hit: 1, inactive: 0, unknown: 0 },
+        actives: 3,
+      },
+      {
+        assay_format: "cell_based",
+        compounds: 2,
+        potency_classes: { optimized: 0, lead: 0, hit: 1, inactive: 1, unknown: 0 },
+        actives: 1,
+      },
+    ],
     most_potent_ids: [],
     criteria: [summary()],
     profiles: [],
@@ -48,5 +64,36 @@ describe("HitLeadPanel", () => {
     expect(within(row).getByText("3 / 4 (75%)")).toBeInTheDocument();
     expect(within(row).getByText("1 / 3 (33%)")).toBeInTheDocument();
     expect(within(row).getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows compounds, measurements, controls and potency by assay format", () => {
+    render(<HitLeadPanel assessment={assessment()} />);
+    expect(screen.getByText(/4 compounds from 5 measurements; 1 control record is not assessed/)).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Potency by assay format" });
+    const cell = within(table).getByRole("row", { name: /Cell-based/ });
+    expect(within(cell).getAllByRole("cell").map((c) => c.textContent)).toEqual(["2", "0", "0", "1", "1", "0", "1"]);
+  });
+
+  it("keeps a row for measurements without a format", () => {
+    const withoutFormat = {
+      assay_format: null,
+      compounds: 1,
+      potency_classes: { optimized: 0, lead: 0, hit: 0, inactive: 0, unknown: 1 },
+      actives: 0,
+    };
+    render(<HitLeadPanel assessment={assessment({ by_format: [...assessment().by_format, withoutFormat] })} />);
+    const table = screen.getByRole("table", { name: "Potency by assay format" });
+    expect(within(table).getByRole("row", { name: /Not given/ })).toBeInTheDocument();
+  });
+
+  it("omits the format table when no assay format was given", () => {
+    const withoutFormat = {
+      assay_format: null,
+      compounds: 4,
+      potency_classes: { optimized: 1, lead: 1, hit: 1, inactive: 0, unknown: 1 },
+      actives: 3,
+    };
+    render(<HitLeadPanel assessment={assessment({ by_format: [withoutFormat] })} />);
+    expect(screen.queryByRole("table", { name: "Potency by assay format" })).not.toBeInTheDocument();
   });
 });

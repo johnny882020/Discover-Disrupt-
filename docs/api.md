@@ -105,8 +105,8 @@ Units are read from a unit column, not from a header such as `IC50 (nM)`.
 A `column_mapping` assigns each column one role: `source_record_id`, `name`,
 `smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`,
 `lookup_name`, `molecular_formula`, `molecular_weight`, `target`,
-`assay_type`, `activity_value`, `activity_unit`, `activity_relation` or
-`ignore`. A role (other than `ignore`) may be used once, and the mapping
+`assay_type`, `assay_format`, `control`, `activity_value`,
+`activity_unit`, `activity_relation` or `ignore`. A role (other than `ignore`) may be used once, and the mapping
 must include a column that identifies the structure:
 
 | Role | Structure from |
@@ -129,6 +129,16 @@ rejected with the reason (not found, ambiguous, service unavailable, over
 the limit). Unmapped columns are kept in each record's `extra`; `ignore`d
 ones are dropped.
 
+Two roles describe the measurement's context:
+
+| Role | Accepted values (case-insensitive) | Stored as |
+|---|---|---|
+| `assay_format` | `biochemical`, `enzymatic`, `binding`, `cell-free`, `in vitro`; `cell-based`, `cellular`, `cell`, `whole cell` | `biochemical` / `cell_based` |
+| `control` | `positive`, `pos`, `pc`, `+`; `negative`, `neg`, `nc`, `-`; `no`, `none`, `false`, `0`, `test`, `sample`, `compound` (not a control) | `positive` / `negative` / empty |
+
+Any other value keeps the record, leaves the field empty and adds an
+`assay_context` warning.
+
 Files are limited to 25 MiB and 100,000 rows by default
 (`DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS`). An SDF's structures
 become a `smiles` column, each molecule's title line a `name` column, and
@@ -147,20 +157,32 @@ first non-empty row as headers.
 | GET | `/datasets/{id}/quality-report` | `QualityReport` |
 | GET | `/datasets/{id}/assessment` | `DatasetAssessment`: hit/lead potency classes, criteria and per-compound computed properties |
 | GET | `/datasets/{id}/enrichment` | `{"enrichment_enabled": bool, "results": EnrichmentResult[]}` |
-| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields, then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `alerts` (e.g. `PAINS: quinone_A(370); Brenk: chinone_1`), `potency_class` |
+| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields (including `assay_format` and `control` after `assay_type`), then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `alerts` (e.g. `PAINS: quinone_A(370); Brenk: chinone_1`), `potency_class` |
 
 `EnrichmentResult.status` is one of `enriched`, `skipped_no_key`, `failed`.
 
 ### Hit/lead assessment
 
-`DatasetAssessment` judges a dataset the way a hit-to-lead review does:
+`DatasetAssessment` judges a dataset the way a hit-to-lead review does.
+A dataset may hold one compound several times, once per measurement
+context (target, assay type, assay format, control); the assessment
+counts `compounds` (distinct structures) out of `measurements` (records).
+Control records are left out and counted in `controls`.
 
-- **Potency class** of each compound's activity value (IC50, Ki, …):
+- **Potency class** of each measurement's activity value (IC50, Ki, …):
   `optimized` < 100 nM, `lead` < 1 µM, `hit` < 10 µM, `inactive` ≥ 10 µM,
   or `unknown` (no value, or a qualifier that leaves the class open —
-  e.g. `> 50` nM, or `< 50000` nM). `actives` counts hits or better.
+  e.g. `> 50` nM, or `< 50000` nM). A compound's class is the most potent
+  class that a majority of its measurements reach, so one outlying
+  measurement does not promote it. `potency_classes` and `actives` (hits
+  or better) count compounds.
+- **Per assay format** (`by_format`: `biochemical`, `cell_based`, and
+  `null` for measurements without a format), the same compound counts
+  from that format's measurements alone, since biochemical and cell-based
+  potency are judged separately.
 - **Criteria**, each over all compounds, the actives and the five most
-  potent (`most_potent_ids`; lower-bound values are not ranked), as
+  potent compounds (`most_potent_ids`: the record of each one's most
+  potent measurement; lower-bound values are not ranked), as
   `{"passing", "evaluated"}`:
 
   | `criterion` | Met when |
@@ -174,7 +196,7 @@ first non-empty row as headers.
   | `no_pains_alerts` | No PAINS alert |
   | `no_reactive_metabolite_alerts` | No reactive-metabolite alert |
 
-- **Profiles**: per compound, the computed properties (RDKit, from the
+- **Profiles**: per record, the computed properties (RDKit, from the
   standardized structure; `hbd`/`hba` are Lipinski's NH + OH and N + O
   counts), `lipinski_violations`, `alerts`, `potency_class` and `criteria`.
   A compound without a usable structure has no properties and is not

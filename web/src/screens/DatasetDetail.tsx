@@ -145,6 +145,20 @@ export function DatasetDetail(): React.JSX.Element {
                 },
                 { key: "target", header: "Target", cell: (r) => r.target ?? "—" },
                 {
+                  key: "assay",
+                  header: "Assay",
+                  cell: (r) => (
+                    <span className="flex flex-col gap-1">
+                      <span>
+                        {[r.assay_type, r.assay_format === "cell_based" ? "cell-based" : r.assay_format]
+                          .filter(Boolean)
+                          .join(" · ") || "—"}
+                      </span>
+                      {r.control ? <Badge>{r.control === "positive" ? "Positive control" : "Negative control"}</Badge> : null}
+                    </span>
+                  ),
+                },
+                {
                   key: "activity",
                   header: "Activity (nM)",
                   align: "right",

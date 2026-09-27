@@ -67,16 +67,17 @@ any feature vector or enrichment result, since both reference
 | `InvitationCreate` / `AdminInvitationCreate` / `InvitationCreated` / `InvitationToken` / `InvitationPreview` / `InvitationAccept` / `PasswordChange` | Invitation and password request/response bodies; emails are normalized (trimmed, lowercased) on input |
 | `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
 | `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `upload_id` + `column_mapping`, `dataset_name` — cross-validated per source |
-| `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`, `lookup_name`, `name`, `activity_value`, … or `ignore`); a mapping needs one of the `STRUCTURE_ROLES` and uses each other role once. `LOOKUP_ROLES` are the structure roles resolved by a PubChem/ChEMBL lookup |
+| `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`, `lookup_name`, `name`, `assay_format`, `control`, `activity_value`, … or `ignore`); a mapping needs one of the `STRUCTURE_ROLES` and uses each other role once. `LOOKUP_ROLES` are the structure roles resolved by a PubChem/ChEMBL lookup |
 | `Upload` / `UploadFormat` / `UploadPreview` | A stored file's metadata (`csv` / `tsv` / `xlsx` / `sdf`, size, SHA-256); its columns, first rows, row count and suggested mapping |
 | `MappingTemplateCreate` / `MappingTemplate` | A named, org-saved column mapping, suggested for uploads whose headers include its columns |
 | `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra`. Carries the structure as `smiles`/`inchi`/`mol_block` or an identifier to look up, plus resolution's `structure_source` or `structure_error` |
-| `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id` |
+| `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id`. `context_key()` hashes its measurement context (target, assay type, assay format, control), or is empty when it has none |
+| `AssayFormat` / `ControlType` | A measurement's assay format (`biochemical` / `cell_based`) and control flag (`positive` / `negative`) |
 | `ValidationIssue` | `rule`, `severity` (`error` / `warning`), `source_record_id`, `field`, `message` |
 | `QualityReport` | Counts, `issues_by_rule`, `issues`, `pass_rate` for one run |
 | `DatasetFilter` | Record query filters (MW range, target, source, activity range, pagination) |
 | `FeatureVector` | RDKit descriptors + Morgan fingerprint for one record |
-| `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class, computed properties, alerts and criteria met; each criterion over all compounds, actives and the five most potent |
+| `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `FormatPotency` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class (the most potent class a majority of its measurements reach), computed properties, alerts and criteria met; compound counts per assay format; each criterion over all compounds, actives and the five most potent |
 | `AlertFamily` / `StructuralAlert` / `StoredFeatures` | A flagged substructure (PAINS, Brenk, reactive metabolite) with its matched atoms; a record's stored descriptors and alerts (`alerts` is `None` when stored before alerts existed) |
 | `EnrichmentRequest` / `GeneratedCandidate` / `EnrichmentResult` | One record submitted for GenMol enrichment, one generated analog, per-record outcome (`enriched` / `skipped_no_key` / `failed`) |
 | `PipelineRun` | `org_id`, `status`, `error`, `dataset_id`, timestamps |
@@ -261,6 +262,7 @@ left it.
 | 2 | `compound_identity` | Unparsable SMILES/InChI; SMILES and InChI describe different compounds | Supplied InChIKey/formula disagrees with the structure (computed value used) |
 | 3 | `standardization` | — | Structure changed by standardization (salts/solvents stripped, charges neutralized; the submitted SMILES is kept in the message); multi-component structure (mixture) |
 | 4 | `unit_normalization` | Value not numeric or negative; missing/unsupported unit; unsupported relation operator | Unit given without a value |
+| 5 | `assay_context` | — | Unrecognized assay format or control value (the field is left empty) |
 
 `standardization` applies the [ChEMBL Structure
 Pipeline](https://github.com/chembl/ChEMBL_Structure_Pipeline) (MIT) and
@@ -268,9 +270,11 @@ replaces the structure with its standardized parent, recomputing
 identifiers, formula and molecular weight.
 
 The dataset-level `duplicates` rule then keeps the first record per
-`record_key` and drops the rest with a warning. `record_key` is the
-InChIKey of the standardized parent, so duplicates are caught across
-sources, SMILES spellings and salt forms. `activity_value_nm` is normalized to
+`record_key` and measurement context (`context_key()`) and drops the rest
+with a warning. `record_key` is the InChIKey of the standardized parent, so
+duplicates are caught across sources, SMILES spellings and salt forms; the
+same compound measured against another target, in another assay or format,
+or as a control is kept. `activity_value_nm` is normalized to
 nanomolar; accepted units are `M`, `mM`, `uM`/`µM`/`μM`, `nM`, `pM` and
 `mol/L` variants (case-insensitive except molar, which must be `M`).
 
@@ -294,9 +298,12 @@ SMILES, stored in `feature_vectors`.
 ## Hit/lead assessment
 
 `assessment/criteria.py` holds the hit-to-lead thresholds and computes a
-`DatasetAssessment` from records and their stored descriptors: potency
-classes, per-compound profiles, and each criterion over all compounds, the
-actives and the five most potent (the groups a hit-to-lead review uses).
+`DatasetAssessment` from records and their stored descriptors. It leaves
+out control records, groups measurements by compound (`record_key`), gives
+each compound the most potent class a majority of its measurements reach,
+repeats that count per assay format, and evaluates each criterion over all
+compounds, the actives and the five most potent (the groups a hit-to-lead
+review uses).
 `pipeline/assessment.py` (`AssessmentService`) loads a dataset and its
 stored features (`FeatureRepository.features_for`, org-scoped) and
 recomputes, in memory, descriptors or alerts missing from vectors stored
@@ -367,7 +374,7 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0006`.
+Alembic head: `0007`.
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -378,7 +385,7 @@ Alembic head: `0006`.
 | `user_invitations` | `org_id`, `email`, `role`, `purpose` (`join` / `password_reset`), `token_hash` (unique), `expires_at`, `accepted_at`, `revoked_at` | Invitations and reset links; raw token never stored |
 | `pipeline_runs` | `org_id`, `source`, `status`, `dataset_id`, `request_payload` (JSON) | |
 | `datasets` | `org_id`, `run_id` (unique), `record_count` | One per run |
-| `normalized_records` | `org_id`, `dataset_id`, `record_key`, all `NormalizedRecord` fields | Unique `(dataset_id, record_key)` |
+| `normalized_records` | `org_id`, `dataset_id`, `record_key`, `context_key`, all `NormalizedRecord` fields | Unique `(dataset_id, record_key, context_key)`: one row per compound and measurement context |
 | `validation_issues` | `org_id`, `dataset_id`, `severity`, `rule`, `message` | |
 | `feature_vectors` | `org_id`, `record_id` (unique), `descriptors` (JSON), `alerts` (JSON, nullable), `fingerprint_bits` (JSON) | `alerts` is NULL for vectors stored before revision `0006` |
 | `enrichment_results` | `org_id`, `record_id`, `status`, `candidates` (JSON) | |
@@ -406,12 +413,13 @@ the stamp.
 | `0004` | Adds `user_invitations.purpose` (existing rows become `join`) and `user_invitations.revoked_at`, for password-reset links and revocable invitations. |
 | `0005` | Adds `uploads` and `mapping_templates` (each only if absent). |
 | `0006` | Adds `feature_vectors.alerts` (nullable; existing rows keep NULL and get their alerts computed when read). |
+| `0007` | Adds `normalized_records.assay_format`, `control` and `context_key` (existing rows get an empty key) and widens the unique constraint to `(dataset_id, record_key, context_key)`. |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
 own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`
-upgrades and downgrades, reading a vector stored before `0006`, and the
+and `0007` upgrades and downgrades, reading a vector stored before `0006`, and the
 account and upload repositories' behaviour (`tests/account_repository_checks.py`,
 `tests/upload_repository_checks.py`, shared by both dialects).
 
@@ -458,9 +466,10 @@ session token or an API key — in memory and `sessionStorage` (never
   data is never shown to another.
 
 **Datasets.** A dataset's page shows the hit/lead criteria
-(`assessment/HitLeadPanel.tsx`: potency classes, the count of actives, and
-each criterion over all compounds, actives and the five most potent) above
-its records, which carry their potency class, computed properties and
+(`assessment/HitLeadPanel.tsx`: compounds and measurements, potency
+classes, the count of actives, potency per assay format, and each criterion
+over all compounds, actives and the five most potent) above its records,
+which carry their assay context, potency class, computed properties and
 alerts. PAINS and reactive-metabolite atoms are highlighted on each
 structure, and those compounds can be hidden.
 

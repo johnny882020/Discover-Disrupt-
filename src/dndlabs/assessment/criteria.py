@@ -16,11 +16,13 @@ from collections.abc import Mapping, Sequence
 from dndlabs.core.schemas import (
     ACTIVE_CLASSES,
     AlertFamily,
+    AssayFormat,
     CompoundProfile,
     Criterion,
     CriterionShare,
     CriterionSummary,
     DatasetAssessment,
+    FormatPotency,
     NormalizedRecord,
     PotencyClass,
     StoredFeatures,
@@ -133,27 +135,40 @@ def compound_profile(record: NormalizedRecord, features: StoredFeatures | None) 
     )
 
 
-def most_potent(
-    records: Sequence[NormalizedRecord], count: int = MOST_POTENT
-) -> list[NormalizedRecord]:
-    """The ``count`` compounds with the lowest activity values.
+#: Potency classes from most to least potent; ``unknown`` is not ranked.
+_RANKED = (PotencyClass.OPTIMIZED, PotencyClass.LEAD, PotencyClass.HIT, PotencyClass.INACTIVE)
 
-    Lower-bound values (``>``, ``>=``) are left out: they do not say how potent
-    a compound is.
+
+def majority_class(classes: Sequence[PotencyClass]) -> PotencyClass:
+    """The most potent class that the majority of measurements reach.
+
+    The guide judges a compound active when it is active "in the majority of
+    assays": with measurements hit, hit and inactive the compound is a hit;
+    with lead and inactive it is inactive (no majority is better than that).
 
     Args:
-        records: The dataset's records.
-        count: How many to return.
+        classes: The classes of one compound's measurements.
 
     Returns:
-        The most potent records, most potent first.
+        The compound's class; ``unknown`` if no measurement has a class.
     """
-    ranked = [
-        r
-        for r in records
-        if r.activity_value_nm is not None and (r.activity_relation or "=") not in (">", ">=")
-    ]
-    return sorted(ranked, key=lambda r: r.activity_value_nm or 0.0)[:count]
+    ranks = [_RANKED.index(c) for c in classes if c in _RANKED]
+    for rank, klass in enumerate(_RANKED):
+        if sum(1 for r in ranks if r <= rank) * 2 > len(ranks):
+            return klass
+    return PotencyClass.UNKNOWN
+
+
+def _ranked_value(record: NormalizedRecord) -> float | None:
+    """A record's activity value if it says how potent the compound is (not a lower bound)."""
+    if record.activity_value_nm is None or (record.activity_relation or "=") in (">", ">="):
+        return None
+    return record.activity_value_nm
+
+
+def _compound_key(record: NormalizedRecord) -> str:
+    """The compound a record measures: its InChIKey, else the record itself."""
+    return record.record_key or f"record:{record.id}"
 
 
 def assess(
@@ -163,36 +178,90 @@ def assess(
 ) -> DatasetAssessment:
     """Assess a dataset against the hit-to-lead criteria.
 
+    Control records are counted but not assessed. Each compound's class is
+    the majority class of its measurements, overall and per assay format;
+    criteria are counted per compound over all compounds, the actives and
+    the most potent five (ranked by their best measurement).
+
     Args:
         dataset_id: The dataset.
-        records: Its records.
+        records: Its records (measurements).
         features: Stored descriptors and alerts by record id.
 
     Returns:
-        Potency classes, the criteria over all compounds, the actives and the
-        most potent compounds, and every compound's profile.
+        The assessment, with one profile per record.
     """
     profiles = [compound_profile(r, features.get(r.id)) for r in records]
     by_id = {p.record_id: p for p in profiles}
-    actives = [p for p in profiles if p.potency_class in ACTIVE_CLASSES]
-    top = [by_id[r.id] for r in most_potent(records)]
-    classes = Counter(p.potency_class for p in profiles)
+    tested = [r for r in records if r.control is None]
+    compounds: dict[str, list[NormalizedRecord]] = {}
+    for record in tested:
+        compounds.setdefault(_compound_key(record), []).append(record)
 
-    def share(group: Sequence[CompoundProfile], criterion: Criterion) -> CriterionShare:
-        results = [p.criteria[criterion] for p in group if criterion in p.criteria]
+    def overall(members: list[NormalizedRecord]) -> PotencyClass:
+        return majority_class([by_id[r.id].potency_class for r in members])
+
+    classes = {key: overall(members) for key, members in compounds.items()}
+    # A compound's properties are the same in every record: use its first.
+    representative = {key: by_id[members[0].id] for key, members in compounds.items()}
+    actives = [key for key, klass in classes.items() if klass in ACTIVE_CLASSES]
+
+    best = {
+        key: min(values)
+        for key, members in compounds.items()
+        if (values := [v for r in members if (v := _ranked_value(r)) is not None])
+    }
+    top = sorted(best, key=lambda key: best[key])[:MOST_POTENT]
+    top_record_ids = [
+        min(
+            (r for r in compounds[key] if _ranked_value(r) is not None),
+            key=lambda r: _ranked_value(r) or 0.0,
+        ).id
+        for key in top
+    ]
+
+    by_format: list[FormatPotency] = []
+    for assay_format in (AssayFormat.BIOCHEMICAL, AssayFormat.CELL_BASED, None):
+        members_by_compound = {
+            key: in_format
+            for key, members in compounds.items()
+            if (in_format := [r for r in members if r.assay_format is assay_format])
+        }
+        if not members_by_compound:
+            continue
+        format_classes = Counter(overall(m) for m in members_by_compound.values())
+        by_format.append(
+            FormatPotency(
+                assay_format=assay_format,
+                compounds=len(members_by_compound),
+                potency_classes={k: format_classes.get(k, 0) for k in PotencyClass},
+                actives=sum(format_classes.get(k, 0) for k in ACTIVE_CLASSES),
+            )
+        )
+
+    def share(keys: Sequence[str], criterion: Criterion) -> CriterionShare:
+        results = [
+            representative[k].criteria[criterion]
+            for k in keys
+            if criterion in representative[k].criteria
+        ]
         return CriterionShare(passing=sum(results), evaluated=len(results))
 
+    counts = Counter(classes.values())
     return DatasetAssessment(
         dataset_id=dataset_id,
-        compounds=len(profiles),
-        potency_classes={klass: classes.get(klass, 0) for klass in PotencyClass},
+        compounds=len(compounds),
+        measurements=len(tested),
+        controls=len(records) - len(tested),
+        potency_classes={klass: counts.get(klass, 0) for klass in PotencyClass},
         actives=len(actives),
-        most_potent_ids=[p.record_id for p in top],
+        by_format=by_format,
+        most_potent_ids=top_record_ids,
         criteria=[
             CriterionSummary(
                 criterion=criterion,
                 label=CRITERION_LABELS[criterion],
-                all_compounds=share(profiles, criterion),
+                all_compounds=share(list(compounds), criterion),
                 actives=share(actives, criterion),
                 most_potent=share(top, criterion),
             )

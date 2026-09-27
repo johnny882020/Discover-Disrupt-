@@ -14,6 +14,8 @@ export const ROLE_OPTIONS: { role: ColumnRole; label: string }[] = [
   { role: "name", label: "Name" },
   { role: "target", label: "Target" },
   { role: "assay_type", label: "Assay type" },
+  { role: "assay_format", label: "Assay format (biochemical / cell-based)" },
+  { role: "control", label: "Control (positive / negative)" },
   { role: "activity_value", label: "Activity value" },
   { role: "activity_unit", label: "Activity unit" },
   { role: "activity_relation", label: "Activity relation (<, =, >)" },

@@ -15,6 +15,7 @@ from dndlabs.core.schemas import (
     ValidationIssue,
     ValidationOutcome,
 )
+from dndlabs.validation.assay_context import AssayContextRule
 from dndlabs.validation.duplicates import DuplicateRule
 from dndlabs.validation.identity import CompoundIdentityRule
 from dndlabs.validation.schema import SchemaRule
@@ -29,8 +30,8 @@ def default_record_rules() -> list[ValidationRule]:
     """Return the record rules in their contractual order.
 
     Returns:
-        Structure source, schema, compound identity, standardization, then
-        unit normalization.
+        Structure source, schema, compound identity, standardization, unit
+        normalization, then assay context.
     """
     return [
         StructureSourceRule(),
@@ -38,6 +39,7 @@ def default_record_rules() -> list[ValidationRule]:
         CompoundIdentityRule(),
         StandardizationRule(),
         UnitNormalizationRule(),
+        AssayContextRule(),
     ]
 
 

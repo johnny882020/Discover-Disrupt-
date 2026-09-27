@@ -124,6 +124,8 @@ function makeRecord(
     molecular_weight: 180.16 + index,
     target: index % 2 === 0 ? "COX-2" : "COX-1",
     assay_type: "IC50",
+    assay_format: null,
+    control: null,
     activity_value_nm: 50 + index * 10,
     activity_relation: "=",
     ...overrides,

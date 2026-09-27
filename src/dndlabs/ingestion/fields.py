@@ -24,6 +24,8 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "molecular_weight": ("molecular_weight", "mw", "mol_weight"),
     "target": ("target", "target_name", "target_chembl_id"),
     "assay_type": ("assay_type", "standard_type", "activity_type", "measurement"),
+    "assay_format": ("assay_format",),
+    "control": ("control", "control_type", "is_control"),
     "activity_value": ("activity_value", "value", "standard_value", "concentration"),
     "activity_unit": ("activity_unit", "unit", "units", "standard_units"),
     "activity_relation": ("activity_relation", "relation", "standard_relation"),

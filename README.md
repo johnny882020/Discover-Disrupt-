@@ -24,7 +24,8 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
   neutralized), activity values converted to nanomolar, duplicates removed
   across sources and salt forms.
 - **Quality reports** that explain every rejected record.
-- **Hit/lead criteria:** potency classes (hit, lead, optimized) and
+- **Hit/lead criteria:** potency classes (hit, lead, optimized), judged
+  per assay format (biochemical, cell-based) with controls left out, and
   computed properties (MW, cLogP, TPSA, Lipinski, rotatable bonds, QED),
   each judged over all compounds, the actives and the five most potent.
 - **Liability alerts:** PAINS, Brenk and reactive-metabolite groups,
