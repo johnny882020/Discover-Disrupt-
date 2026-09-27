@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from dndlabs.core.config import Settings
-from dndlabs.core.logging import JsonFormatter, configure_logging, get_logger
+from dndlabs.core.logging import JsonFormatter, PlainFormatter, configure_logging, get_logger
 
 
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +55,61 @@ def test_json_formatter_redacts_bearer_tokens() -> None:
     line = json.loads(JsonFormatter().format(record))
     assert "abc123xyz" not in line["message"]
     assert "Bearer …" in line["message"]
+
+
+def test_plain_formatter_redacts_secrets() -> None:
+    record = logging.LogRecord("x", logging.INFO, "f", 1, "hello", None, None)
+    record.api_key = "supersecretvalue"
+    line = PlainFormatter().format(record)
+    assert "api_key=supe…" in line
+    assert "supersecretvalue" not in line
+
+
+def test_plain_formatter_redacts_passwords_and_tokens() -> None:
+    record = logging.LogRecord("x", logging.INFO, "f", 1, "hello", None, None)
+    record.password = "correct horse battery"
+    record.new_password = "another long passphrase"
+    record.token = "ddl_sess_secretsecretsecret"
+    line = PlainFormatter().format(record)
+    assert "password=…" in line
+    assert "new_password=…" in line
+    assert "token=ddl_…" in line
+    assert "secretsecret" not in line
+    assert "horse" not in line
+
+
+def test_plain_formatter_redacts_bearer_tokens() -> None:
+    record = logging.LogRecord(
+        "x", logging.INFO, "f", 1, "Authorization: %s", ("Bearer abc123xyz",), None
+    )
+    line = PlainFormatter().format(record)
+    assert "abc123xyz" not in line
+    assert "x: Authorization: Bearer …" in line
+    # Other handlers still see the untouched record.
+    assert record.getMessage() == "Authorization: Bearer abc123xyz"
+
+
+def test_plain_formatter_keeps_the_layout_and_the_traceback() -> None:
+    import sys
+
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        record = logging.LogRecord("svc", logging.ERROR, "f", 1, "failed", None, sys.exc_info())
+    line = PlainFormatter().format(record)
+    assert " ERROR svc: failed" in line
+    assert "RuntimeError: boom" in line
+
+
+def test_configure_logging_redacts_plain_text_output(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO", json_output=False)
+    try:
+        get_logger("dndlabs.test").info("sent", extra={"api_key": "ddl_live_abcdefghijkl"})
+    finally:
+        configure_logging("INFO")
+    err = capsys.readouterr().err
+    assert "api_key=ddl_…" in err
+    assert "abcdefghijkl" not in err
 
 
 def test_json_formatter_includes_exception() -> None:

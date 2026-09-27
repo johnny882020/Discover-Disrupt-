@@ -22,6 +22,10 @@ services:
       DNDLABS_AUTO_CREATE_SCHEMA: "false"
       DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${DNDLABS_ADMIN_BOOTSTRAP_SECRET:?set DNDLABS_ADMIN_BOOTSTRAP_SECRET (at least 24 characters), see README}
       DNDLABS_FRONTEND_ORIGIN: http://localhost:5173
+      # No proxy in front locally: clients reach the published port directly
+      # (via the Docker bridge, a private address), so trust no forwarding
+      # headers -- the image's loopback-only default, stated explicitly.
+      FORWARDED_ALLOW_IPS: 127.0.0.1
     ports:
       - "8000:8000"
     depends_on:

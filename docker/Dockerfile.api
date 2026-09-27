@@ -23,4 +23,11 @@ EXPOSE 8000
 COPY --chown=appuser docker/entrypoint.sh /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]
 # Render (and other PaaS) inject $PORT; default to 8000 locally.
-CMD ["sh", "-c", "exec uvicorn dndlabs.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}"]
+# --proxy-headers: behind a reverse proxy the TCP peer is the proxy, so the
+# client IP (which per-IP rate limiting keys on) must come from
+# X-Forwarded-For -- but only when the peer is a trusted proxy, or any client
+# could claim any address. Which peers are trusted comes from
+# $FORWARDED_ALLOW_IPS; the default trusts loopback only, i.e. nothing when
+# the port is published directly (docker compose). render.yaml widens it for
+# Render's internal proxies; never set "*" (see there).
+CMD ["sh", "-c", "exec uvicorn dndlabs.api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]
