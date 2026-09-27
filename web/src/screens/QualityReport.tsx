@@ -11,7 +11,7 @@ import { useQualityReport } from "../hooks/useQualityReport";
 
 function StatTile({ label, value }: { label: string; value: string | number }): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-1 border-l border-ink/10 px-4 first:border-l-0 first:pl-0 dark:border-paper/15">
+    <div className="flex flex-col gap-1">
       <span className="text-xs uppercase tracking-wide text-ink/60 dark:text-paper/60">{label}</span>
       <span className="font-display text-2xl">{value}</span>
     </div>
@@ -44,7 +44,9 @@ export function QualityReport(): React.JSX.Element {
       <h1 className="font-display text-3xl">Quality report</h1>
 
       <Card>
-        <div className="flex flex-wrap gap-6">
+        {/* A grid, not dividers: on a phone the tiles wrap, and a divider
+            meant for "not the first tile" would start each wrapped row. */}
+        <div className="grid grid-cols-2 gap-6 sm:grid-cols-5">
           <StatTile label="Total records" value={report.total_records} />
           <StatTile label="Accepted" value={report.accepted_records} />
           <StatTile label="Rejected" value={report.rejected_records} />
