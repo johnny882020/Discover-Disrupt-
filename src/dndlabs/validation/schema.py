@@ -24,8 +24,17 @@ class SchemaRule:
             The record with ``molecular_weight`` parsed, plus any issues.
         """
         issues: list[ValidationIssue] = []
-        if not raw.smiles and not raw.inchi:
-            issues.append(error(self.name, record, "record has neither SMILES nor InChI", "smiles"))
+        # A failed lookup is reported by the structure_lookup rule, with its reason.
+        if not raw.smiles and not raw.inchi and not raw.structure_error:
+            issues.append(
+                error(
+                    self.name,
+                    record,
+                    "record has no structure: give SMILES, InChI, a MOL block, or an "
+                    "InChIKey, PubChem CID, ChEMBL ID or name to look up",
+                    "smiles",
+                )
+            )
         try:
             weight = parse_number(raw.molecular_weight)
         except ValueError:

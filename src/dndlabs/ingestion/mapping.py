@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 
 from rdkit import Chem, RDLogger
 
-from dndlabs.core.schemas import STRUCTURE_ROLES, ColumnRole, MappingTemplate
+from dndlabs.core.schemas import LOOKUP_ROLES, STRUCTURE_ROLES, ColumnRole, MappingTemplate
 from dndlabs.ingestion.fields import canonical_field
 from dndlabs.ingestion.tabular import Table
 
@@ -30,6 +30,9 @@ _THRESHOLD = 0.8
 #: the files people need cleaned are the ones with some invalid structures.
 _SMILES_PARSE_THRESHOLD = 0.5
 _INCHIKEY = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
+_CHEMBL_ID = re.compile(r"^CHEMBL\d+$")
+#: Structures read from the file itself, as opposed to identifiers looked up.
+_DIRECT_STRUCTURE_ROLES = STRUCTURE_ROLES - LOOKUP_ROLES
 _NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 _SMILES_CHARS = re.compile(r"^[A-Za-z0-9@+\-\[\]()=#$%/\\.:*~]+$")
 
@@ -57,7 +60,10 @@ def suggest_mapping(
         field = canonical_field(column)
         if field is not None and ColumnRole(field) not in mapping.values():
             mapping[column] = ColumnRole(field)
-    if not STRUCTURE_ROLES.intersection(mapping.values()):
+    # Sniff contents unless the file's structures are already readable
+    # directly; an identifier column alone (e.g. InChIKey) still gets a
+    # search for a SMILES/InChI/MOL column beside it.
+    if not _DIRECT_STRUCTURE_ROLES.intersection(mapping.values()):
         for column in table.columns:
             if column in mapping:
                 continue
@@ -77,13 +83,18 @@ def _best_template(
 
 
 def _sample(table: Table, column: str) -> list[str]:
-    """Up to ``_SAMPLE`` non-empty values of a column."""
-    values = (row.get(column, "") for row in table.rows)
+    """Up to ``_SAMPLE`` non-empty values of a column, trimmed."""
+    values = (row.get(column, "").strip() for row in table.rows)
     return [v for v in values if v][:_SAMPLE]
 
 
 def _structure_role(values: Sequence[str]) -> ColumnRole | None:
-    """Recognize a column of InChI, InChIKey or SMILES values."""
+    """Recognize a column of InChI, MOL block, InChIKey, ChEMBL ID or SMILES values.
+
+    Names and PubChem CIDs are never suggested: they cannot be told apart
+    from internal codes or numbers, and a lookup role sends values to
+    PubChem, so the user must choose it.
+    """
     if not values:
         return None
 
@@ -92,8 +103,12 @@ def _structure_role(values: Sequence[str]) -> ColumnRole | None:
 
     if share(lambda v: v.startswith("InChI=")) >= _THRESHOLD:
         return ColumnRole.INCHI
+    if share(lambda v: "M  END" in v) >= _THRESHOLD:
+        return ColumnRole.MOL_BLOCK
     if share(lambda v: _INCHIKEY.match(v) is not None) >= _THRESHOLD:
         return ColumnRole.INCHIKEY
+    if share(lambda v: _CHEMBL_ID.match(v.upper()) is not None) >= _THRESHOLD:
+        return ColumnRole.CHEMBL_ID
     if all(_smiles_shaped(v) for v in values) and (
         share(lambda v: Chem.MolFromSmiles(v) is not None) >= _SMILES_PARSE_THRESHOLD
     ):

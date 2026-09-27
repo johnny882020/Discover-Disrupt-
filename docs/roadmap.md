@@ -45,7 +45,6 @@ Also open:
 
 | Gap | Consequence for users | Planned in |
 |---|---|---|
-| Structures must be given as SMILES or InChI | Files that identify compounds by MOL block, InChIKey, PubChem CID, ChEMBL ID or name need converting first | R2 |
 | Export is a flat CSV/JSONL | ML teams still split, filter and convert by hand | R5 |
 
 Wet-lab and animal experiments are out of scope: the platform records and
@@ -94,10 +93,10 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 
 ### R2 — Hit-phase triage
 
-- **Structures in every format:** MOL blocks, InChIKeys, PubChem CIDs,
-  ChEMBL IDs and names, as well as SMILES and InChI; `.smi` and `.mol`
-  files. Identifiers are resolved via PubChem/ChEMBL, but only for columns
-  the user maps for lookup.
+- **Structures in every format** *(done)*: MOL blocks, InChIKeys, PubChem
+  CIDs, ChEMBL IDs and names, as well as SMILES and InChI; `.smi` and
+  `.mol` files. Identifiers are resolved via PubChem/ChEMBL, but only for
+  columns the user maps for lookup.
 - **Properties in view:** the computed descriptors (MW, clogP, TPSA, H-bond
   donors/acceptors, rotatable bonds, QED) in the API, the records table,
   the compound view and exports.

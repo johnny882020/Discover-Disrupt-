@@ -19,6 +19,7 @@ from dndlabs.validation.duplicates import DuplicateRule
 from dndlabs.validation.identity import CompoundIdentityRule
 from dndlabs.validation.schema import SchemaRule
 from dndlabs.validation.standardization import StandardizationRule
+from dndlabs.validation.structure_source import StructureSourceRule
 from dndlabs.validation.units import UnitNormalizationRule
 
 logger = get_logger(__name__)
@@ -28,9 +29,16 @@ def default_record_rules() -> list[ValidationRule]:
     """Return the record rules in their contractual order.
 
     Returns:
-        Schema, compound identity, standardization, then unit normalization.
+        Structure source, schema, compound identity, standardization, then
+        unit normalization.
     """
-    return [SchemaRule(), CompoundIdentityRule(), StandardizationRule(), UnitNormalizationRule()]
+    return [
+        StructureSourceRule(),
+        SchemaRule(),
+        CompoundIdentityRule(),
+        StandardizationRule(),
+        UnitNormalizationRule(),
+    ]
 
 
 def seed_record(raw: RawRecord, dataset_id: uuid.UUID) -> NormalizedRecord:

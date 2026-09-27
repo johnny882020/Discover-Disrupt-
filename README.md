@@ -16,8 +16,9 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
 ## Features
 
 - **Ingestion** from PubChem, ChEMBL and your own files: drag-and-drop a CSV,
-  TSV, Excel or SD file, confirm the suggested column mapping, and save it
-  for next time.
+  TSV, Excel, SD, SMILES or MOL file, confirm the suggested column mapping,
+  and save it for next time. Structures can be SMILES, InChI or MOL blocks,
+  or InChIKeys, PubChem CIDs, ChEMBL IDs and names, which are looked up.
 - **Validation and normalization:** structure and identifier checks,
   standardization with the ChEMBL Structure Pipeline (salts stripped, charges
   neutralized), activity values converted to nanomolar, duplicates removed

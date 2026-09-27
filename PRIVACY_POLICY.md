@@ -61,7 +61,11 @@
 - **Third parties.** Ingested identifiers/SMILES may be sent to PubChem,
   ChEMBL, and (when configured) NVIDIA's hosted BioNeMo GenMol NIM, solely
   to fetch or enrich the requested data — never sold, never used for
-  advertising, never sent anywhere else.
+  advertising, never sent anywhere else. From uploaded files, only the
+  values of columns the user maps to a lookup role (InChIKey, PubChem CID,
+  ChEMBL ID, name to look up) are sent, to PubChem or ChEMBL, and only for
+  rows without a structure of their own; the platform never assigns a
+  lookup role to names or CIDs on its own.
 
 ## What this draft does not yet cover
 

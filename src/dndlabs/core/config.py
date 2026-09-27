@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
     upload_max_rows: int = Field(default=100_000, ge=1)
+    #: Distinct identifiers (InChIKey, CID, ChEMBL ID, name) looked up per run.
+    structure_lookup_limit: int = Field(default=1000, ge=0)
 
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)

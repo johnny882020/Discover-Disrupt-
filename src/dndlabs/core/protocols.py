@@ -87,6 +87,28 @@ class OrgScopedConnector(Protocol):
         ...
 
 
+class StructureResolver(Protocol):
+    """Finds structures for records that identify them only indirectly.
+
+    Records with SMILES or InChI pass through unchanged. Others get
+    ``smiles`` from a MOL block, or by looking up their InChIKey, PubChem
+    CID, ChEMBL ID or name, with ``structure_source`` saying where it came
+    from; records that cannot be resolved get ``structure_error`` instead.
+    """
+
+    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]:
+        """Resolve structures; never raises for an unresolvable record.
+
+        Args:
+            raws: Records from a connector.
+
+        Returns:
+            The same records, in order, with structures filled in or an
+            explanation of why not.
+        """
+        ...
+
+
 @runtime_checkable
 class ValidationRule(Protocol):
     """A record-level validation/normalization rule."""

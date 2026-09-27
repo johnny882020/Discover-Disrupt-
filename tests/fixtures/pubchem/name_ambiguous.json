@@ -1,0 +1,18 @@
+{
+  "PropertyTable": {
+    "Properties": [
+      {
+        "CID": 5793,
+        "MolecularFormula": "C6H12O6",
+        "SMILES": "C([C@@H]1[C@H]([C@@H]([C@H](C(O1)O)O)O)O)O",
+        "Title": "D-Glucose"
+      },
+      {
+        "CID": 107526,
+        "MolecularFormula": "C6H12O6",
+        "SMILES": "C([C@@H]1[C@H]([C@@H]([C@H]([C@@H](O1)O)O)O)O)O",
+        "Title": "beta-D-Glucose"
+      }
+    ]
+  }
+}

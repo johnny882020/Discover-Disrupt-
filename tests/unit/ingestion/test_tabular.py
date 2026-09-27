@@ -22,6 +22,9 @@ LIMIT = 1000
         ("book.xlsx", UploadFormat.XLSX),
         ("mols.sdf", UploadFormat.SDF),
         ("mols.sd", UploadFormat.SDF),
+        ("mols.smi", UploadFormat.SMI),
+        ("mols.smiles", UploadFormat.SMI),
+        ("aspirin.mol", UploadFormat.MOL),
     ],
 )
 def test_upload_format_by_extension(name: str, fmt: UploadFormat) -> None:
@@ -155,3 +158,54 @@ $$$$
     table = read_table(pentavalent.encode(), UploadFormat.SDF, LIMIT)
     assert len(table.rows) == 1
     assert table.rows[0]["smiles"]  # present, so validation reports it rather than dropping it
+
+
+def test_smiles_file_lines_hold_smiles_and_an_optional_name() -> None:
+    text = "SMILES Name\nCCO ethanol\n# a comment\n\nc1ccccc1\tbenzene ring\nC\n"
+    table = read_table(text.encode(), UploadFormat.SMI, max_rows=10)
+    assert table.columns == ["smiles", "name"]
+    assert table.rows == [
+        {"smiles": "CCO", "name": "ethanol"},
+        {"smiles": "c1ccccc1", "name": "benzene ring"},
+        {"smiles": "C", "name": ""},
+    ]
+
+
+def test_empty_smiles_file_is_rejected() -> None:
+    with pytest.raises(IngestionError, match="no structures"):
+        read_table(b"# nothing here\n", UploadFormat.SMI, max_rows=10)
+
+
+def test_mol_file_is_one_row() -> None:
+    block = Chem.MolToMolBlock(Chem.MolFromSmiles("CC(=O)Oc1ccccc1C(=O)O"))
+    table = read_table(("Aspirin" + block).encode(), UploadFormat.MOL, max_rows=10)
+    assert table.rows == [{"smiles": "CC(=O)Oc1ccccc1C(=O)O", "name": "Aspirin"}]
+
+
+def test_unreadable_mol_file_is_rejected() -> None:
+    with pytest.raises(IngestionError, match="cannot read the MOL file"):
+        read_table(b"not a molfile", UploadFormat.MOL, max_rows=10)
+
+
+def _aspirin_block() -> str:
+    block = Chem.MolToMolBlock(Chem.MolFromSmiles("CC(=O)Oc1ccccc1C(=O)O"))
+    assert block.startswith("\n")  # a blank title line, which trimming would destroy
+    return str(block)
+
+
+def test_xlsx_keeps_a_mol_block_exactly() -> None:
+    workbook = Workbook()
+    workbook.active.append(["ID", "Molfile"])
+    workbook.active.append(["M-1", _aspirin_block()])
+    workbook.active.append(["   ", "  "])  # whitespace only: dropped
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    table = read_table(buffer.getvalue(), UploadFormat.XLSX, max_rows=10)
+    assert table.rows == [{"ID": "M-1", "Molfile": _aspirin_block()}]
+
+
+def test_csv_keeps_a_quoted_multi_line_mol_block_exactly() -> None:
+    block = _aspirin_block()
+    text = 'ID,Molfile\nM-1,"' + block + '"\n  ,  \n'
+    table = read_table(text.encode(), UploadFormat.CSV, max_rows=10)
+    assert table.rows == [{"ID": "M-1", "Molfile": block}]

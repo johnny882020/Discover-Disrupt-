@@ -84,7 +84,7 @@ describe("RunTrigger screen", () => {
     expect(screen.getByText(/2 rows · 4 columns/)).toBeInTheDocument();
     expect(screen.getByLabelText("Dataset name (optional)")).toHaveValue("plate-7");
     const start = screen.getByRole("button", { name: /start run/i });
-    expect(screen.getByRole("status")).toHaveTextContent(/choose the column that holds the structures/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/choose a column that identifies each structure/i);
     expect(start).toBeDisabled();
 
     // Aliased headers are suggested; the structure column is mapped by hand.
@@ -105,6 +105,23 @@ describe("RunTrigger screen", () => {
         Structure: "smiles",
         potency: "activity_value",
       },
+    });
+  });
+
+  it("runs a file identified by PubChem CIDs, and says the CIDs are looked up", async () => {
+    const content = "compound_id,PubChem CID\nLAB-1,2244\nLAB-2,3672\n";
+    serveUpload("cids.csv", content);
+    const runs = captureRuns();
+    const user = userEvent.setup();
+    renderRunTrigger();
+    await user.upload(screen.getByLabelText(/csv, tsv, excel/i), csvFile(content, "cids.csv"));
+
+    expect(await screen.findByLabelText("Role for column PubChem CID")).toHaveValue("pubchem_cid");
+    expect(screen.getByText(/values in “PubChem CID” will be sent to PubChem or ChEMBL/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /start run/i }));
+    await waitFor(() => expect(runs).toHaveLength(1));
+    expect(runs[0]).toMatchObject({
+      column_mapping: { compound_id: "source_record_id", "PubChem CID": "pubchem_cid" },
     });
   });
 
