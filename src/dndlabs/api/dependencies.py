@@ -1,4 +1,8 @@
-"""Dependency-injection seams for the API."""
+"""Dependency-injection seams for the API.
+
+Routers receive the service bundle built at startup (``Services``) and the
+authenticated tenant (``CurrentOrg``) through these annotated dependencies.
+"""
 
 from dataclasses import dataclass
 from typing import Annotated
@@ -14,6 +18,7 @@ from dndlabs.ingestion.uploads import UploadService
 from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
+from dndlabs.pipeline.worker import RunWorker
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,8 @@ class ApiServices:
         uploads: Upload service.
         assessment: Hit-to-lead assessment service.
         settings: Application settings.
+        worker: Executes queued runs; started and stopped with the app.
+            ``None`` leaves runs queued (tests that inspect pending runs).
     """
 
     repositories: Repositories
@@ -37,6 +44,7 @@ class ApiServices:
     uploads: UploadService
     assessment: AssessmentService
     settings: Settings
+    worker: RunWorker | None = None
 
 
 def get_services(request: Request) -> ApiServices:
@@ -53,4 +61,7 @@ def get_services(request: Request) -> ApiServices:
 
 
 Services = Annotated[ApiServices, Depends(get_services)]
+# The only source of org_id for org-scoped routes: derived from the verified
+# API key or session, never from a path, query or body, so a caller cannot
+# name another tenant's id.
 CurrentOrg = Annotated[OrgContext, Depends(get_current_org)]

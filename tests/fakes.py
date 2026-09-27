@@ -2,7 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dndlabs.core.exceptions import (
     ConflictError,
@@ -12,6 +12,7 @@ from dndlabs.core.exceptions import (
 )
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
+    FINISHED_STATUSES,
     ApiKeyRecord,
     Dataset,
     DatasetFilter,
@@ -27,6 +28,7 @@ from dndlabs.core.schemas import (
     QualityReport,
     RawRecord,
     Role,
+    RunStatus,
     SourceSpec,
     SourceType,
     StoredFeatures,
@@ -34,6 +36,7 @@ from dndlabs.core.schemas import (
     User,
     UserCredentials,
     UserSession,
+    utcnow,
 )
 
 
@@ -306,19 +309,38 @@ class FakeMappingTemplates:
 
 
 class FakeRuns:
+    """In-memory run queue with the SQL repository's claim, lease and fair-share semantics."""
+
     def __init__(self) -> None:
         self.items: dict[uuid.UUID, PipelineRun] = {}
+        self.leases: dict[uuid.UUID, tuple[str, datetime]] = {}
+        self.lost_leases: dict[uuid.UUID, int] = {}
+        #: Set by :func:`fake_repositories`: release and failure delete a run's output.
+        self.datasets: FakeDatasets | None = None
 
     def create(self, run: PipelineRun) -> PipelineRun:
         self.items[run.id] = run
         return run
 
     def update(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
-        existing = self.items.get(run.id)
-        if existing is None or existing.org_id != org_id:
-            raise NotFoundError(f"run {run.id} not found for org {org_id}")
-        self.items[run.id] = run
-        return run
+        existing = self.get(org_id, run.id)
+        stored = existing.model_copy(
+            update={
+                field: getattr(run, field)
+                for field in (
+                    "status",
+                    "stage",
+                    "progress",
+                    "dataset_id",
+                    "error",
+                    "finished_at",
+                )
+            }
+        )
+        self.items[run.id] = stored
+        if stored.status in FINISHED_STATUSES:
+            self.leases.pop(run.id, None)
+        return stored
 
     def get(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
         run = self.items.get(run_id)
@@ -328,6 +350,129 @@ class FakeRuns:
 
     def list_for_org(self, org_id: uuid.UUID) -> list[PipelineRun]:
         return [r for r in self.items.values() if r.org_id == org_id]
+
+    def request_cancel(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
+        run = self.get(org_id, run_id)
+        if run.status is RunStatus.PENDING:
+            run = run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "cancel_requested": True,
+                    "finished_at": utcnow(),
+                }
+            )
+        elif run.status is RunStatus.RUNNING:
+            run = run.model_copy(update={"cancel_requested": True})
+        self.items[run_id] = run
+        return run
+
+    def claim(
+        self, org_id: uuid.UUID, run_id: uuid.UUID, worker_id: str, lease_seconds: float
+    ) -> PipelineRun | None:
+        run = self.get(org_id, run_id)
+        return (
+            self._claim(run, worker_id, lease_seconds) if run.status is RunStatus.PENDING else None
+        )
+
+    def claim_next(
+        self, worker_id: str, lease_seconds: float, max_lost_leases: int
+    ) -> PipelineRun | None:
+        now = utcnow()
+        runnable = sorted(
+            (r for r in self.items.values() if self._runnable(r, now, max_lost_leases)),
+            key=lambda r: (self._executing(r.org_id, now), r.created_at),
+        )
+        if not runnable:
+            return None
+        run = runnable[0]
+        if self._expired(run, now):
+            self.lost_leases[run.id] = self.lost_leases.get(run.id, 0) + 1
+        return self._claim(run, worker_id, lease_seconds)
+
+    def fail_exhausted(self, max_lost_leases: int) -> list[PipelineRun]:
+        now = utcnow()
+        failed = []
+        for run in list(self.items.values()):
+            lost = self.lost_leases.get(run.id, 0) + 1
+            if self._expired(run, now) and lost >= max_lost_leases:
+                self.lost_leases[run.id] = lost
+                run = run.model_copy(
+                    update={
+                        "status": RunStatus.FAILED,
+                        "error": f"the run's worker stopped unexpectedly {lost} times; "
+                        "start it again",
+                        "finished_at": now,
+                    }
+                )
+                self.items[run.id] = run
+                self.leases.pop(run.id, None)
+                self._delete_output(run)
+                failed.append(run)
+        return failed
+
+    def renew_lease(self, run_id: uuid.UUID, worker_id: str, lease_seconds: float) -> bool:
+        lease = self.leases.get(run_id)
+        if (
+            lease is None
+            or lease[0] != worker_id
+            or run_id not in self.items
+            or self.items[run_id].status is not RunStatus.RUNNING
+        ):
+            return False
+        self.leases[run_id] = (worker_id, utcnow() + timedelta(seconds=lease_seconds))
+        return True
+
+    def release(self, run_id: uuid.UUID, worker_id: str) -> None:
+        lease = self.leases.get(run_id)
+        run = self.items.get(run_id)
+        if (
+            lease is not None
+            and lease[0] == worker_id
+            and run is not None
+            and run.status is RunStatus.RUNNING
+        ):
+            self.leases.pop(run_id)
+            if run.cancel_requested:
+                update = {"status": RunStatus.CANCELLED, "finished_at": utcnow()}
+            else:
+                update = {"status": RunStatus.PENDING}
+            self.items[run_id] = run.model_copy(update=update)
+            self._delete_output(run)
+
+    def _delete_output(self, run: PipelineRun) -> None:
+        if self.datasets is not None:
+            self.datasets.delete_for_run(run.org_id, run.id)
+
+    def _expired(self, run: PipelineRun, now: datetime) -> bool:
+        lease = self.leases.get(run.id)
+        return run.status is RunStatus.RUNNING and lease is not None and lease[1] < now
+
+    def _runnable(self, run: PipelineRun, now: datetime, max_lost_leases: int) -> bool:
+        if run.status is RunStatus.PENDING:
+            return True
+        return self._expired(run, now) and self.lost_leases.get(run.id, 0) + 1 < max_lost_leases
+
+    def _executing(self, org_id: uuid.UUID, now: datetime) -> int:
+        return sum(
+            1
+            for run_id, (_, expires) in self.leases.items()
+            if expires >= now
+            and self.items[run_id].org_id == org_id
+            and self.items[run_id].status is RunStatus.RUNNING
+        )
+
+    def _claim(self, run: PipelineRun, worker_id: str, lease_seconds: float) -> PipelineRun:
+        now = utcnow()
+        claimed = run.model_copy(
+            update={
+                "status": RunStatus.RUNNING,
+                "attempts": run.attempts + 1,
+                "started_at": run.started_at or now,
+            }
+        )
+        self.items[run.id] = claimed
+        self.leases[run.id] = (worker_id, now + timedelta(seconds=lease_seconds))
+        return claimed
 
 
 class FakeDatasets:
@@ -369,6 +514,16 @@ class FakeDatasets:
         for i in ids:
             del self.items[i]
         return len(ids)
+
+    def delete_for_run(self, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+        ids = [
+            i
+            for i, d in self.items.items()
+            if d.dataset.org_id == org_id and d.dataset.run_id == run_id
+        ]
+        for i in ids:
+            del self.items[i]
+        return bool(ids)
 
 
 class FakeReports:
@@ -425,6 +580,8 @@ def fake_repositories() -> Repositories:
     users = FakeUsers()
     sessions = FakeSessions()
     users.sessions = sessions
+    runs, datasets = FakeRuns(), FakeDatasets()
+    runs.datasets = datasets
     return Repositories(
         organizations=FakeOrganizations(),
         api_keys=FakeApiKeys(),
@@ -433,8 +590,8 @@ def fake_repositories() -> Repositories:
         invitations=FakeInvitations(users),
         uploads=FakeUploads(),
         mapping_templates=FakeMappingTemplates(),
-        runs=FakeRuns(),
-        datasets=FakeDatasets(),
+        runs=runs,
+        datasets=datasets,
         reports=FakeReports(),
         features=FakeFeatures(),
         enrichments=FakeEnrichments(),

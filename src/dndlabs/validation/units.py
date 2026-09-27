@@ -4,6 +4,7 @@ from dndlabs.core.schemas import NormalizedRecord, RawRecord, RuleOutcome, Valid
 from dndlabs.validation.issues import error, parse_number, warning
 
 #: Multiplier converting a (lower-cased, micro-sign-normalized) unit to nM.
+#: Plain molar ("M") is handled case-sensitively in :func:`nanomolar_factor`.
 _TO_NANOMOLAR: dict[str, float] = {
     "mm": 1e6, "um": 1e3, "nm": 1.0, "pm": 1e-3,
     "mol/l": 1e9, "mmol/l": 1e6, "umol/l": 1e3, "nmol/l": 1.0, "pmol/l": 1e-3,
@@ -21,7 +22,10 @@ def nanomolar_factor(unit: str) -> float | None:
     Returns:
         The multiplier, or ``None`` if the unit is not a supported concentration.
     """
+    # Sources use both U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU.
     text = unit.strip().replace("µ", "u").replace("μ", "u")
+    # Molar is matched case-sensitively so that a bare "m" (milli with no
+    # base unit, or metres) is not read as molar.
     if text == "M":
         return 1e9
     return _TO_NANOMOLAR.get(text.lower())
@@ -29,6 +33,11 @@ def nanomolar_factor(unit: str) -> float | None:
 
 class UnitNormalizationRule:
     """Converts activity values to nanomolar and validates the relation operator.
+
+    A record without an activity value is valid (structure-only data); only
+    a value that cannot be converted to a non-negative concentration in nM is
+    an error. Only molar concentration units are supported, so pIC50s and
+    percentages are rejected rather than silently misread.
 
     Attributes:
         name: Rule name used in reports.
@@ -47,11 +56,14 @@ class UnitNormalizationRule:
             The record with ``activity_value_nm`` set, plus any issues.
         """
         issues: list[ValidationIssue] = []
+        # No relation means an exact measurement.
         relation = raw.activity_relation or "="
         if relation not in _VALID_RELATIONS:
             issues.append(
                 error(self.name, record, f"unsupported relation {relation!r}", "activity_relation")
             )
+            # The record is already rejected; carry on so the report also
+            # lists any problem with the value or unit.
             relation = "="
         try:
             value = parse_number(raw.activity_value)
@@ -66,6 +78,8 @@ class UnitNormalizationRule:
             )
             return RuleOutcome(record=record, issues=issues)
         if value is None:
+            # Only a warning: the record needs no activity to be useful, and
+            # a stray unit column loses nothing.
             if raw.activity_unit:
                 issues.append(
                     warning(self.name, record, "unit given without a value", "activity_value")

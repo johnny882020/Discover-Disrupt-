@@ -16,10 +16,12 @@ export default {
       colors: {
         ink: "#12151A",
         paper: "#FAF9F6",
-        accent: { DEFAULT: "#1D7A85", fg: "#FAF9F6" },
-        warn: "#B8862B",
-        danger: "#B0473F",
-        success: "#3F7A5C",
+        // `bright` shades are for text on the dark background: the default
+        // shades fall below WCAG AA contrast (4.5:1) on ink.
+        accent: { DEFAULT: "#1D7A85", fg: "#FAF9F6", bright: "#5FBFCB" },
+        warn: { DEFAULT: "#B8862B", bright: "#E0B45C" },
+        danger: { DEFAULT: "#B0473F", bright: "#E58A82" },
+        success: { DEFAULT: "#3F7A5C", bright: "#7CC29B" },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],

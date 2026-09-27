@@ -1,4 +1,4 @@
-"""Opaque bearer tokens for sign-in sessions and invitations.
+"""Opaque bearer tokens for sign-in sessions, invitations and password resets.
 
 Tokens are 256 bits from :mod:`secrets` behind a readable type prefix. Only
 their SHA-256 digest is stored: a fast, unsalted hash is sufficient for
@@ -11,7 +11,8 @@ import secrets
 
 #: Prefix of a sign-in session token (``Authorization: Bearer ddl_sess_…``).
 SESSION_TOKEN_PREFIX = "ddl_sess_"
-#: Prefix of an invitation token (carried in the invitation link).
+#: Prefix of an invitation token (carried in the invitation link). Password-reset
+#: tokens use it too: they are stored as invitations with a reset purpose.
 INVITATION_TOKEN_PREFIX = "ddl_inv_"
 
 

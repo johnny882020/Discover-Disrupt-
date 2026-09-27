@@ -1,4 +1,12 @@
-"""Structured logging with secret redaction."""
+"""Structured logging with secret redaction.
+
+Every module logs through :func:`get_logger`; :func:`configure_logging`
+installs one stderr handler. With JSON output (the default) its
+:class:`JsonFormatter` redacts secret-shaped fields and ``Bearer`` tokens
+before anything is written. Redaction is by key name, so pass credentials
+under their usual names (``api_key``, ``token``, ``password``...), never
+under a neutral key.
+"""
 
 import json
 import logging
@@ -7,17 +15,23 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+# Standard LogRecord attributes; anything else on a record came from ``extra``.
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
 # Values under these keys keep a 4-character hint (e.g. a key's type prefix).
 _SECRET_KEYS = {"api_key", "raw_key", "hashed_key", "nvidia_nim_api_key", "admin_bootstrap_secret",
                 "authorization", "x-api-key", "x-admin-secret", "token", "token_hash"}  # fmt: skip
 # Values under these keys are redacted entirely: even a prefix of a password leaks it.
 _PASSWORD_KEYS = {"password", "current_password", "new_password", "password_hash"}
+# Catches tokens embedded in free text (e.g. a logged header or message).
 _BEARER_RE = re.compile(r"(Bearer\s+)\S+", re.IGNORECASE)
 
 
 def _redact(key: str, value: Any) -> Any:
-    """Redact a value whose key name suggests it holds a secret."""
+    """Redact a value whose key name suggests it holds a secret.
+
+    Only strings are redacted; a secret must never be logged inside a nested
+    structure, where its key would not be inspected.
+    """
     if isinstance(value, str) and key.lower() in _PASSWORD_KEYS:
         return "…"
     if isinstance(value, str) and key.lower() in _SECRET_KEYS:
@@ -60,10 +74,13 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
         level: Log level name, e.g. ``"INFO"``.
         json_output: Use :class:`JsonFormatter` when true, plain text otherwise.
     """
+    # Replaces (not appends to) the root handlers, so calling this again
+    # never duplicates output.
     handler = logging.StreamHandler(sys.stderr)
     if json_output:
         handler.setFormatter(JsonFormatter())
     else:
+        # Plain text is for local reading only: it applies no redaction.
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.handlers = [handler]

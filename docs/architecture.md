@@ -9,7 +9,7 @@ explicitly in the PR that makes it.
 ```text
       api/ (FastAPI)        cli/ (Typer)        delivery
              └───────┬───────────┘
-                 pipeline/                      orchestration, export, wiring
+                 pipeline/                      orchestration, run worker, export, wiring
       ┌──────────────┼───────────────┬──────────────┬──────────────┐
  ingestion/     validation/      filtering/   preprocessing/  enrichment/  assessment/
       └──────────────┼───────────────┴──────────────┴──────────────┘
@@ -31,30 +31,82 @@ explicitly in the PR that makes it.
 ## Pipeline run
 
 ```text
-SourceSpec → Connector.fetch (or fetch_for_org) → RawRecord[]
-                                   │
-                                   ▼
-             StructureResolver.resolve (MOL blocks; PubChem/ChEMBL lookups)
-                                   │
-                                   ▼
-                             Validator.run → NormalizedRecord[] + QualityReport
-                                   │
-                   DatasetRepository.create (records persisted — required for the FKs below)
-                                   │
-                        ┌──────────┴──────────┐
-                  Featurizer            EnrichmentService
-              (RDKit descriptors)    (GenMol, or skipped)
+POST /pipelines/run → pending run (pipeline_runs)
+  → RunWorker claims it (RunRepository.claim_next)
+  → fetch        Connector.fetch / fetch_for_org → RawRecord[]
+  → resolve      StructureResolver.resolve (MOL blocks; PubChem/ChEMBL lookups)
+  → validate     Validator.run → NormalizedRecord[] + QualityReport
+  → store        DatasetRepository.create (dataset + records), QualityReportRepository.save
+  → featurize    Featurizer (RDKit descriptors, alerts, fingerprint)
+  → enrich       EnrichmentService (GenMol, or skipped)
 ```
 
-Runs move through `pending → running → succeeded | failed`. A bad record
+Stages run in this order, one after another (`pipeline/orchestrator.py`).
+Runs move through `pending → running → succeeded | failed | cancelled`. A bad record
 never fails a run; it is recorded as a `ValidationIssue` on the quality
 report. A run is marked `failed` only on infrastructure errors (ingestion,
-storage), with the error persisted on the run row.
+storage), after repeated unexpected worker stops (see below), or when it
+was lost before revision `0008`. The run's `error` is a fixed explanation
+for the kind of failure (`_client_error` in `pipeline/orchestrator.py`); the
+exception text is logged only, like a failed enrichment's reason
+(`enrichment/client.py`).
 
 Ordering constraint: the dataset and its records must be persisted before
 any feature vector or enrichment result, since both reference
 `normalized_records.id` by foreign key. Enforced by stage order in
 `pipeline/orchestrator.py`.
+
+### Run queue and worker
+
+`POST /pipelines/run` only queues a run: `pipeline_runs` is the queue, so a
+run is its own job and nothing else has to be kept in sync.
+`pipeline/worker.py` (`RunWorker`) executes runs inside the API process,
+started and stopped with the app:
+
+- **Claim.** It polls every `DNDLABS_WORKER_POLL_SECONDS`.
+  `RunRepository.claim_next` picks among the runnable runs (`pending`, or
+  `running` under an expired lease) the one whose organization has the
+  fewest executing runs, oldest first, so one organization's backlog does not
+  hold up another's. It reads the candidate with `FOR UPDATE SKIP LOCKED`
+  (PostgreSQL) and claims it with an update conditioned on the state it
+  read, so two workers never claim one run on any database. The claim sets
+  `worker_id`, a lease (`DNDLABS_WORKER_LEASE_SECONDS`) and one more
+  `attempts`.
+- **Execute.** The run executes on a worker thread (`DNDLABS_WORKER_CONCURRENCY`
+  at a time), so RDKit's CPU-bound stages never block the API's event loop.
+  Meanwhile the lease is renewed every third of its length.
+- **Checkpoints.** `PipelineService.execute` records the stage and counts
+  between stages and within long stages: after each lookup request while
+  resolving (`StructureResolver.resolve`'s `checkpoint`), every 500 records
+  while validating (`Validator.run`'s `checkpoint`) and featurizing, and
+  between enrichment batches (`EnrichmentService.enrich`'s `checkpoint`).
+  At a checkpoint the run stops for a cancellation request (it ends
+  `cancelled` and keeps nothing) or when the worker asks it to (shutdown,
+  lost lease).
+- **Clean stop** (shutdown, deploy, free-plan idle stop). The worker waits
+  up to `DNDLABS_WORKER_SHUTDOWN_GRACE_SECONDS` for its runs to reach a
+  checkpoint and `release`s each: the run returns to `pending` (its partial
+  output deleted in the same transaction, so cancelling it then leaves
+  nothing behind), and the next process resumes it at once. Clean stops
+  never count as failures. A run still busy after the grace period keeps
+  its lease until it expires, so it is never executed twice at once.
+- **Unexpected stop** (crash, kill). The run is claimed again once its
+  lease expires; each such re-claim increments the internal
+  `pipeline_runs.lost_leases`. After `DNDLABS_WORKER_MAX_LOST_LEASES`
+  unexpected stops, `fail_exhausted` fails the run ("the run's worker
+  stopped unexpectedly N times; start it again").
+- **Resume.** Every attempt first deletes what an earlier attempt stored
+  (`DatasetRepository.delete_for_run`), so a resumed run never leaves a
+  partial or duplicate dataset. If the organization's data is deleted while
+  its run executes, the run stops quietly and leaves nothing behind.
+- **CLI.** `dnd-pipeline run` claims its own run (`RunRepository.claim`)
+  and executes it through the same worker code, so an API worker sharing
+  the database never picks it up.
+
+The queue methods are not scoped by organization (see
+[Protocols](#protocols-coreprotocolspy)): the worker serves every
+organization, and each run it claims carries the `org_id` under which
+everything for that run is done.
 
 ## Contracts (`core/schemas.py`)
 
@@ -68,7 +120,7 @@ any feature vector or enrichment result, since both reference
 | `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
 | `SourceSpec` | Ingest request: `source`, `identifiers` (PubChem CIDs), `csv_path`, `json_path`, `chembl_target`, `upload_id` + `column_mapping`, `dataset_name` — cross-validated per source |
 | `ColumnRole` | What an uploaded column holds (`smiles`, `inchi`, `mol_block`, `inchikey`, `pubchem_cid`, `chembl_id`, `lookup_name`, `name`, `assay_format`, `control`, `activity_value`, … or `ignore`); a mapping needs one of the `STRUCTURE_ROLES` and uses each other role once. `LOOKUP_ROLES` are the structure roles resolved by a PubChem/ChEMBL lookup |
-| `Upload` / `UploadFormat` / `UploadPreview` | A stored file's metadata (`csv` / `tsv` / `xlsx` / `sdf`, size, SHA-256); its columns, first rows, row count and suggested mapping |
+| `Upload` / `UploadFormat` / `UploadPreview` | A stored file's metadata (`csv` / `tsv` / `xlsx` / `sdf` / `smi` / `mol`, size, SHA-256); its columns, first rows, row count and suggested mapping |
 | `MappingTemplateCreate` / `MappingTemplate` | A named, org-saved column mapping, suggested for uploads whose headers include its columns |
 | `RawRecord` | Unvalidated connector output; numeric fields may still be strings; unknown fields go into `extra`. Carries the structure as `smiles`/`inchi`/`mol_block` or an identifier to look up, plus resolution's `structure_source` or `structure_error` |
 | `NormalizedRecord` | Model-ready row keyed by `record_key` (InChIKey); always carries `dataset_id`. `context_key()` hashes its measurement context (target, assay type, assay format, control), or is empty when it has none |
@@ -76,11 +128,11 @@ any feature vector or enrichment result, since both reference
 | `ValidationIssue` | `rule`, `severity` (`error` / `warning`), `source_record_id`, `field`, `message` |
 | `QualityReport` | Counts, `issues_by_rule`, `issues`, `pass_rate` for one run |
 | `DatasetFilter` | Record query filters (MW range, target, source, activity range, pagination) |
-| `FeatureVector` | RDKit descriptors + Morgan fingerprint for one record |
+| `FeatureVector` | RDKit descriptors, structural `alerts` and Morgan fingerprint for one record |
 | `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `FormatPotency` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class (the most potent class a majority of its measurements reach), computed properties, alerts and criteria met; compound counts per assay format; each criterion over all compounds, actives and the five most potent |
 | `AlertFamily` / `StructuralAlert` / `StoredFeatures` | A flagged substructure (PAINS, Brenk, reactive metabolite) with its matched atoms; a record's stored descriptors and alerts (`alerts` is `None` when stored before alerts existed) |
 | `EnrichmentRequest` / `GeneratedCandidate` / `EnrichmentResult` | One record submitted for GenMol enrichment, one generated analog, per-record outcome (`enriched` / `skipped_no_key` / `failed`) |
-| `PipelineRun` | `org_id`, `status`, `error`, `dataset_id`, timestamps |
+| `PipelineRun` / `RunStatus` / `RunStage` / `RunProgress` | `org_id`, `spec`, `status`, `stage`, per-stage counts, `attempts`, `cancel_requested`, `error`, `dataset_id`, timestamps |
 | `Dataset` / `DatasetWithRecords` | Stored dataset metadata, with or without records — both `org_id`-scoped |
 
 IDs are UUID4. Timestamps are timezone-aware UTC.
@@ -107,7 +159,9 @@ class ValidationRule(Protocol):
 
 
 class StructureResolver(Protocol):
-    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]: ...
+    async def resolve(
+        self, raws: Sequence[RawRecord], checkpoint: Callable[[int], None] | None = None
+    ) -> list[RawRecord]: ...
 
 
 class Featurizer(Protocol):
@@ -119,6 +173,15 @@ class EnrichmentClient(Protocol):
     async def enrich_batch(
         self, requests: Sequence[EnrichmentRequest]
     ) -> list[EnrichmentResult]: ...
+
+
+class Exporter(Protocol):
+    def export(
+        self,
+        records: Iterable[NormalizedRecord],
+        fmt: ExportFormat,
+        profiles: Mapping[uuid.UUID, CompoundProfile] | None = None,
+    ) -> bytes: ...
 ```
 
 `Connector.fetch` is a plain (non-`async`) method typed to return
@@ -135,12 +198,15 @@ Repositories (`OrganizationRepository`, `ApiKeyRepository`, `UserRepository`,
 are bundled as `Repositories`. Every org-scoped
 method takes `org_id` explicitly — the entire tenant-isolation mechanism;
 there is no other check. A lookup of a missing or wrong-org entity raises
-`NotFoundError`. Two kinds of method are deliberately not org-scoped:
+`NotFoundError`. Three kinds of method are deliberately not org-scoped:
 
 - lookups that *establish* identity before any org is known — an API key
   by prefix, a user by email (emails are globally unique), a session or
   invitation by token hash;
-- `OrganizationRepository.ping()`, used only by the readiness probe.
+- `OrganizationRepository.ping()`, used only by the readiness probe;
+- the run worker's queue methods `RunRepository.claim_next`,
+  `fail_exhausted`, `renew_lease` and `release` (see
+  [Run queue and worker](#run-queue-and-worker)).
 
 ## Auth
 
@@ -260,7 +326,7 @@ left it.
 | 0 | `structure_lookup` | The structure could not be resolved from the record's MOL block or identifiers (the reason is the message) | Structure looked up (the source is the message, e.g. "structure from PubChem CID 2244") |
 | 1 | `schema` | No structure and no identifier to look up; molecular weight not numeric or ≤ 0 | — |
 | 2 | `compound_identity` | Unparsable SMILES/InChI; SMILES and InChI describe different compounds | Supplied InChIKey/formula disagrees with the structure (computed value used) |
-| 3 | `standardization` | — | Structure changed by standardization (salts/solvents stripped, charges neutralized; the submitted SMILES is kept in the message); multi-component structure (mixture) |
+| 3 | `standardization` | — | Structure changed by standardization (salts/solvents stripped, charges neutralized; the original structure is kept in the message); multi-component structure (mixture) |
 | 4 | `unit_normalization` | Value not numeric or negative; missing/unsupported unit; unsupported relation operator | Unit given without a value |
 | 5 | `assay_context` | — | Unrecognized assay format or control value (the field is left empty) |
 
@@ -330,6 +396,7 @@ explicit or absent, never approximated.
 | Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF, SMILES, MOL) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
 | CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases matched ignoring case, spacing and punctuation (`fields.normalize_header`); unknown columns go into `extra`. |
 | JSON | `ingestion/json_connector.py` | Server-side path (operators). A top-level list, or `{"records": [...]}` with flat scalar values. |
+| UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
 Every run's records then pass through structure resolution
 (`ingestion/resolution.py`, `LookupStructureResolver`), before validation.
@@ -341,7 +408,6 @@ batched where the service allows it, throttled and capped per run
 affected records unresolved rather than failing the run, as enrichment
 does. PubChem, ChEMBL and resolution share one retry helper
 (`ingestion/http.py`).
-| UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
 ## Exceptions (`core/exceptions.py`)
 
@@ -363,6 +429,8 @@ DndLabsError
 │   ├── ForbiddenError             # 403 (role or credential type)
 │   └── ConflictError              # 409 (email already has an account)
 ├── PipelineError
+│   ├── RunInterruptedError        # stopped at a checkpoint (shutdown, lost lease); resumed, not a failure
+│   └── RunDeletedError            # org data deleted mid-run; the run stops quietly, nothing recorded
 ├── ExportError
 └── EnrichmentError
 ```
@@ -374,7 +442,7 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0007`.
+Alembic head: `0008`.
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -383,10 +451,11 @@ Alembic head: `0007`.
 | `users` | `org_id`, `email` (unique), `password_hash`, `role`, `failed_login_count`, `locked_until` | Email stored lowercased |
 | `user_sessions` | `user_id`, `org_id`, `token_hash` (unique), `expires_at`, `revoked_at` | Raw token never stored |
 | `user_invitations` | `org_id`, `email`, `role`, `purpose` (`join` / `password_reset`), `token_hash` (unique), `expires_at`, `accepted_at`, `revoked_at` | Invitations and reset links; raw token never stored |
-| `pipeline_runs` | `org_id`, `source`, `status`, `dataset_id`, `request_payload` (JSON) | |
+| `pipeline_runs` | `org_id`, `source`, `status`, `stage`, `progress` (JSON), `attempts`, `cancel_requested`, `worker_id`, `lease_expires_at`, `lost_leases` (internal), `dataset_id`, `request_payload` (JSON), `error`, `created_at` (indexed), `started_at`, `finished_at` | Also the run queue (see [Run queue and worker](#run-queue-and-worker)) |
 | `datasets` | `org_id`, `run_id` (unique), `record_count` | One per run |
 | `normalized_records` | `org_id`, `dataset_id`, `record_key`, `context_key`, all `NormalizedRecord` fields | Unique `(dataset_id, record_key, context_key)`: one row per compound and measurement context |
-| `validation_issues` | `org_id`, `dataset_id`, `severity`, `rule`, `message` | |
+| `validation_issues` | `org_id`, `dataset_id`, `source_record_id`, `severity`, `rule`, `field`, `message` | |
+| `quality_reports` | `org_id`, `run_id` (unique), `dataset_id` (unique), `total_records`, `accepted_records`, `rejected_records`, `duplicate_records`, `pass_rate`, `report` (JSON) | One per run |
 | `feature_vectors` | `org_id`, `record_id` (unique), `descriptors` (JSON), `alerts` (JSON, nullable), `fingerprint_bits` (JSON) | `alerts` is NULL for vectors stored before revision `0006` |
 | `enrichment_results` | `org_id`, `record_id`, `status`, `candidates` (JSON) | |
 | `uploads` | `org_id`, `filename`, `format`, `size_bytes`, `sha256`, `data` (bytes) | Uploaded files; stored in the database because the web service's disk is ephemeral |
@@ -407,21 +476,24 @@ the stamp.
 
 | Revision | Purpose |
 |---|---|
-| `0001` | Platform schema (table above) |
+| `0001` | Initial platform schema |
 | `0002` | Retires the pre-rebuild MVP schema. The MVP also used revision id `0001` for an unrelated schema, so databases that ran it reported `0001` as current and never received the platform tables. `0002` detects that state (`organizations` missing), moves the MVP tables into a `legacy_mvp` schema — data preserved, no name collisions — and applies the platform schema. No-op on any database that already has it. |
 | `0003` | Adds `users`, `user_sessions` and `user_invitations` (each only if absent, so a stamped `create_all` schema upgrades cleanly). Deletes the organization the removed shared-password login used (`00000000-0000-0000-0000-000000000001`) and everything it owned. |
 | `0004` | Adds `user_invitations.purpose` (existing rows become `join`) and `user_invitations.revoked_at`, for password-reset links and revocable invitations. |
 | `0005` | Adds `uploads` and `mapping_templates` (each only if absent). |
 | `0006` | Adds `feature_vectors.alerts` (nullable; existing rows keep NULL and get their alerts computed when read). |
 | `0007` | Adds `normalized_records.assay_format`, `control` and `context_key` (existing rows get an empty key) and widens the unique constraint to `(dataset_id, record_key, context_key)`. |
+| `0008` | Adds the run queue's columns to `pipeline_runs` (`stage`, `progress`, `attempts`, `lost_leases`, `cancel_requested`, `worker_id`, `lease_expires_at`, `started_at`) and an index on `created_at`. Runs left `pending` or `running` by the previous in-request background tasks were lost with their process; they become `failed` ("start it again") rather than starting unexpectedly. |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
-own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`
-and `0007` upgrades and downgrades, reading a vector stored before `0006`, and the
-account and upload repositories' behaviour (`tests/account_repository_checks.py`,
-`tests/upload_repository_checks.py`, shared by both dialects).
+own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`,
+`0007` and `0008` upgrades and downgrades, reading a vector stored before `0006`,
+the account, upload and run-queue repositories' behaviour
+(`tests/account_repository_checks.py`, `tests/upload_repository_checks.py`,
+`tests/run_queue_checks.py`, shared by both dialects), and eight workers
+claiming concurrently without ever sharing a run.
 
 ## Readiness vs. liveness
 
@@ -441,8 +513,8 @@ without reading logs. See [docs/api.md](api.md#service-and-health-no-auth).
 
 `storage/database.py`'s `create_db_engine` sets `pool_size=3,
 max_overflow=2, pool_recycle=300` for Postgres — conservative by design,
-sized for Render's free-tier connection cap; a single worker does not need
-more even under load.
+sized for Render's free-tier connection cap; one API process with its run
+worker does not need more even under load.
 
 ## Frontend
 
@@ -489,6 +561,15 @@ server's suggestion. The mapping is checked in the browser with the same
 rules as the server (`uploads/columnRoles.ts`) and can be saved as a named
 template for future uploads. When a column is mapped to a lookup role, the
 editor states that its values will be sent to PubChem or ChEMBL.
+
+**Runs.** After a run starts, the Run page (`screens/RunTrigger.tsx`)
+shows `runs/RunProgress.tsx`: a stepper of the stages with the counts so
+far, polled every 2 s while the run is active, with a Cancel button. A run
+returned to the queue by a clean stop shows "Waiting to resume" and
+its stepper starts again at Queued, since it restarts from the beginning. The
+Dashboard's run table has a Progress column: the stage while a run is
+active, accepted of fetched records once it succeeded, and the error when
+it failed. Stage labels are shared in `runs/stages.ts`.
 
 **Theme.** Light and dark follow the operating system's colour scheme;
 `<html data-theme="light|dark">` forces one. The Tailwind `dark:` variant

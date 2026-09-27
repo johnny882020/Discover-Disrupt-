@@ -71,6 +71,8 @@ _KEY_ISSUE_ATTEMPTS = 5
 #: Expired sessions are kept this long (for audit) before housekeeping deletes them.
 _EXPIRED_SESSION_RETENTION = timedelta(days=30)
 
+# One fixed message per failure family, so the text never says which check
+# failed (unknown email vs. wrong password, unknown vs. expired token).
 _INVALID_CREDENTIALS = "invalid email or password"
 _INVALID_SESSION = "invalid or expired session"
 _INVALID_INVITATION = "invitation is invalid, expired or already used"
@@ -159,6 +161,8 @@ class AuthService:
         prefix = key_prefix(raw_key)
         record = self._api_keys.get_by_prefix(prefix)
         stored_hash = self._api_keys.get_hash(prefix) if record else None
+        # Revocation is checked only after the hash matches, so "revoked" is
+        # only ever told to a holder of the real key.
         if record is None or stored_hash is None or not verify_key(raw_key, stored_hash):
             raise InvalidApiKeyError("invalid API key")
         if record.revoked_at is not None:
@@ -215,6 +219,9 @@ class AuthService:
             verify_against_dummy(password)
             raise InvalidCredentialsError(_INVALID_CREDENTIALS)
         user = credentials.user
+        # The lock is checked before the password, so while locked even the
+        # right password is refused and attempts are neither verified nor
+        # counted: guessing cannot continue through a lock.
         if credentials.locked_until is not None and credentials.locked_until > now:
             retry_after = math.ceil((credentials.locked_until - now).total_seconds())
             logger.warning("login_refused_locked", extra={"user_id": str(user.id)})
@@ -229,8 +236,10 @@ class AuthService:
             raise InvalidCredentialsError(_INVALID_CREDENTIALS)
 
         self._users.record_login_success(user.id)
+        # The plaintext is only available here, at a successful sign-in.
         if needs_rehash(credentials.password_hash):
             self._users.set_password(user.org_id, user.id, hash_password(password))
+        # Housekeeping piggybacks on sign-in; there is no separate sweeper.
         self._sessions.delete_expired(now - _EXPIRED_SESSION_RETENTION)
         logger.info("login_succeeded", extra={"user_id": str(user.id)})
         return self._start_session(user)
@@ -249,6 +258,8 @@ class AuthService:
         """
         if not token.startswith(SESSION_TOKEN_PREFIX):
             raise NotAuthenticatedError(_INVALID_SESSION)
+        # Looked up by digest (see auth.tokens): the raw token is never stored
+        # or compared, so equality-match timing reveals nothing usable.
         session = self._sessions.get_by_token_hash(token_digest(token))
         if (
             session is None
@@ -304,6 +315,8 @@ class AuthService:
             new_password, credentials.user.email, self._policy.password_min_length
         )
         self._users.set_password(ctx.org_id, user_id, hash_password(new_password))
+        # Ends every other session (the calling one is kept), so a stolen
+        # session dies once its owner changes the password.
         revoked = self._sessions.revoke_all_for_user(ctx.org_id, user_id, session_id)
         logger.info(
             "password_changed", extra={"user_id": str(user_id), "sessions_revoked": revoked}
@@ -609,6 +622,8 @@ class AuthService:
             email=reset.email,
             expires_at=reset.expires_at,
             token=token,
+            # Token in the URL fragment: browsers never send it to a server,
+            # so it stays out of access logs and Referer headers.
             reset_url=f"{self._policy.frontend_origin.rstrip('/')}/reset#token={token}",
         )
 
@@ -653,6 +668,7 @@ class AuthService:
             role=invitation.role,
             expires_at=invitation.expires_at,
             token=token,
+            # Fragment, not query: see _create_password_reset.
             accept_url=f"{self._policy.frontend_origin.rstrip('/')}/invite#token={token}",
         )
 
@@ -661,6 +677,8 @@ class AuthService:
         if not token.startswith(INVITATION_TOKEN_PREFIX):
             raise InvitationInvalidError(_INVALID_INVITATION)
         invitation = self._invitations.get_by_token_hash(token_digest(token))
+        # Purpose must match, so a join token cannot reset a password and a
+        # reset token cannot create an account.
         if (
             invitation is None
             or invitation.purpose is not purpose

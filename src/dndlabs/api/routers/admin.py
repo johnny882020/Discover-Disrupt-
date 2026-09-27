@@ -19,6 +19,10 @@ from dndlabs.core.schemas import (
     PasswordResetRequest,
 )
 
+# Router-level dependency: every route checks the secret before its body
+# runs. Unlike tenant routes, org_id comes from the path here on purpose —
+# the operator acts across organizations, and no API key or session grants
+# access to these routes.
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin_secret)])
 
 

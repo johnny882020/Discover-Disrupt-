@@ -1,12 +1,18 @@
 """Protocols (structural interfaces) that decouple the layers.
 
-Every repository method takes an explicit ``org_id`` argument — never
-optional, never inferred client-side — so no call can accidentally cross
-tenants. See docs/architecture.md.
+Every repository method that reads or changes an organization's existing
+data takes an explicit ``org_id`` argument — never optional, never taken
+from the client — so no call can accidentally cross tenants. ``create``
+methods take the org from the stored contract itself. The deliberate
+exceptions are the authentication path, which runs before the org is known
+(lookups by API-key prefix, token digest or sign-in email, and sign-in
+bookkeeping keyed by the id those lookups returned), the run worker's queue
+methods, and housekeeping across all orgs (``delete_expired``). See
+docs/architecture.md.
 """
 
 import uuid
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -98,11 +104,18 @@ class StructureResolver(Protocol):
     from; records that cannot be resolved get ``structure_error`` instead.
     """
 
-    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]:
+    async def resolve(
+        self,
+        raws: Sequence[RawRecord],
+        checkpoint: Callable[[int], None] | None = None,
+    ) -> list[RawRecord]:
         """Resolve structures; never raises for an unresolvable record.
 
         Args:
             raws: Records from a connector.
+            checkpoint: Called with the number of records resolved so far
+                after each lookup, so a run can stop mid-stage; whatever it
+                raises propagates and stops resolution.
 
         Returns:
             The same records, in order, with structures filled in or an
@@ -299,8 +312,9 @@ class UserRepository(Protocol):
     """Persistence of user accounts.
 
     Emails are globally unique (sign-in is by email alone), so lookups by
-    email are the one intentionally unscoped read; every other method takes
-    ``org_id``.
+    email are the one intentionally unscoped read. The sign-in counters
+    (``record_login_*``) are keyed by the user id that lookup returned;
+    every other method on an existing user takes ``org_id``.
     """
 
     def create(self, user: User, password_hash: str) -> User:
@@ -687,7 +701,11 @@ class RunRepository(Protocol):
         ...
 
     def update(self, org_id: uuid.UUID, run: PipelineRun) -> PipelineRun:
-        """Update an existing run.
+        """Update an existing run's outcome.
+
+        Writes ``status``, ``stage``, ``progress``, ``dataset_id``, ``error``
+        and ``finished_at``. ``attempts`` and ``cancel_requested`` belong to
+        the queue and to cancellation, and are never overwritten here.
 
         Args:
             org_id: Owning organization (enforced).
@@ -727,12 +745,125 @@ class RunRepository(Protocol):
         """
         ...
 
+    def request_cancel(self, org_id: uuid.UUID, run_id: uuid.UUID) -> PipelineRun:
+        """Cancel a run: a pending one at once, a running one at its next checkpoint.
+
+        A finished run is returned unchanged.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: Run to cancel.
+
+        Returns:
+            The run after the request.
+
+        Raises:
+            NotFoundError: If the run does not exist for this org.
+        """
+        ...
+
+    def claim(
+        self, org_id: uuid.UUID, run_id: uuid.UUID, worker_id: str, lease_seconds: float
+    ) -> PipelineRun | None:
+        """Atomically claim one pending run for ``worker_id`` (e.g. the CLI's own run).
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+
+        Returns:
+            The claimed run, or ``None`` if it is no longer pending.
+        """
+        ...
+
+    # The queue methods below serve the run worker, which executes every
+    # organization's runs; each run it claims carries its own ``org_id``,
+    # which scopes everything the worker then does for it.
+
+    def claim_next(
+        self, worker_id: str, lease_seconds: float, max_lost_leases: int
+    ) -> PipelineRun | None:
+        """Atomically claim the next runnable run for ``worker_id``.
+
+        Runnable: pending, or running under a lease that has expired (its
+        worker crashed, was killed or hung) unless that worker was the
+        ``max_lost_leases``-th to stop that way (see :meth:`fail_exhausted`).
+        Among runnable runs, the one whose organization has the fewest runs
+        executing right now is taken first, oldest first on a tie, so one
+        organization's backlog cannot hold up everyone else's runs.
+
+        The run becomes ``running`` with one more attempt and a new lease.
+        Concurrent callers never claim the same run.
+
+        Args:
+            worker_id: The claiming worker.
+            lease_seconds: How long the claim lasts unless renewed.
+            max_lost_leases: Unexpected worker stops after which a run is
+                failed rather than claimed again.
+
+        Returns:
+            The claimed run, or ``None`` if nothing is runnable.
+        """
+        ...
+
+    def fail_exhausted(self, max_lost_leases: int) -> list[PipelineRun]:
+        """Fail runs whose worker has now stopped unexpectedly ``max_lost_leases`` times.
+
+        A run counts a lost lease each time its lease expires while it is
+        running; with ``max_lost_leases=3`` the third such stop fails it
+        instead of letting it be claimed again, and deletes whatever its
+        attempts stored. Clean shutdowns hand runs back with :meth:`release`
+        and never count.
+
+        Args:
+            max_lost_leases: Which unexpected worker stop fails a run (3: the third).
+
+        Returns:
+            The runs marked failed.
+        """
+        ...
+
+    def renew_lease(self, run_id: uuid.UUID, worker_id: str, lease_seconds: float) -> bool:
+        """Extend a running run's lease, if ``worker_id`` still holds it.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker executing it.
+            lease_seconds: New lease length from now.
+
+        Returns:
+            Whether the lease was renewed (``False``: the run finished, was
+            deleted, or another worker took it over).
+        """
+        ...
+
+    def release(self, run_id: uuid.UUID, worker_id: str) -> None:
+        """Hand an unfinished run back to the queue after a clean stop.
+
+        The run becomes ``pending`` again, keeping its stage, progress and
+        attempts, so the next poll claims it at once; unlike an expired
+        lease, this does not count against it. Whatever the stopped attempt
+        stored is deleted (the next attempt starts from the source anyway).
+        A run whose cancellation was requested ends ``cancelled`` instead.
+        Does nothing if ``worker_id`` no longer holds the run.
+
+        Args:
+            run_id: The run.
+            worker_id: The worker that held it.
+        """
+        ...
+
 
 class DatasetRepository(Protocol):
     """Persistence of normalized datasets, scoped by organization."""
 
     def create(self, dataset: Dataset, records: Sequence[NormalizedRecord]) -> Dataset:
         """Store a dataset and its records.
+
+        Must run before features or enrichment results are saved for these
+        records, which reference them by foreign key.
 
         Args:
             dataset: Dataset metadata.
@@ -785,13 +916,34 @@ class DatasetRepository(Protocol):
         ...
 
     def delete_org_data(self, org_id: uuid.UUID) -> int:
-        """Delete every row belonging to an organization (privacy).
+        """Delete an organization's data (privacy).
+
+        Removes its runs, uploads, datasets and everything derived from them
+        (records, quality reports, validation issues, feature vectors,
+        enrichment results). The organization, its API keys, users, sessions,
+        invitations and mapping templates are kept, so the caller is not
+        locked out.
 
         Args:
             org_id: Organization whose data is being deleted.
 
         Returns:
             Number of datasets deleted.
+        """
+        ...
+
+    def delete_for_run(self, org_id: uuid.UUID, run_id: uuid.UUID) -> bool:
+        """Delete the dataset a run produced, with everything that references it.
+
+        Used before a run is executed again, so an interrupted attempt never
+        leaves a partial dataset behind.
+
+        Args:
+            org_id: Owning organization (enforced).
+            run_id: The run.
+
+        Returns:
+            Whether a dataset was deleted.
         """
         ...
 

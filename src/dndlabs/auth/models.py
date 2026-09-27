@@ -1,12 +1,18 @@
-"""API key generation, hashing and verification."""
+"""API key generation, hashing and verification.
+
+Also owns the Argon2id hasher that user passwords share.
+"""
 
 import secrets
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError
 
 #: Argon2id hasher shared by API keys and user passwords (argon2-cffi
 #: defaults: the RFC 9106 low-memory profile, 64 MiB, t=3).
+#: Not pinned, so if a library upgrade raises the defaults,
+#: ``passwords.needs_rehash`` flags older password hashes and the next
+#: sign-in upgrades them (API-key hashes are never re-hashed).
 password_hasher = PasswordHasher()
 
 #: Prefix identifying a live D&D Labs key (vs. e.g. a future "test" env).
@@ -52,7 +58,9 @@ def verify_key(raw_key: str, hashed_key: str) -> bool:
     """
     try:
         return password_hasher.verify(hashed_key, raw_key)
-    except VerifyMismatchError:
+    # A corrupt stored hash is a rejected key (401), not a server error (500),
+    # as in passwords.verify_password.
+    except (VerificationError, InvalidHashError):
         return False
 
 

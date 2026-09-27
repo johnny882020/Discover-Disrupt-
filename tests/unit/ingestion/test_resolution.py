@@ -6,6 +6,7 @@ import httpx
 import pytest
 from rdkit import Chem
 
+from dndlabs.core.exceptions import RunInterruptedError
 from dndlabs.core.schemas import RawRecord, SourceType
 from dndlabs.ingestion.http import RetryPolicy
 from dndlabs.ingestion.resolution import LookupStructureResolver
@@ -200,3 +201,37 @@ async def test_pubchem_requests_are_throttled() -> None:
 async def test_blank_identifiers_are_ignored(value: str) -> None:
     [record] = await _resolver(_unexpected, _unexpected).resolve([_raw(pubchem_cid=value)])
     assert (record.smiles, record.structure_error) == (None, None)
+
+
+async def test_checkpoint_reports_records_resolved_after_each_lookup() -> None:
+    block = Chem.MolToMolBlock(Chem.MolFromSmiles("CCO"))
+    raws = [
+        _raw(1, mol_block=block),  # resolved locally, before any lookup
+        _raw(2, pubchem_cid="2244"),
+        _raw(3, lookup_name="aspirin"),
+        _raw(4, lookup_name="aspirin"),  # the same lookup resolves both records
+        _raw(5, lookup_name="unknown"),
+    ]
+    reported: list[int] = []
+    resolved = await _resolver().resolve(raws, reported.append)
+    # One call per request: the CID batch, then each distinct name.
+    assert reported == [2, 4, 4]
+    assert sum(1 for r in resolved if r.smiles) == 4
+
+
+async def test_what_the_checkpoint_raises_stops_resolution_at_once() -> None:
+    requests: list[str] = []
+
+    def counting(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return _pubchem(request)
+
+    def stop(done: int) -> None:
+        raise RunInterruptedError("shutting down")
+
+    with pytest.raises(RunInterruptedError):  # not swallowed as a failed lookup
+        await _resolver(counting).resolve(
+            [_raw(i, lookup_name=name) for i, name in enumerate(["aspirin", "glucose", "x"])],
+            stop,
+        )
+    assert len(requests) == 1

@@ -14,6 +14,11 @@ class DuplicateRule:
     (:meth:`NormalizedRecord.context_key`). A compound measured in a
     biochemical and a cell-based assay therefore keeps both records.
 
+    The first occurrence in input order is kept; a later duplicate is dropped
+    without comparing or merging its activity value. Because the key is the
+    standardized InChIKey, salt forms and isotopically labelled forms of one
+    compound count as the same compound.
+
     Attributes:
         name: Rule name used in reports.
     """
@@ -34,6 +39,8 @@ class DuplicateRule:
         dropped: list[NormalizedRecord] = []
         issues: list[ValidationIssue] = []
         for record in records:
+            # A record without a record_key has no identity to compare, so it
+            # is always kept (the default rules reject such records earlier).
             key = (record.record_key, record.context_key()) if record.record_key else None
             original = first_seen.get(key) if key else None
             if original is None:

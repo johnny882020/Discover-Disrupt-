@@ -10,6 +10,7 @@ export const POTENCY_CLASSES: { potency: PotencyClass; label: string; range: str
   { potency: "unknown", label: "No potency", range: "no value, or open-ended", tone: "neutral" },
 ];
 
+/** Display info for a class; an unrecognized one falls back to "No potency". */
 export function potencyInfo(potency: PotencyClass) {
   return POTENCY_CLASSES.find((p) => p.potency === potency) ?? POTENCY_CLASSES[POTENCY_CLASSES.length - 1];
 }

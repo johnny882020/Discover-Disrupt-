@@ -7,6 +7,10 @@ MW < 500, clogP < 5, Lipinski's rule of five, fewer than 10 rotatable bonds
 and a polar surface area below 140 Å² (90 Å² to reach the CNS). The guide
 applies them to all compounds tested, to the actives, and to the five most
 potent compounds, so each criterion is summarized over those three groups.
+
+Pure functions over records and their stored features; nothing here touches
+storage. ``pipeline/assessment.py`` loads a dataset's records and features
+(recomputing any that predate a descriptor) and calls :func:`assess`.
 """
 
 import uuid
@@ -29,6 +33,8 @@ from dndlabs.core.schemas import (
 )
 
 #: Upper bounds (nM, exclusive) of each potency class, most potent first.
+#: The guide's hit (< 10 µM) and lead (< 1 µM) cut-offs; its "ideally 100 nM"
+#: lead is the ``optimized`` class. Order matters: the first bound met wins.
 POTENCY_BOUNDS: tuple[tuple[PotencyClass, float], ...] = (
     (PotencyClass.OPTIMIZED, 100.0),
     (PotencyClass.LEAD, 1_000.0),
@@ -37,6 +43,11 @@ POTENCY_BOUNDS: tuple[tuple[PotencyClass, float], ...] = (
 #: How many of the most potent compounds the guide looks at.
 MOST_POTENT = 5
 
+#: Human-readable label of each criterion, shown next to its summary.
+#: Brenk alerts appear on profiles but are no criterion: they flag broadly
+#: "unwanted" groups, whereas the guide asks specifically about reactive
+#: metabolites; PAINS is a criterion because it flags assay interference,
+#: i.e. a hit that may be an artefact.
 CRITERION_LABELS: dict[Criterion, str] = {
     Criterion.MW: "MW < 500",
     Criterion.CLOGP: "cLogP < 5",
@@ -49,6 +60,9 @@ CRITERION_LABELS: dict[Criterion, str] = {
 }
 
 #: Descriptors a profile needs (names as the featurizer stores them).
+#: Donors/acceptors come from ``nhoh_count``/``no_count`` (Lipinski's own
+#: NH + OH and N + O counts), not RDKit's ``hbd``/``hba`` definitions, so the
+#: rule of five is applied as published. ``num_rings`` and ``qed`` are optional.
 REQUIRED_DESCRIPTORS = frozenset(
     {"molecular_weight", "logp", "tpsa", "nhoh_count", "no_count", "rotatable_bonds"}
 )
@@ -71,6 +85,7 @@ def potency_class(value_nm: float | None, relation: str | None) -> PotencyClass:
     if value_nm is None:
         return PotencyClass.UNKNOWN
     relation = relation or "="
+    # "> 50 nM" could still be a lead; only "> 10 µM" (or more) settles it.
     if relation in (">", ">="):
         inactive_from = POTENCY_BOUNDS[-1][1]
         return PotencyClass.INACTIVE if value_nm >= inactive_from else PotencyClass.UNKNOWN
@@ -108,6 +123,9 @@ def compound_profile(record: NormalizedRecord, features: StoredFeatures | None) 
     hbd = int(descriptors["nhoh_count"])
     hba = int(descriptors["no_count"])
     rotatable = int(descriptors["rotatable_bonds"])
+    # Lipinski counts a violation when a property *exceeds* its limit (so
+    # MW = 500 is no violation, yet fails the guide's strict "MW < 500"), and
+    # flags poor absorption only from two violations: hence ``<= 1`` below.
     violations = sum((mw > 500, clogp > 5, hbd > 5, hba > 10))
     return CompoundProfile(
         record_id=record.id,
@@ -126,6 +144,9 @@ def compound_profile(record: NormalizedRecord, features: StoredFeatures | None) 
             Criterion.MW: mw < 500,
             Criterion.CLOGP: clogp < 5,
             Criterion.LIPINSKI: violations <= 1,
+            # Flexibility and polarity limit oral bioavailability (Veber et al.
+            # 2002: ≤ 10 rotatable bonds, PSA ≤ 140 Å²); the guide's bounds are
+            # strict, and its tighter 90 Å² is for compounds that must reach the CNS.
             Criterion.ROTATABLE_BONDS: rotatable < 10,
             Criterion.TPSA: tpsa < 140,
             Criterion.TPSA_CNS: tpsa < 90,
@@ -152,6 +173,9 @@ def majority_class(classes: Sequence[PotencyClass]) -> PotencyClass:
     Returns:
         The compound's class; ``unknown`` if no measurement has a class.
     """
+    # ``unknown`` measurements neither vote nor count toward the majority.
+    # A strict majority (> half) means a tie falls to the less potent class,
+    # so one outlying measurement cannot promote a compound.
     ranks = [_RANKED.index(c) for c in classes if c in _RANKED]
     for rank, klass in enumerate(_RANKED):
         if sum(1 for r in ranks if r <= rank) * 2 > len(ranks):
@@ -193,6 +217,9 @@ def assess(
     """
     profiles = [compound_profile(r, features.get(r.id)) for r in records]
     by_id = {p.record_id: p for p in profiles}
+    # Controls are reference compounds that validate the assay, not the
+    # dataset's chemistry: a positive control would inflate the actives.
+    # They still get a profile.
     tested = [r for r in records if r.control is None]
     compounds: dict[str, list[NormalizedRecord]] = {}
     for record in tested:
@@ -206,6 +233,8 @@ def assess(
     representative = {key: by_id[members[0].id] for key, members in compounds.items()}
     actives = [key for key, klass in classes.items() if klass in ACTIVE_CLASSES]
 
+    # Ranked by each compound's single best measurement, whatever its majority
+    # class; lower bounds ("> x") are skipped, upper bounds rank at their bound.
     best = {
         key: min(values)
         for key, members in compounds.items()
@@ -215,11 +244,16 @@ def assess(
     top_record_ids = [
         min(
             (r for r in compounds[key] if _ranked_value(r) is not None),
+            # Never None here (filtered above); ``or 0.0`` only narrows the type.
             key=lambda r: _ranked_value(r) or 0.0,
         ).id
         for key in top
     ]
 
+    # The guide judges biochemical and cell-based potency separately (a cell
+    # assay also reflects permeability, so the values are not comparable):
+    # each format re-derives the majority class from its own measurements.
+    # ``None`` collects measurements with no format; empty formats are omitted.
     by_format: list[FormatPotency] = []
     for assay_format in (AssayFormat.BIOCHEMICAL, AssayFormat.CELL_BASED, None):
         members_by_compound = {
@@ -240,6 +274,8 @@ def assess(
         )
 
     def share(keys: Sequence[str], criterion: Criterion) -> CriterionShare:
+        # Compounds without computed properties are left out of ``evaluated``
+        # rather than counted as failing.
         results = [
             representative[k].criteria[criterion]
             for k in keys

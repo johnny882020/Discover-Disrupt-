@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from tests.unit.validation.helpers import ASPIRIN, CAFFEINE, CAFFEINE_AROMATIC, raw
 
 from dndlabs.core.schemas import Severity
@@ -54,3 +55,19 @@ def test_empty_input() -> None:
 def test_build_report_rounds_pass_rate() -> None:
     report = build_report(RUN_ID, DATASET_ID, 3, 1, 2, 0, [])
     assert report.pass_rate == 0.3333
+
+
+def test_checkpoint_reports_progress_and_can_stop_validation() -> None:
+    raws = [raw(str(i), smiles=ASPIRIN) for i in range(5)]
+    seen: list[int] = []
+    Validator(checkpoint_every=2).run(RUN_ID, DATASET_ID, raws, seen.append)
+    assert seen == [2, 4]
+
+    class StopError(Exception):
+        pass
+
+    def stop(done: int) -> None:
+        raise StopError
+
+    with pytest.raises(StopError):
+        Validator(checkpoint_every=2).run(RUN_ID, DATASET_ID, raws, stop)

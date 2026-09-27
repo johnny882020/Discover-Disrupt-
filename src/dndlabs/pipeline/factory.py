@@ -1,4 +1,4 @@
-"""Composition root: builds concrete services from settings."""
+"""Composition root: the only place concrete services are built and wired from settings."""
 
 from dataclasses import dataclass
 from datetime import timedelta
@@ -22,6 +22,7 @@ from dndlabs.ingestion.uploads import UploadConnector, UploadLimits, UploadServi
 from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
+from dndlabs.pipeline.worker import RunWorker
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
 from dndlabs.storage.database import (
     create_db_engine,
@@ -45,6 +46,7 @@ class Container:
         auth: Auth service.
         uploads: Upload service.
         assessment: Hit-to-lead assessment service.
+        worker: Executes queued runs (started by the API, or the CLI's own run).
     """
 
     settings: Settings
@@ -54,6 +56,7 @@ class Container:
     auth: AuthService
     uploads: UploadService
     assessment: AssessmentService
+    worker: RunWorker
     _engine: Engine
     _http_clients: tuple[httpx.Client, ...]
 
@@ -156,6 +159,15 @@ def build_container(
         auth=AuthService(repositories, auth_policy(settings)),
         uploads=UploadService(repositories.uploads, repositories.mapping_templates, upload_limits),
         assessment=AssessmentService(repositories, featurizer),
+        worker=RunWorker(
+            service,
+            repositories.runs,
+            poll_seconds=settings.worker_poll_seconds,
+            lease_seconds=settings.worker_lease_seconds,
+            max_lost_leases=settings.worker_max_lost_leases,
+            concurrency=settings.worker_concurrency,
+            shutdown_grace_seconds=settings.worker_shutdown_grace_seconds,
+        ),
         _engine=engine,
         _http_clients=tuple(http_clients),
     )

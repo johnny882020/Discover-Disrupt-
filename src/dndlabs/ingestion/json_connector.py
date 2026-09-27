@@ -14,6 +14,7 @@ from dndlabs.ingestion.fields import build_raw_record
 logger = get_logger(__name__)
 
 JsonScalar = str | int | float | bool | None
+#: Objects must be flat (scalar values only) so each key maps onto one field.
 _Item = dict[str, JsonScalar]
 _ITEMS = TypeAdapter(list[_Item])
 

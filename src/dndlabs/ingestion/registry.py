@@ -1,4 +1,8 @@
-"""Connector registry keyed by source type."""
+"""Connector registry keyed by source type.
+
+Holds both plain connectors and org-scoped ones (uploads, which read tenant
+data and so take the run's ``org_id``); the orchestrator picks the call.
+"""
 
 from collections.abc import Iterable
 
@@ -38,6 +42,8 @@ class ConnectorRegistry:
         Raises:
             ConnectorNotFoundError: If the source is planned or unknown.
         """
+        # Also accepts a raw string, so a planned source ("uniprot") gets its
+        # roadmap message rather than an enum validation error.
         key = str(source.value if isinstance(source, SourceType) else source).lower()
         for source_type, connector in self._connectors.items():
             if source_type.value == key:

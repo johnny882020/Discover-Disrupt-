@@ -63,6 +63,7 @@ def check_password_policy(password: str, email: str, min_length: int) -> None:
         raise PasswordPolicyError(f"password must be at most {MAX_PASSWORD_LENGTH} characters")
     lowered = password.lower()
     local_part = email.split("@", 1)[0].lower()
+    # A single repeated character ("zzzzzzzzzzzz") is as weak as any listed one.
     if lowered in _COMMON_PASSWORDS or len(set(lowered)) == 1:
         raise PasswordPolicyError("password is too common; choose a less predictable one")
     if lowered in (email.lower(), local_part):
@@ -91,6 +92,8 @@ def verify_password(password: str, password_hash: str) -> bool:
     Returns:
         True if the password matches.
     """
+    # A corrupt stored hash (InvalidHashError) counts as a failed sign-in
+    # rather than surfacing as a 500.
     try:
         return password_hasher.verify(password_hash, password)
     except (VerificationError, InvalidHashError):
@@ -123,5 +126,9 @@ def verify_against_dummy(password: str) -> None:
 
 @lru_cache(maxsize=1)
 def _dummy_hash() -> str:
-    """A valid hash of a fixed throwaway value, computed once."""
+    """A valid hash of a fixed throwaway value, computed once.
+
+    Made by the same hasher as real hashes, so verifying against it costs
+    the same Argon2 work.
+    """
     return password_hasher.hash("dndlabs-dummy-password-for-timing")

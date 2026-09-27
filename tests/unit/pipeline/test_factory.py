@@ -15,7 +15,7 @@ async def test_container_runs_csv_end_to_end(tmp_path: Path) -> None:
         run = container.service.submit(
             org.id, SourceSpec(source=SourceType.CSV, csv_path=str(csv_path))
         )
-        finished = await container.service.execute(org.id, run.id)
+        finished = await container.worker.run_now(run)
         assert finished.status is RunStatus.SUCCEEDED
         assert container.auth is not None
     finally:

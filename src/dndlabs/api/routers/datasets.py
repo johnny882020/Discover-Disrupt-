@@ -166,5 +166,7 @@ def export_dataset(
     return Response(
         content=body,
         media_type=_MEDIA_TYPES[fmt],
+        # Filename built only from the UUID and the enum value, never from
+        # user-supplied text, so it cannot inject into the header.
         headers={"Content-Disposition": f'attachment; filename="{dataset_id}.{fmt.value}"'},
     )

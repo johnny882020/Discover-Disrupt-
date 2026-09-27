@@ -112,12 +112,19 @@ def read_delimited(text: str, delimiter: str | None = None) -> Table:
         IngestionError: If the text is empty or rows have too many fields.
     """
     if delimiter is None:
+        # Sniffing the first 4 KiB is enough to see a few rows; comma is the
+        # fallback when the sample is ambiguous (e.g. a single column).
         sample = text[:4096]
         try:
             delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter if sample else ","
         except csv.Error:
             delimiter = ","
     try:
+        # dtype=str and keep_default_na=False keep every cell as written
+        # ("NA", "null" and "" would otherwise become NaN). With
+        # index_col=False pandas only warns about a row with too many fields
+        # and drops the surplus, so that warning is escalated to an error
+        # rather than losing data silently.
         with warnings.catch_warnings():
             warnings.simplefilter("error", pd.errors.ParserWarning)
             frame = pd.read_csv(
@@ -138,7 +145,11 @@ def read_delimited(text: str, delimiter: str | None = None) -> Table:
 
 
 def _decode(data: bytes) -> str:
-    """Decode text as UTF-8 (with or without BOM), falling back to Windows-1252."""
+    """Decode text as UTF-8 (with or without BOM), falling back to Windows-1252.
+
+    Windows-1252 covers legacy Excel/instrument exports; ``errors="replace"``
+    because a few of its byte values are undefined, so decoding never fails.
+    """
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -148,6 +159,8 @@ def _decode(data: bytes) -> str:
 def _read_xlsx(data: bytes) -> Table:
     """Read the first worksheet; the first non-empty row is the header."""
     try:
+        # read_only streams rows instead of loading the whole workbook;
+        # data_only returns formulas' cached values rather than their text.
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as exc:  # openpyxl raises many unrelated types for corrupt files
         raise IngestionError(f"cannot read the Excel workbook: {exc}") from exc
@@ -171,7 +184,11 @@ def _read_xlsx(data: bytes) -> Table:
 
 
 def _cell_text(value: object) -> str:
-    """Render a spreadsheet cell as text (whole-number floats without ``.0``)."""
+    """Render a spreadsheet cell as text (whole-number floats without ``.0``).
+
+    Spreadsheet numbers are doubles, so a whole-number ID can be read back
+    as a float and would otherwise come out as ``"2244.0"``.
+    """
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
@@ -188,6 +205,9 @@ def _read_sdf(data: bytes) -> Table:
     columns = ["smiles", "name"]
     rows: list[dict[str, str]] = []
     for mol in supplier:
+        # Even unsanitized, RDKit returns None for an unparsable record; it
+        # still gets an (empty) row so the row count matches the file and
+        # validation can report it.
         if mol is None:
             rows.append({"smiles": "", "name": ""})
             continue
@@ -230,6 +250,7 @@ def _read_mol(text: str) -> Table:
     mol = Chem.MolFromMolBlock(text, sanitize=False, removeHs=False)
     if mol is None:
         raise IngestionError("cannot read the MOL file")
+    # A MOL block's first line is its title, the molecule's name.
     name = text.splitlines()[0].strip() if text.strip() else ""
     return Table(columns=["smiles", "name"], rows=[{"smiles": mol_to_smiles(mol), "name": name}])
 

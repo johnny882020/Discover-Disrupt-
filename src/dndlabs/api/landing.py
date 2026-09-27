@@ -62,6 +62,8 @@ def render_landing(info: ServiceInfo, description: str) -> str:
     Returns:
         A complete HTML document.
     """
+    # Every interpolated value goes through escape(): route paths and the
+    # description are data, not markup.
     rows = "\n".join(_endpoint_row(e) for e in info.endpoints)
     name = escape(info.name)
     return f"""<!doctype html>
@@ -85,7 +87,8 @@ def render_landing(info: ServiceInfo, description: str) -> str:
 {rows}
   </table>
   <footer>This page is shown to browsers. API clients requesting JSON receive the same
-  information as JSON. Every endpoint under /api/v1 requires an X-API-Key header.</footer>
+  information as JSON. Endpoints under /api/v1 take an X-API-Key header or a
+  Bearer session token; sign-in, invitation, password-reset and health routes need neither.</footer>
 </main>
 </body>
 </html>

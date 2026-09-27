@@ -62,6 +62,7 @@ default, is listed in [`.env.example`](../.env.example).
 | `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL: it is the CORS origin and the base of invitation links |
 | `DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS` | API service env | Optional; defaults 25 MiB and 100,000 rows per uploaded file |
 | `DNDLABS_STRUCTURE_LOOKUP_LIMIT` | API service env | Optional; default 1,000 distinct InChIKeys, PubChem CIDs, ChEMBL IDs and names looked up per run. `0` disables lookups |
+| `DNDLABS_WORKER_POLL_SECONDS`, `DNDLABS_WORKER_LEASE_SECONDS`, `DNDLABS_WORKER_MAX_LOST_LEASES`, `DNDLABS_WORKER_CONCURRENCY`, `DNDLABS_WORKER_SHUTDOWN_GRACE_SECONDS` | API service env | Optional; the run worker's poll interval (2 s), lease (120 s), unexpected stops before a run fails (3), runs at once (1) and shutdown grace (20 s). See [architecture](architecture.md#run-queue-and-worker) |
 | `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_PASSWORD_RESET_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 24 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
 | `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build; changing this requires a rebuild, not a restart |
 
@@ -77,6 +78,10 @@ default, is listed in [`.env.example`](../.env.example).
 | Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set; confirm the hosted base URL first — see [nvidia-nim.md](nvidia-nim.md) |
 | Upload rejected with `422` | The file is empty, over the size or row limit, not CSV/TSV/XLSX/SDF/SMILES/MOL, or unreadable (e.g. ragged CSV rows); the message says which |
 | Rows rejected by `structure_lookup` | The identifier was not found, a name matched several compounds, the run exceeded `DNDLABS_STRUCTURE_LOOKUP_LIMIT`, or PubChem/ChEMBL was unavailable; the quality report gives the reason per row. Re-run later for an outage |
+| A run stays **Queued** (`pending`) | The worker executes `DNDLABS_WORKER_CONCURRENCY` runs at a time (default 1), shared fairly between organizations; the run starts when earlier work finishes. If nothing progresses, check that `dndlabs-api` is up (`/api/v1/health/ready`) |
+| A run shows **Waiting to resume** | It is `pending` again after a deploy, restart or the free plan's idle shutdown stopped it cleanly; it restarts from the beginning automatically and does not count toward the failure limit |
+| A run failed with "the run's worker stopped unexpectedly N times; start it again" | The API process stopped repeatedly while executing it, e.g. out of memory on the free instance. Check `dndlabs-api`'s log, reduce the file's size, and start the run again |
+| Runs failed with "interrupted by a restart before runs could be resumed; start it again" | They were in progress when migration `0008` was applied; start them again |
 | CSV/JSON run fails with "file not found" | `csv_path`/`json_path` are read from the **API container's** filesystem, not the browser's — users should upload the file instead |
 | First request is slow | Free web service sleeps when idle; first request wakes it (~30–60s). The Static Site never sleeps. |
 | Free Postgres expired | 30-day limit on Render's free tier; upgrade the plan for anything long-lived |
@@ -121,7 +126,7 @@ cd web && npm ci && npm run dev   # frontend on :5173, mock API by default
 | `backend` | `ruff check`/`ruff format --check`, `mypy --strict`, `pytest --cov` (including migration tests against a Postgres 16 service), `pip-audit .` (project runtime dependencies) |
 | `frontend` | `eslint`, `tsc --noEmit` (source, tests, e2e and configs), `vitest`, `vite build`, `npm audit --audit-level=high` |
 | `docker` | Builds and smoke-tests the API image, builds the local-dev web image, validates `docker-compose.yml` — catches a broken image here, not on a Render deploy |
-| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → file upload and column mapping → pipeline run → report → export; team management (invite, password reset, removal); and API-key sign-in. Uploads the Playwright report and API log on failure. |
+| `e2e` | After `backend` and `frontend` pass: Postgres service → `init-db` → per-run admin secret → API → production frontend build → Playwright (`web/e2e/`). Each test provisions its own org and invitation through the admin API, then drives invitation → password → sign-out/sign-in → file upload and column mapping → pipeline run → hit/lead assessment → quality report → export → inviting a teammate; team management (invite, password reset, removal); potency judged per assay format with a control left out; and API-key sign-in (`full-workflow.spec.ts`). `screenshots.spec.ts` captures the Dashboard, the Run page mid-run and after cancel, a dataset page and a quality report at 1280 and 390 px in light and dark themes, asserts no horizontal overflow, and uploads the PNGs as a CI artifact. Uploads the Playwright report and API log on failure. |
 
 The dependency scans block merges. `.github/dependabot.yml` opens weekly
 update PRs (pip, npm, GitHub Actions, Docker base images) so a newly
@@ -153,8 +158,9 @@ A failure shows as a failed workflow run on the deployed commit.
 runs `scripts/smoke_test.py`, which exercises the product end to end as a
 dedicated smoke-test organization: user sign-in (invite → accept → sign out
 → sign in → removal), a file upload with the suggested and a saved column
-mapping, a pipeline run, the quality report, export, and isolation from a
-second organization. It deletes everything it created, pass or fail, and
+mapping, a queued pipeline run (its final stage and counts), the quality
+report, enrichment status, export, and isolation from a second
+organization. It deletes everything it created, pass or fail, and
 refuses to run as any organization without "smoke" in its name.
 
 One-time setup: create the two organizations and store their API keys as
@@ -192,9 +198,14 @@ DNDLABS_SMOKE_API_KEY=<key> DNDLABS_SMOKE_ISOLATION_API_KEY=<key> \
   the API, and take about 0.2 s per InChIKey or name (PubChem's rate limit;
   CIDs and ChEMBL IDs are batched), inside the run.
 - **Uploads** are stored in PostgreSQL and count toward the database's
-  size (1 GB on Render's free tier). Runs execute inside the API process,
-  so a large upload competes with API requests for the free instance's
-  memory.
+  size (1 GB on Render's free tier).
+- **Runs** execute in the API process on a worker thread, so they compete
+  with API requests for the instance's memory and CPU. Render's free plan
+  stops the service after 15 minutes without inbound requests — even while
+  a run executes, if nobody has the app open — and a deploy stops it too.
+  A run stopped this way returns to the queue and restarts from the
+  beginning on the next start, without counting toward the failure limit;
+  a very large run on the free plan may therefore take several starts.
 - **Dependencies:** no Python lockfile — `pip install` resolves unpinned
   floor versions (the frontend is pinned by `package-lock.json`).
 - **Security scanning:** dependency audits (`pip-audit`, `npm audit`) cover

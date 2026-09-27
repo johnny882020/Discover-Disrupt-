@@ -28,7 +28,7 @@ from typing import Annotated, Any
 import httpx
 import typer
 
-TERMINAL = {"succeeded", "failed"}
+TERMINAL = {"succeeded", "failed", "cancelled"}
 
 UPLOAD_CSV = (
     "Compound ID,Structure,Activity Value,Unit\n"
@@ -208,7 +208,9 @@ def _check_upload_run(
     _check(response.status_code == 202, f"upload run: {response.status_code} {response.text}")
     run = _wait_for_run(client, headers, response.json()["id"], timeout)
     _check(run["status"] == "succeeded", f"upload run failed: {run['error']}")
-    typer.echo("  ok  upload: preview, suggested and saved mapping, run")
+    progress = (run["stage"], run["progress"]["fetched"], run["progress"]["accepted"])
+    _check(progress == ("done", 2, 2), f"upload run stage/fetched/accepted: {progress}")
+    typer.echo("  ok  upload: preview, suggested and saved mapping, queued run with progress")
     return upload_id, run["dataset_id"]
 
 

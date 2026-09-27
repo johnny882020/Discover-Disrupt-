@@ -1,4 +1,12 @@
-"""Engine/session creation and schema management."""
+"""Engine/session creation and schema management.
+
+Builds engines tuned per backend (SQLite for development and tests,
+PostgreSQL in production), applies Alembic migrations, reports the code's
+head revision (which the readiness check compares with the database's), and
+provides :class:`SessionFactory`, the only way repositories open a
+transaction. SQLAlchemy errors are converted to ``StorageError`` here, so
+nothing above ``storage/`` sees a driver exception.
+"""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -39,10 +47,17 @@ def create_db_engine(url: str) -> Engine:
         A configured engine.
     """
     if url.startswith("sqlite"):
+        # The API runs repository calls in worker threads, so connections must
+        # be usable off the thread that opened them.
         kwargs: dict[str, object] = {"connect_args": {"check_same_thread": False}}
+        # An in-memory database exists per connection: StaticPool shares one
+        # connection so every session sees the same tables.
         if ":memory:" in url or url in {"sqlite://", "sqlite+pysqlite://"}:
             kwargs["poolclass"] = StaticPool
         engine = create_engine(url, **kwargs)
+        # SQLite ignores foreign keys (and ON DELETE CASCADE) unless enabled
+        # per connection; this makes development and tests enforce the same
+        # foreign-key ordering as PostgreSQL.
         event.listen(engine, "connect", _enable_sqlite_fks)
         return engine
     return create_engine(
@@ -96,6 +111,8 @@ def run_migrations(url: str) -> None:
     """
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    # Alembic's config is ConfigParser-based: a literal "%" (e.g. from a
+    # URL-encoded password) must be escaped or it is read as interpolation.
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     try:
         if _created_without_alembic(url):
@@ -116,7 +133,11 @@ def run_migrations(url: str) -> None:
 
 
 def _created_without_alembic(url: str) -> bool:
-    """Return True if the schema exists but Alembic has never been run on it."""
+    """Return True if the schema exists but Alembic has never been run on it.
+
+    That is a database built by ``create_all`` (``auto_create_schema``);
+    ``run_migrations`` stamps it at 0001 instead of re-creating its tables.
+    """
     engine = create_db_engine(url)
     try:
         tables = set(inspect(engine).get_table_names())
@@ -134,6 +155,9 @@ class SessionFactory:
         Args:
             engine: Engine to open sessions on.
         """
+        # expire_on_commit=False: rows keep their loaded values after commit,
+        # so reading one once the session has closed neither fails nor
+        # re-queries.
         self._maker = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
@@ -152,6 +176,8 @@ class SessionFactory:
             session.commit()
         except SQLAlchemyError as exc:
             session.rollback()
+            # The driver's message may name tables or values; api/errors.py
+            # logs it and returns a generic 500, never this text.
             raise StorageError(str(exc)) from exc
         except BaseException:
             session.rollback()

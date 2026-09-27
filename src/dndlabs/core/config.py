@@ -1,4 +1,10 @@
-"""Application configuration loaded from environment variables."""
+"""Application configuration: the one place runtime settings are read.
+
+Every tunable comes from a ``DNDLABS_*`` environment variable (or ``.env``)
+through :class:`Settings`; no other module reads the environment. Defaults
+suit local development; deployments override the insecure ones (see
+``render.yaml`` and ``docker-compose.yml``).
+"""
 
 from functools import lru_cache
 from pathlib import Path
@@ -12,15 +18,27 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DNDLABS_", env_file=".env", extra="ignore")
 
+    # SQLite by default so a checkout runs with no services; deployments
+    # point this at Postgres.
     database_url: str = "sqlite:///./dndlabs.db"
     export_dir: Path = Path("./exports")
     log_level: str = "INFO"
     log_json: bool = True
+    #: ``True`` (development): build tables with ``create_all`` and skip the
+    #: readiness check's migration-revision test. Deployments set it to
+    #: ``false`` so Alembic owns the schema and readiness requires its head.
     auto_create_schema: bool = True
 
+    # Placeholder only; any deployment must override it (render.yaml
+    # generates one), since whoever knows it can provision orgs and keys.
     admin_bootstrap_secret: str = "change-me-in-production"
+    #: The web app's origin: the only CORS origin allowed, and the base of
+    #: invitation and password-reset links.
     frontend_origin: str = "http://localhost:5173"
 
+    # Bounds keep a misconfiguration from producing never-expiring
+    # credentials: sessions and invitations last at most 30 days, reset
+    # links at most a week, and passwords can't be configured below 8 chars.
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
     invitation_ttl_hours: int = Field(default=72, ge=1, le=720)
     password_reset_ttl_hours: int = Field(default=24, ge=1, le=168)
@@ -28,10 +46,24 @@ class Settings(BaseSettings):
     login_lockout_minutes: int = Field(default=15, ge=1)
     password_min_length: int = Field(default=12, ge=8, le=64)
 
+    # Uploads are held in memory and stored in the database, so both size
+    # and row count are capped.
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
     upload_max_rows: int = Field(default=100_000, ge=1)
-    #: Distinct identifiers (InChIKey, CID, ChEMBL ID, name) looked up per run.
+    #: Distinct identifiers (InChIKey, CID, ChEMBL ID, name) looked up per run;
+    #: records beyond it are reported unresolved (0 disables lookups).
     structure_lookup_limit: int = Field(default=1000, ge=0)
+
+    #: Run worker (in the API process): poll interval when idle, lease length
+    #: (renewed every third of it), how many times a run's worker may stop
+    #: unexpectedly (crash, kill, hang: its lease expired) before the run
+    #: fails, runs executed at once, and how long shutdown waits for runs to
+    #: stop. A clean shutdown hands its runs back and never counts.
+    worker_poll_seconds: float = Field(default=2.0, gt=0)
+    worker_lease_seconds: float = Field(default=120.0, ge=10)
+    worker_max_lost_leases: int = Field(default=3, ge=1)
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
+    worker_shutdown_grace_seconds: float = Field(default=20.0, ge=0)
 
     pubchem_base_url: str = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
     pubchem_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -45,6 +77,7 @@ class Settings(BaseSettings):
     chembl_max_retries: int = Field(default=3, ge=0)
     chembl_backoff_seconds: float = Field(default=0.5, ge=0)
 
+    # No key means enrichment is skipped (NullEnrichmentClient), not failed.
     nvidia_nim_api_key: str | None = None
     nvidia_nim_base_url: str = "https://health.api.nvidia.com/v1/biology/nvidia/genmol"
     nvidia_nim_timeout_seconds: float = Field(default=60.0, gt=0)

@@ -33,7 +33,13 @@ def utcnow() -> datetime:
 
 
 class _Contract(BaseModel):
-    """Base for all contracts: reject unknown fields."""
+    """Base for all contracts: reject unknown fields.
+
+    Forbidding extras makes a misspelt or unexpected field (in a request
+    body, or a stored JSON column read back) an error instead of silently
+    dropped data; a request body carrying a field its contract does not
+    declare, such as an ``org_id`` the server derives itself, is rejected.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -537,6 +543,9 @@ class NormalizedRecord(_Contract):
         )
         if not any(parts):
             return ""
+        # Joined with the ASCII unit separator rather than a printable
+        # character, so field boundaries stay unambiguous. The 64-char hex
+        # digest fits ``normalized_records.context_key`` (String(64)).
         return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
@@ -699,18 +708,70 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+#: States a run never leaves.
+FINISHED_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED})
+
+
+class RunStage(StrEnum):
+    """The pipeline stage a run is in, in execution order."""
+
+    QUEUED = "queued"
+    FETCHING = "fetching"
+    RESOLVING = "resolving"
+    VALIDATING = "validating"
+    STORING = "storing"
+    FEATURIZING = "featurizing"
+    ENRICHING = "enriching"
+    DONE = "done"
+
+
+class RunProgress(_Contract):
+    """Record counts a run has reached so far.
+
+    Attributes:
+        fetched: Records read from the source.
+        resolved: Structures resolved from MOL blocks or looked-up identifiers.
+        validated: Records validated so far (while validating).
+        accepted: Records that passed validation.
+        rejected: Records with at least one error.
+        duplicates: Records dropped as duplicates.
+        featurized: Records with stored features.
+        enriched: Records with an enrichment result.
+    """
+
+    fetched: int = Field(default=0, ge=0)
+    resolved: int = Field(default=0, ge=0)
+    validated: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
+    rejected: int = Field(default=0, ge=0)
+    duplicates: int = Field(default=0, ge=0)
+    featurized: int = Field(default=0, ge=0)
+    enriched: int = Field(default=0, ge=0)
 
 
 class PipelineRun(_Contract):
-    """Metadata of a pipeline run."""
+    """Metadata of a pipeline run.
+
+    Runs are queued when submitted and executed by a worker; ``attempts``
+    counts executions started, since a run interrupted by a restart is
+    resumed from the beginning.
+    """
 
     id: uuid.UUID = Field(default_factory=new_id)
     org_id: uuid.UUID
     spec: SourceSpec
     status: RunStatus = RunStatus.PENDING
+    stage: RunStage = RunStage.QUEUED
+    progress: RunProgress = Field(default_factory=RunProgress)
+    attempts: int = Field(default=0, ge=0)
+    cancel_requested: bool = False
     dataset_id: uuid.UUID | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
+    started_at: datetime | None = None
     finished_at: datetime | None = None
 
 

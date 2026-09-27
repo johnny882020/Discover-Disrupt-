@@ -1,4 +1,10 @@
-"""Shared helpers for building ``RawRecord`` instances from flat source rows."""
+"""Shared helpers for building ``RawRecord`` instances from flat source rows.
+
+Two paths: :func:`build_raw_record` matches columns by header alias (CSV and
+JSON connectors); :func:`build_mapped_record` applies a user-confirmed column
+mapping (uploads). The same aliases seed the upload mapping suggestion
+(``ingestion/mapping.py``).
+"""
 
 import re
 from collections.abc import Mapping
@@ -8,6 +14,12 @@ from dndlabs.core.schemas import ColumnRole, RawRecord, SourceType
 
 #: Canonical ``RawRecord`` field -> accepted source aliases, in normalized form
 #: (see :func:`normalize_header`).
+#:
+#: Plain ``name``/``title`` headers map to ``name`` (a label) and ``cid`` to the
+#: record id, so a column is never looked up in PubChem just for being called
+#: "Name" or "CID"; the lookup fields (``pubchem_cid``, ``lookup_name``, …) need
+#: their explicit header. Assay-format and control *values* are normalized
+#: later, in ``validation/assay_context.py``.
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "source_record_id": (
         "source_record_id", "compound_id", "id", "sample_id", "cid", "molecule_chembl_id",
@@ -86,6 +98,8 @@ def _clean(value: Any, field: str | None = None) -> Any:
 
 def _coerce(field: str, value: Any) -> Any:
     """Coerce a cleaned value to the type ``RawRecord`` expects for ``field``."""
+    # bool is checked before the numeric branch: it is an int subclass, and
+    # float(True) would silently turn a JSON flag into 1.0.
     if value is None or isinstance(value, bool):
         return None if value is None else str(value)
     if field in NUMERIC_FIELDS:
@@ -115,6 +129,7 @@ def build_raw_record(source: SourceType, row: Mapping[str, Any], fallback_id: st
         cleaned = _clean(value, field)
         if field is None:
             extra[column] = cleaned
+        # First non-empty column wins when several alias the same field.
         elif fields.get(field) is None:
             fields[field] = _coerce(field, cleaned)
     record_id = fields.pop("source_record_id", None)

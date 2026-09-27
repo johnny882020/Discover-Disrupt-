@@ -2,7 +2,7 @@
 
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from dndlabs.core.logging import get_logger
 from dndlabs.core.protocols import ValidationRule
@@ -28,6 +28,11 @@ logger = get_logger(__name__)
 
 def default_record_rules() -> list[ValidationRule]:
     """Return the record rules in their contractual order.
+
+    Compound identity must precede standardization, which works on the
+    canonical SMILES identity derives. Structure source runs first so a
+    failed lookup's reason heads the record's issues; schema skips that
+    case rather than reporting a missing structure twice.
 
     Returns:
         Structure source, schema, compound identity, standardization, unit
@@ -72,20 +77,31 @@ class Validator:
         self,
         record_rules: Sequence[ValidationRule] | None = None,
         dataset_rules: Sequence[object] | None = None,
+        # Matches the orchestrator's _CHUNK: progress writes stay negligible
+        # while a stop request is honoured within seconds.
+        checkpoint_every: int = 500,
     ) -> None:
         """Configure the validator.
 
         Args:
             record_rules: Record rules; defaults to :func:`default_record_rules`.
             dataset_rules: Dataset rules; defaults to ``[DuplicateRule()]``.
+                An explicit empty sequence disables them (unlike
+                ``record_rules``, where an empty sequence means the defaults).
+            checkpoint_every: Records between calls to a run's ``checkpoint``.
         """
+        self._checkpoint_every = checkpoint_every
         self._record_rules = list(record_rules or default_record_rules())
         self._dataset_rules = list(
             dataset_rules if dataset_rules is not None else [DuplicateRule()]
         )
 
     def run(
-        self, run_id: uuid.UUID, dataset_id: uuid.UUID, raws: Sequence[RawRecord]
+        self,
+        run_id: uuid.UUID,
+        dataset_id: uuid.UUID,
+        raws: Sequence[RawRecord],
+        checkpoint: Callable[[int], None] | None = None,
     ) -> ValidationOutcome:
         """Validate and normalize a batch of raw records.
 
@@ -93,6 +109,9 @@ class Validator:
             run_id: Run the records belong to (copied into the report).
             dataset_id: Dataset the accepted records will belong to.
             raws: Raw records from a connector.
+            checkpoint: Called after every ``checkpoint_every`` records with
+                the number validated so far; whatever it raises stops
+                validation (a cancelled or interrupted run).
 
         Returns:
             Accepted records and the quality report.
@@ -100,16 +119,23 @@ class Validator:
         issues: list[ValidationIssue] = []
         candidates: list[NormalizedRecord] = []
         rejected = 0
-        for raw in raws:
+        for done, raw in enumerate(raws, start=1):
             record, record_issues = self._apply_record_rules(raw, dataset_id)
             issues.extend(record_issues)
+            # Every rule ran regardless, so a rejected record's report lists
+            # all of its problems, not just the first.
             if any(i.severity is Severity.ERROR for i in record_issues):
                 rejected += 1
             else:
                 candidates.append(record)
+            if checkpoint is not None and done % self._checkpoint_every == 0:
+                checkpoint(done)
 
+        # Dataset rules see only records that passed every record rule, so a
+        # rejected record never counts as the "original" of a duplicate.
         duplicates = 0
         for rule in self._dataset_rules:
+            # core.protocols defines no dataset-rule protocol, hence the ignore.
             outcome: DatasetRuleOutcome = rule.apply(candidates)  # type: ignore[attr-defined]
             candidates = outcome.kept
             duplicates += len(outcome.dropped)

@@ -29,6 +29,8 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   const queryClient = useQueryClient();
   const [credential, setCredential] = useState<Credential | null>(() => getStoredCredential());
   const [org, setOrg] = useState<OrgContext | null>(null);
+  // With a restored credential, show neither the sign-in screen nor any data
+  // until the server confirms it is still valid.
   const [checking, setChecking] = useState<boolean>(() => getStoredCredential() !== null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -45,8 +47,11 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
 
   const establish = useCallback(
     async (next: Credential) => {
+      // Verified before it is stored, so a rejected credential is never kept.
       const resolved = await apiClient.get<OrgContext>("/auth/whoami", next);
       setStoredCredential(next);
+      // Drop the previous identity's cached queries before rendering as the
+      // new one, so another org's data can never flash on screen.
       queryClient.clear();
       setCredential(next);
       setOrg(resolved);
@@ -88,6 +93,8 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     };
   }, [forget]);
 
+  // A 401 on an ordinary request means the session expired or was revoked
+  // server-side; sign out rather than leave every screen failing.
   useEffect(() => setUnauthorizedHandler(() => forget(EXPIRED_NOTICE)), [forget]);
 
   const signIn = useCallback(

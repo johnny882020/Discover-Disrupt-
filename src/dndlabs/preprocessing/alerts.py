@@ -11,6 +11,11 @@ Three families, each reported with the atoms it matched:
   cause of idiosyncratic toxicity (Stepan et al., *Chem. Res. Toxicol.*
   2011; Kalgutkar et al., *Curr. Drug Metab.* 2005). Curated here; each
   pattern is tested against positive and negative examples.
+
+PAINS and Brenk use RDKit's bundled catalogs rather than a copy of the
+SMARTS, so they track the published lists; RDKit has no reactive-metabolite
+catalog, hence the curated table below. The assessment makes criteria of
+PAINS and reactive metabolites only; Brenk alerts are reported for review.
 """
 
 from rdkit import Chem
@@ -19,12 +24,16 @@ from rdkit.Chem import FilterCatalog
 from dndlabs.core.schemas import AlertFamily, StructuralAlert
 
 #: Reactive-metabolite alerts: name -> SMARTS patterns (any may match).
+#: Several patterns cover alternative notations or isomers (nitro charge
+#: forms, ortho/para quinones and their precursors).
 REACTIVE_METABOLITE_ALERTS: dict[str, tuple[str, ...]] = {
     "Aniline (primary aromatic amine)": ("[NX3;H2;!$(N[#6]=[#7,#8,#16])]c",),
     "Nitroaromatic": ("c[NX3+](=O)[O-]", "c[NX3](=O)=O"),
     "Thiophene": ("c1ccsc1",),
     "Furan": ("c1ccoc1",),
+    # Two non-aromatic N without double bonds: hydrazones and pyrazoles don't match.
     "Hydrazine or hydrazide": ("[NX3;!$(N=*);!a][NX3;!$(N=*);!a]",),
+    # Non-aromatic atoms only: aryl ketones and aromatic pyranones don't match.
     "Michael acceptor (alpha,beta-unsaturated carbonyl)": ("[CX3;!a]=[CX3;!a][CX3;!a]=[OX1]",),
     "Epoxide or aziridine": ("[C;r3]1[O,N;r3][C;r3]1",),
     "Quinone": (
@@ -78,6 +87,8 @@ class AlertScanner:
             The alerts, each with the atom indices it matched.
         """
         alerts: list[StructuralAlert] = []
+        # One alert per matching filter or named pattern; its atoms are the
+        # union of every match, which is what the UI highlights.
         for family, catalog in self._catalogs:
             for entry in catalog.GetMatches(mol):
                 matches = entry.GetFilterMatches(mol)

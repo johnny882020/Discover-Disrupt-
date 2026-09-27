@@ -4,6 +4,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile, status
+from starlette.concurrency import run_in_threadpool
 
 from dndlabs.api.dependencies import CurrentOrg, Services
 from dndlabs.core.exceptions import IngestionError
@@ -14,7 +15,7 @@ router = APIRouter(tags=["uploads"])
 
 @router.post("/uploads", status_code=status.HTTP_201_CREATED)
 async def upload_file(
-    file: Annotated[UploadFile, File(description="CSV, TSV, XLSX or SDF file.")],
+    file: Annotated[UploadFile, File(description="CSV, TSV, XLSX, SDF, SMILES or MOL file.")],
     org: CurrentOrg,
     services: Services,
 ) -> UploadPreview:
@@ -35,10 +36,16 @@ async def upload_file(
         IngestionError: If the file is too large, unsupported or unreadable (422).
     """
     limit = services.uploads.limits.max_bytes
+    # Read at most one byte past the limit: enough to detect an oversized
+    # file without reading all of it into memory.
     data = await file.read(limit + 1)
     if len(data) > limit:
         raise IngestionError(f"the file is larger than the {limit}-byte limit")
-    return services.uploads.store(org.org_id, file.filename or "upload", data)
+    # Parsing (up to the size limit) and storing are blocking; off the event
+    # loop they don't stall other requests or the in-process run worker.
+    return await run_in_threadpool(
+        services.uploads.store, org.org_id, file.filename or "upload", data
+    )
 
 
 @router.get("/uploads/{upload_id}/preview")

@@ -9,7 +9,8 @@ button accepts either credential).
 
 Every `/api/v1/*` route requires one of the credentials below, except the
 health routes, `/admin/*` (which uses `X-Admin-Secret`), `POST /auth/login`,
-`POST /auth/invitations/preview` and `POST /auth/invitations/accept`:
+`POST /auth/invitations/preview`, `POST /auth/invitations/accept`,
+`POST /auth/password-reset/preview` and `POST /auth/password-reset/accept`:
 
 | Header | Credential | Obtained from |
 |---|---|---|
@@ -60,9 +61,10 @@ Invitation and session tokens travel in request bodies and the
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/pipelines/run` | Start a run (202, background) |
+| POST | `/pipelines/run` | Queue a run (202) |
 | GET | `/pipelines/runs` | List the calling org's runs, newest first |
-| GET | `/pipelines/runs/{id}` | Run status |
+| GET | `/pipelines/runs/{id}` | Run status, stage and counts |
+| POST | `/pipelines/runs/{id}/cancel` | Cancel a run |
 
 `POST /pipelines/run` body (`SourceSpec`):
 
@@ -76,9 +78,38 @@ Invitation and session tokens travel in request bodies and the
 
 `upload_id` comes from `POST /uploads` (below). `csv_path`/`json_path` are
 read from the **API server's** filesystem, not the caller's, and are meant
-for operators. Every body may also carry `dataset_name`. Returns `202` with a `PipelineRun` (`status: "pending"`);
-`dataset_id` is `null` until the run finishes — poll
-`GET /pipelines/runs/{id}` (the frontend does this automatically).
+for operators. Every body may also carry `dataset_name`. Returns `202` with the queued `PipelineRun`
+(`status: "pending"`, `stage: "queued"`); the API process's run worker
+(`pipeline/worker.py`) executes it. Organizations share the worker fairly:
+the next run executed is the oldest queued run of the organization with
+the fewest runs executing. Poll `GET /pipelines/runs/{id}` (the frontend
+does this automatically):
+
+- `status`: `pending` → `running` → `succeeded`, `failed` or `cancelled`.
+  A run stopped cleanly (deploy, restart, the free plan's idle shutdown)
+  returns to `pending` with its stage and counts kept, and resumes from
+  the start.
+- `stage`: `queued`, `fetching`, `resolving`, `validating`, `storing`,
+  `featurizing`, `enriching`, `done`. A failed run keeps the stage it
+  failed in.
+- `progress`: counts reached so far — `fetched`, `resolved` (structures
+  looked up or read from MOL blocks; updated while resolving), `validated`
+  (updated every 500 records while validating), `accepted`, `rejected`,
+  `duplicates`, `featurized` (updated every 500 records), `enriched`
+  (updated while enriching).
+- `attempts`: executions started; increases each time a run resumes.
+- `dataset_id` is `null` until the run succeeds.
+
+A run whose worker stopped unexpectedly (crash, kill) is resumed once its
+lease expires (`DNDLABS_WORKER_LEASE_SECONDS`, default 120 s). After
+`DNDLABS_WORKER_MAX_LOST_LEASES` (default 3) such unexpected stops it
+fails with "the run's worker stopped unexpectedly N times; start it
+again". Clean stops never count.
+
+`POST /pipelines/runs/{id}/cancel` cancels a queued run at once. A running
+run stops at its next checkpoint — between stages, and during resolving,
+validating, featurizing and enriching — keeps nothing it stored and ends
+`cancelled`. A finished run is returned unchanged.
 
 ## Uploads and column mappings
 
@@ -126,18 +157,21 @@ capped at 1,000 distinct identifiers per run
 looked-up structure a `structure_lookup` warning naming its source (e.g.
 "structure from PubChem CID 2244"). A row that cannot be resolved is
 rejected with the reason (not found, ambiguous, service unavailable, over
-the limit). Unmapped columns are kept in each record's `extra`; `ignore`d
-ones are dropped.
+the limit). Unmapped columns are read but not stored; `ignore`d columns
+are dropped.
 
 Two roles describe the measurement's context:
 
-| Role | Accepted values (case-insensitive) | Stored as |
+| Role | Accepted values | Stored as |
 |---|---|---|
-| `assay_format` | `biochemical`, `enzymatic`, `binding`, `cell-free`, `in vitro`; `cell-based`, `cellular`, `cell`, `whole cell` | `biochemical` / `cell_based` |
-| `control` | `positive`, `pos`, `pc`, `+`; `negative`, `neg`, `nc`, `-`; `no`, `none`, `false`, `0`, `test`, `sample`, `compound` (not a control) | `positive` / `negative` / empty |
+| `assay_format` | `biochemical`, `biochem`, `enzymatic`, `enzyme`, `binding`, `cell free`, `in vitro`; `cell based`, `cellular`, `cell`, `cells`, `whole cell`, `cell assay` | `biochemical` / `cell_based` |
+| `control` | `positive`, `positive control`, `pos`, `pc`, `+`; `negative`, `negative control`, `neg`, `nc`, `-`; `no`, `none`, `false`, `0`, `test`, `sample`, `compound` (not a control) | `positive` / `negative` / empty |
 
-Any other value keeps the record, leaves the field empty and adds an
-`assay_context` warning.
+Values are matched case-insensitively, with spaces, `_`, `-` and `/`
+treated as one separator (`Cell-based`, `cell_based` and `whole-cell` all
+match); a lone `+` or `-` is kept as given. Any other value keeps the
+record, leaves the field empty and adds an `assay_context` warning
+(`validation/assay_context.py`).
 
 Files are limited to 25 MiB and 100,000 rows by default
 (`DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS`). An SDF's structures
@@ -157,7 +191,7 @@ first non-empty row as headers.
 | GET | `/datasets/{id}/quality-report` | `QualityReport` |
 | GET | `/datasets/{id}/assessment` | `DatasetAssessment`: hit/lead potency classes, criteria and per-compound computed properties |
 | GET | `/datasets/{id}/enrichment` | `{"enrichment_enabled": bool, "results": EnrichmentResult[]}` |
-| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields (including `assay_format` and `control` after `assay_type`), then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `alerts` (e.g. `PAINS: quinone_A(370); Brenk: chinone_1`), `potency_class` |
+| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields (including `assay_format` and `control` after `assay_type`), then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `alerts` (e.g. `PAINS: quinone_A(370); Brenk: chinone_1`), `potency_class` (the record's own measurement class; the assessment's `potency_classes` count compounds by the majority rule below) |
 
 `EnrichmentResult.status` is one of `enriched`, `skipped_no_key`, `failed`.
 
@@ -228,7 +262,10 @@ reachable and migrated.
 
 `{"detail": "<message>"}`. Every `500` response body carries a fixed
 generic message (`"internal server error"`); the underlying exception is
-logged server-side only, never returned to the client.
+logged server-side only, never returned to the client. The same holds for
+the `error` of a failed run or enrichment result: it names the kind of
+failure (for example "the source could not be read …" or "GenMol returned
+HTTP 503"), never the exception's own text.
 
 | Status | Meaning |
 |---|---|

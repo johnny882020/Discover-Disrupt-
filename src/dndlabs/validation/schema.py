@@ -1,4 +1,4 @@
-"""Schema rule: required identifiers and parseable numeric fields."""
+"""Schema rule: a record must have a structure and, if given, a positive molecular weight."""
 
 from dndlabs.core.schemas import NormalizedRecord, RawRecord, RuleOutcome, ValidationIssue
 from dndlabs.validation.issues import error, parse_number
@@ -6,6 +6,9 @@ from dndlabs.validation.issues import error, parse_number
 
 class SchemaRule:
     """Checks that a record has a structure identifier and a sane molecular weight.
+
+    Runs after structure resolution, so "has a structure" means SMILES or
+    InChI, supplied or resolved from a MOL block or an identifier lookup.
 
     Attributes:
         name: Rule name used in reports.
@@ -35,6 +38,7 @@ class SchemaRule:
                     "smiles",
                 )
             )
+        # A missing weight is fine: compound_identity computes it.
         try:
             weight = parse_number(raw.molecular_weight)
         except ValueError:

@@ -9,8 +9,9 @@ class StructureSourceRule:
 
     A structure found by looking up an identifier (InChIKey, PubChem CID,
     ChEMBL ID, name) is kept with a warning naming its source, so it is never
-    mistaken for one the user supplied. A record whose structure could not be
-    found is rejected with the reason.
+    mistaken for one the user supplied. A structure read from the record's own
+    MOL block has no ``structure_source`` and so raises no issue. A record
+    whose structure could not be found is rejected with the reason.
 
     Attributes:
         name: Rule name used in reports.

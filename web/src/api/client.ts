@@ -129,6 +129,8 @@ interface RequestOptions {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Read on every request rather than captured once, so calls always carry
+  // whoever is signed in now without this module depending on React state.
   const credential = options.credential === undefined ? getStoredCredential() : options.credential;
   const headers = authHeaders(credential);
   if (options.body !== undefined) {
@@ -150,6 +152,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch {
       // Response body wasn't JSON; fall back to the generic message.
     }
+    // Only for the stored credential: an explicit one is being tried out
+    // (sign-in, re-verification), where a 401 means "wrong credential", which
+    // the caller reports, not "your session ended".
     if (response.status === 401 && credential !== null && options.credential === undefined) {
       unauthorizedHandler?.();
     }

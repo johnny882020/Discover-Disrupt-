@@ -39,7 +39,7 @@ export function DatasetDetail(): React.JSX.Element {
 
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-danger">
+      <p role="alert" className="text-sm text-danger dark:text-danger-bright">
         Could not load this dataset: {query.error.message}
       </p>
     );
@@ -53,6 +53,8 @@ export function DatasetDetail(): React.JSX.Element {
   const profiles = new Map<string, CompoundProfile>(
     (assessment.data?.profiles ?? []).map((profile) => [profile.record_id, profile]),
   );
+  // Hiding alert families filters the loaded records client-side: the
+  // assessment already carries every compound's alerts.
   const shown = records.filter(
     (r) => !(profiles.get(r.id)?.alerts ?? []).some((alert) => hidden.has(alert.family)),
   );
@@ -85,7 +87,7 @@ export function DatasetDetail(): React.JSX.Element {
 
       {assessment.data && records.length > 0 ? <HitLeadPanel assessment={assessment.data} /> : null}
       {assessment.isError ? (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="text-sm text-danger dark:text-danger-bright">
           Could not assess this dataset: {assessment.error.message}
         </p>
       ) : null}
@@ -123,6 +125,7 @@ export function DatasetDetail(): React.JSX.Element {
             This dataset has no records yet.
           </p>
         ) : (
+          // Many columns: scroll inside the card rather than widening the page.
           <div className="overflow-x-auto">
             <Table
               columns={[

@@ -1,4 +1,8 @@
-"""ChEMBL REST API connector: bioactivity data for a target."""
+"""ChEMBL REST API connector: bioactivity data for a target.
+
+Pages through ``/activity.json`` by following ``page_meta.next``; each page
+gets its own retries (``ingestion/http.py``).
+"""
 
 import time
 from collections.abc import AsyncIterator, Callable
@@ -23,6 +27,8 @@ class ChemblActivity(BaseModel):
     molecule_chembl_id: str
     canonical_smiles: str | None = None
     standard_type: str | None = None
+    # Kept as given (ChEMBL may send a string) so validation parses it and
+    # reports a bad value instead of the response failing to load.
     standard_value: str | float | None = None
     standard_units: str | None = None
     standard_relation: str | None = None
@@ -43,6 +49,9 @@ class ChemblActivity(BaseModel):
             activity_unit=self.standard_units,
             activity_relation=self.standard_relation,
             target=self.target_chembl_id,
+            # One molecule can have many activities for a target, and the
+            # record id is the molecule's, so the activity id is kept to tell
+            # the rows apart.
             extra={"activity_id": self.activity_id} if self.activity_id is not None else {},
         )
 
@@ -84,7 +93,8 @@ class ChemblConnector:
 
         Args:
             client: HTTP client whose ``base_url`` points at the ChEMBL API.
-            page_size: Records requested per page.
+            page_size: Records requested per page (ChEMBL's ``limit``;
+                ``Settings.chembl_page_size`` bounds it to 1000).
             max_retries: Retries for transient failures, per page.
             backoff_seconds: Initial retry delay, doubled after each attempt.
             sleep: Sleep function (injectable for tests).

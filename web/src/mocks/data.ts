@@ -170,9 +170,14 @@ export const RUN_SUCCEEDED: PipelineRun = {
     dataset_name: "Aspirin analogs (PubChem)",
   },
   status: "succeeded",
+  stage: "done",
+  progress: { fetched: 8, resolved: 0, validated: 8, accepted: 8, rejected: 0, duplicates: 0, featurized: 8, enriched: 0 },
+  attempts: 1,
+  cancel_requested: false,
   dataset_id: DATASET_ASPIRIN.id,
   error: null,
   created_at: "2026-09-20T13:58:00Z",
+  started_at: "2026-09-20T13:58:05Z",
   finished_at: "2026-09-20T14:00:00Z",
 };
 
@@ -190,9 +195,14 @@ export const RUN_EMPTY: PipelineRun = {
     dataset_name: "COX-2 CSV upload",
   },
   status: "succeeded",
+  stage: "done",
+  progress: { fetched: 0, resolved: 0, validated: 0, accepted: 0, rejected: 0, duplicates: 0, featurized: 0, enriched: 0 },
+  attempts: 1,
+  cancel_requested: false,
   dataset_id: DATASET_EMPTY.id,
   error: null,
   created_at: "2026-09-22T09:28:00Z",
+  started_at: "2026-09-22T09:28:05Z",
   finished_at: "2026-09-22T09:30:00Z",
 };
 

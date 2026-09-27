@@ -12,9 +12,15 @@ PubChem's published rate (5 requests/s) and capped per run. A record that
 cannot be resolved gets ``structure_error`` explaining why; validation turns
 that into an issue. Nothing here raises for a bad record or an unavailable
 service.
+
+Resolution can take minutes (thousands of throttled requests), so after each
+request it reports progress through the caller's ``checkpoint``; whatever
+that raises (a cancellation, a shutdown) propagates, so a run stops within
+about one request instead of at the end of the stage.
 """
 
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -52,6 +58,28 @@ class _Missing:
 
 
 _Result = _Found | _Missing
+
+
+class _Tally:
+    """Counts records resolved while one kind of identifier is looked up."""
+
+    def __init__(
+        self,
+        resolved: int,
+        demand: Counter[str],
+        checkpoint: Callable[[int], None] | None,
+    ) -> None:
+        self._resolved = resolved
+        self._demand = demand
+        self._checkpoint = checkpoint
+
+    def looked_up(self, batch: dict[tuple[str, str], _Result]) -> None:
+        """Count one request's finds, then report them to the run's checkpoint."""
+        self._resolved += sum(
+            self._demand[value] for (_, value), r in batch.items() if isinstance(r, _Found)
+        )
+        if self._checkpoint is not None:
+            self._checkpoint(self._resolved)
 
 
 class _PropertyTable(BaseModel):
@@ -111,11 +139,18 @@ class LookupStructureResolver:
         self._throttle = throttle_seconds
         self._retry = retry or RetryPolicy()
 
-    async def resolve(self, raws: Sequence[RawRecord]) -> list[RawRecord]:
+    async def resolve(
+        self,
+        raws: Sequence[RawRecord],
+        checkpoint: Callable[[int], None] | None = None,
+    ) -> list[RawRecord]:
         """Resolve structures; never raises for an unresolvable record.
 
         Args:
             raws: Records from a connector.
+            checkpoint: Called with the number of records resolved so far
+                after each lookup request (or looked-up identifier); whatever
+                it raises propagates and stops resolution.
 
         Returns:
             The same records, in order, with ``smiles`` and
@@ -124,6 +159,7 @@ class LookupStructureResolver:
         records = list(raws)
         reasons: dict[int, list[str]] = {}
         pending: list[int] = []
+        resolved = 0
         for index, raw in enumerate(records):
             if raw.smiles or raw.inchi:
                 continue
@@ -131,6 +167,7 @@ class LookupStructureResolver:
                 mol = Chem.MolFromMolBlock(raw.mol_block, sanitize=False, removeHs=False)
                 if mol is not None:
                     records[index] = raw.model_copy(update={"smiles": mol_to_smiles(mol)})
+                    resolved += 1
                     continue
                 reasons.setdefault(index, []).append("the MOL block could not be read")
             if _identifiers(raw):
@@ -142,7 +179,10 @@ class LookupStructureResolver:
             new = list(dict.fromkeys(v for _, v in wanted if (kind, v) not in results))
             allowed, over = new[:budget], new[budget:]
             budget -= len(allowed)
-            results.update(self._lookup(kind, allowed))
+            # Progress counts records, and several records may share one
+            # identifier: weigh each found identifier by the records wanting it.
+            tally = _Tally(resolved, Counter(v for _, v in wanted), checkpoint)
+            results.update(self._lookup(kind, allowed, tally.looked_up))
             for value in over:
                 results[(kind, value)] = _Missing(
                     f"not looked up: over the limit of {self._limit} lookups per run"
@@ -163,6 +203,7 @@ class LookupStructureResolver:
                             "name": raw.name or raw.lookup_name or result.title,
                         }
                     )
+                    resolved += 1
                 else:
                     reasons.setdefault(index, []).append(result.reason)
                     still.append(index)
@@ -174,17 +215,29 @@ class LookupStructureResolver:
                 )
         return records
 
-    def _lookup(self, kind: str, values: list[str]) -> dict[tuple[str, str], _Result]:
-        """Look up distinct identifiers of one kind."""
+    def _lookup(
+        self,
+        kind: str,
+        values: list[str],
+        looked_up: Callable[[dict[tuple[str, str], _Result]], None],
+    ) -> dict[tuple[str, str], _Result]:
+        """Look up distinct identifiers of one kind, reporting each request's results."""
         if not values:
             return {}
         if kind == "pubchem_cid":
-            return self._lookup_cids(values)
+            return self._lookup_cids(values, looked_up)
         if kind == "chembl_id":
-            return self._lookup_chembl(values)
-        return {(kind, value): self._lookup_one(kind, value) for value in values}
+            return self._lookup_chembl(values, looked_up)
+        results: dict[tuple[str, str], _Result] = {}
+        for value in values:
+            result = {(kind, value): self._lookup_one(kind, value)}
+            results.update(result)
+            looked_up(result)
+        return results
 
-    def _lookup_cids(self, values: list[str]) -> dict[tuple[str, str], _Result]:
+    def _lookup_cids(
+        self, values: list[str], looked_up: Callable[[dict[tuple[str, str], _Result]], None]
+    ) -> dict[tuple[str, str], _Result]:
         """Look up PubChem CIDs, batched."""
         results: dict[tuple[str, str], _Result] = {}
         valid = [v for v in values if v.isdigit()]
@@ -195,18 +248,21 @@ class LookupStructureResolver:
             batch = valid[start : start + self._batch]
             path = f"/compound/cid/{','.join(batch)}/{_PROPERTY_PATH}"
             found = self._pubchem_properties(partial(self._pubchem.get, path))
+            batch_results: dict[tuple[str, str], _Result] = {}
             if isinstance(found, _Missing):
-                results.update({("pubchem_cid", v): found for v in batch})
-                continue
-            by_cid = {p.cid: p for p in found}
-            for value in batch:
-                entry = by_cid.get(int(value))
-                smiles = entry.best_smiles() if entry else None
-                results[("pubchem_cid", value)] = (
-                    _Found(smiles, entry.title if entry else None, f"PubChem CID {value}")
-                    if smiles
-                    else _Missing(f"PubChem has no compound with CID {value}")
-                )
+                batch_results = {("pubchem_cid", v): found for v in batch}
+            else:
+                by_cid = {p.cid: p for p in found}
+                for value in batch:
+                    entry = by_cid.get(int(value))
+                    smiles = entry.best_smiles() if entry else None
+                    batch_results[("pubchem_cid", value)] = (
+                        _Found(smiles, entry.title if entry else None, f"PubChem CID {value}")
+                        if smiles
+                        else _Missing(f"PubChem has no compound with CID {value}")
+                    )
+            results.update(batch_results)
+            looked_up(batch_results)
         return results
 
     def _lookup_one(self, kind: str, value: str) -> _Result:
@@ -260,7 +316,9 @@ class LookupStructureResolver:
         except ValidationError:
             return _Missing("unexpected response from PubChem")
 
-    def _lookup_chembl(self, values: list[str]) -> dict[tuple[str, str], _Result]:
+    def _lookup_chembl(
+        self, values: list[str], looked_up: Callable[[dict[tuple[str, str], _Result]], None]
+    ) -> dict[tuple[str, str], _Result]:
         """Look up ChEMBL molecule IDs, batched."""
         results: dict[tuple[str, str], _Result] = {}
         valid = [v for v in values if _CHEMBL_ID.match(v.upper())]
@@ -271,40 +329,48 @@ class LookupStructureResolver:
             batch = valid[start : start + self._batch]
             ids = ",".join(v.upper() for v in batch)
             params: dict[str, str | int] = {"molecule_chembl_id__in": ids, "limit": len(batch)}
-            try:
-                response = send_with_retries(
-                    partial(self._chembl.get, "/molecule.json", params=params),
-                    "ChEMBL",
-                    self._retry,
+            batch_results = self._chembl_batch(batch, params)
+            results.update(batch_results)
+            looked_up(batch_results)
+        return results
+
+    def _chembl_batch(
+        self, batch: list[str], params: dict[str, str | int]
+    ) -> dict[tuple[str, str], _Result]:
+        """Send one batched ChEMBL request; one result per identifier."""
+        try:
+            response = send_with_retries(
+                partial(self._chembl.get, "/molecule.json", params=params),
+                "ChEMBL",
+                self._retry,
+            )
+            response.raise_for_status()
+            molecules = _MoleculeResponse.model_validate_json(response.content).molecules
+        except IngestionError:
+            missing = _Missing("ChEMBL is unreachable; try the run again later")
+            return {("chembl_id", v): missing for v in batch}
+        except (httpx.HTTPStatusError, ValidationError):
+            missing = _Missing("ChEMBL lookup failed")
+            return {("chembl_id", v): missing for v in batch}
+        by_id = {m.molecule_chembl_id: m for m in molecules}
+        results: dict[tuple[str, str], _Result] = {}
+        for value in batch:
+            molecule = by_id.get(value.upper())
+            smiles = (
+                molecule.molecule_structures.canonical_smiles
+                if molecule and molecule.molecule_structures
+                else None
+            )
+            if molecule is None:
+                results[("chembl_id", value)] = _Missing(f"ChEMBL has no molecule {value}")
+            elif smiles is None:
+                results[("chembl_id", value)] = _Missing(
+                    f"ChEMBL {value} has no small-molecule structure"
                 )
-                response.raise_for_status()
-                molecules = _MoleculeResponse.model_validate_json(response.content).molecules
-            except IngestionError:
-                missing = _Missing("ChEMBL is unreachable; try the run again later")
-                results.update({("chembl_id", v): missing for v in batch})
-                continue
-            except (httpx.HTTPStatusError, ValidationError):
-                missing = _Missing("ChEMBL lookup failed")
-                results.update({("chembl_id", v): missing for v in batch})
-                continue
-            by_id = {m.molecule_chembl_id: m for m in molecules}
-            for value in batch:
-                molecule = by_id.get(value.upper())
-                smiles = (
-                    molecule.molecule_structures.canonical_smiles
-                    if molecule and molecule.molecule_structures
-                    else None
+            else:
+                results[("chembl_id", value)] = _Found(
+                    smiles, molecule.pref_name, f"ChEMBL {value.upper()}"
                 )
-                if molecule is None:
-                    results[("chembl_id", value)] = _Missing(f"ChEMBL has no molecule {value}")
-                elif smiles is None:
-                    results[("chembl_id", value)] = _Missing(
-                        f"ChEMBL {value} has no small-molecule structure"
-                    )
-                else:
-                    results[("chembl_id", value)] = _Found(
-                        smiles, molecule.pref_name, f"ChEMBL {value.upper()}"
-                    )
         return results
 
 

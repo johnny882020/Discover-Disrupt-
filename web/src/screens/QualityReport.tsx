@@ -1,4 +1,8 @@
-/** QualityReport: data-quality summary and issue list for one dataset. */
+/**
+ * QualityReport: data-quality summary and issue list for one dataset.
+ * Rejected records surface here as validation issues rather than as run
+ * failures, so this is where a user finds out what was dropped and why.
+ */
 import { useParams } from "react-router-dom";
 import { Badge } from "../design-system/Badge";
 import { Card } from "../design-system/Card";
@@ -7,7 +11,7 @@ import { useQualityReport } from "../hooks/useQualityReport";
 
 function StatTile({ label, value }: { label: string; value: string | number }): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-1 border-l border-ink/10 px-4 first:border-l-0 first:pl-0 dark:border-paper/15">
+    <div className="flex flex-col gap-1">
       <span className="text-xs uppercase tracking-wide text-ink/60 dark:text-paper/60">{label}</span>
       <span className="font-display text-2xl">{value}</span>
     </div>
@@ -24,7 +28,7 @@ export function QualityReport(): React.JSX.Element {
 
   if (query.isError) {
     return (
-      <p role="alert" className="text-sm text-danger">
+      <p role="alert" className="text-sm text-danger dark:text-danger-bright">
         Could not load the quality report: {query.error.message}
       </p>
     );
@@ -40,7 +44,9 @@ export function QualityReport(): React.JSX.Element {
       <h1 className="font-display text-3xl">Quality report</h1>
 
       <Card>
-        <div className="flex flex-wrap gap-6">
+        {/* A grid, not dividers: on a phone the tiles wrap, and a divider
+            meant for "not the first tile" would start each wrapped row. */}
+        <div className="grid grid-cols-2 gap-6 sm:grid-cols-5">
           <StatTile label="Total records" value={report.total_records} />
           <StatTile label="Accepted" value={report.accepted_records} />
           <StatTile label="Rejected" value={report.rejected_records} />
@@ -70,23 +76,27 @@ export function QualityReport(): React.JSX.Element {
         {report.issues.length === 0 ? (
           <p className="text-sm text-ink/60 dark:text-paper/60">No issues to review.</p>
         ) : (
-          <Table
-            columns={[
-              {
-                key: "severity",
-                header: "Severity",
-                cell: (issue) => (
-                  <Badge tone={issue.severity === "error" ? "danger" : "warning"}>{issue.severity}</Badge>
-                ),
-              },
-              { key: "rule", header: "Rule", cell: (issue) => <span className="font-mono">{issue.rule}</span> },
-              { key: "record", header: "Record", cell: (issue) => issue.source_record_id },
-              { key: "field", header: "Field", cell: (issue) => issue.field ?? "—" },
-              { key: "message", header: "Message", cell: (issue) => issue.message },
-            ]}
-            rows={report.issues}
-            getRowKey={(issue) => `${issue.rule}-${issue.source_record_id}-${issue.field ?? ""}-${issue.message}`}
-          />
+          // Five columns do not fit a phone: scroll inside the card, not the page.
+          <div className="overflow-x-auto">
+            <Table
+              columns={[
+                {
+                  key: "severity",
+                  header: "Severity",
+                  cell: (issue) => (
+                    <Badge tone={issue.severity === "error" ? "danger" : "warning"}>{issue.severity}</Badge>
+                  ),
+                },
+                { key: "rule", header: "Rule", cell: (issue) => <span className="font-mono">{issue.rule}</span> },
+                { key: "record", header: "Record", cell: (issue) => issue.source_record_id },
+                { key: "field", header: "Field", cell: (issue) => issue.field ?? "—" },
+                { key: "message", header: "Message", cell: (issue) => issue.message },
+              ]}
+              rows={report.issues}
+              // Issues have no id of their own; key on everything that identifies one.
+              getRowKey={(issue) => `${issue.rule}-${issue.source_record_id}-${issue.field ?? ""}-${issue.message}`}
+            />
+          </div>
         )}
       </Card>
     </div>

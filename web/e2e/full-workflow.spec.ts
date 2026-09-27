@@ -19,46 +19,12 @@
  * - E2E_API_URL (optional): the API base URL; defaults to the local API.
  */
 import path from "node:path";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { API_URL, pathOf, provisionOrg } from "./helpers";
 
-const ADMIN_SECRET = process.env.DNDLABS_ADMIN_BOOTSTRAP_SECRET ?? "";
-const API_URL = process.env.E2E_API_URL ?? "http://localhost:8000/api/v1";
 /** A lab export with 5 rows: 3 valid, one invalid SMILES, one missing structure. */
 const LAB_EXPORT = path.resolve(import.meta.dirname, "../../tests/fixtures/lab_export_malformed.csv");
 const PASSWORD = "e2e correct horse battery";
-
-interface ProvisionedOrg {
-  orgId: string;
-  apiKey: string;
-  email: string;
-  invitePath: string;
-}
-
-async function provisionOrg(request: APIRequestContext): Promise<ProvisionedOrg> {
-  if (!ADMIN_SECRET) {
-    throw new Error("Set DNDLABS_ADMIN_BOOTSTRAP_SECRET to the target API's admin secret.");
-  }
-  const headers = { "X-Admin-Secret": ADMIN_SECRET };
-  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const org = await request.post(`${API_URL}/admin/orgs`, { headers, data: { name: `E2E Org ${suffix}` } });
-  expect(org.status()).toBe(201);
-  const { org_id: orgId, raw_key: apiKey } = (await org.json()) as { org_id: string; raw_key: string };
-
-  const email = `admin-${suffix}@e2e.example`;
-  const invitation = await request.post(`${API_URL}/admin/orgs/${orgId}/invitations`, {
-    headers,
-    data: { email },
-  });
-  expect(invitation.status()).toBe(201);
-  const { accept_url: acceptUrl } = (await invitation.json()) as { accept_url: string };
-  return { orgId, apiKey, email, invitePath: pathOf(acceptUrl) };
-}
-
-/** A one-time link's path and fragment, followed on the frontend under test. */
-function pathOf(url: string): string {
-  const link = new URL(url);
-  return `${link.pathname}${link.hash}`;
-}
 
 async function acceptInvitation(page: Page, invitePath: string, password = PASSWORD): Promise<void> {
   await page.goto(invitePath);
