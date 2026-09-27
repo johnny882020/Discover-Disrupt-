@@ -24,7 +24,7 @@ def check_users(repos: Repositories) -> None:
     creds = repos.users.get_credentials("ada@acme.com")
     assert creds is not None
     assert creds.user == user
-    assert (creds.password_hash, creds.failed_login_count, creds.locked_until) == ("h1", 0, None)
+    assert creds.password_hash == "h1"
     assert repos.users.get_credentials("nobody@acme.com") is None
     assert repos.users.email_exists("ada@acme.com")
     assert not repos.users.email_exists("nobody@acme.com")
@@ -42,21 +42,54 @@ def check_users(repos: Repositories) -> None:
     assert repos.users.get(org.id, user.id).password_hash == "h3"
 
 
-def check_login_counters(repos: Repositories) -> None:
+def check_api_key_prefix_is_unique(repos: Repositories) -> None:
     org = repos.organizations.create(Organization(name="Acme"))
-    user = repos.users.create(User(org_id=org.id, email="ada@acme.com"), "h")
-    lock_until = datetime(2030, 1, 1, tzinfo=UTC)
+    repos.api_keys.create(org.id, "ddl_live_abcdefghijkl", "h1")
+    with pytest.raises(ConflictError):  # a collision is retryable, never a StorageError
+        repos.api_keys.create(org.id, "ddl_live_abcdefghijkl", "h2")
+    assert repos.api_keys.get_hash("ddl_live_abcdefghijkl") == "h1"
+    # The repository still works after the rolled-back insert.
+    repos.api_keys.create(org.id, "ddl_live_mnopqrstuvwx", "h3")
 
-    repos.users.record_login_failure(user.id, 3, lock_until)
-    repos.users.record_login_failure(user.id, 3, lock_until)
-    assert repos.users.get(org.id, user.id).failed_login_count == 2
-    repos.users.record_login_failure(user.id, 3, lock_until)
-    locked = repos.users.get(org.id, user.id)
-    assert (locked.failed_login_count, locked.locked_until) == (0, lock_until)
 
-    repos.users.record_login_success(user.id)
-    cleared = repos.users.get(org.id, user.id)
-    assert (cleared.failed_login_count, cleared.locked_until) == (0, None)
+def check_rate_limits(repos: Repositories) -> None:
+    limits = repos.rate_limits
+    start = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=15)
+
+    assert limits.count("signin-ip:a", start) == 0
+    assert [limits.hit("signin-ip:a", start, end) for _ in range(3)] == [1, 2, 3]
+    assert limits.hit("signin-ip:b", start, end) == 1  # buckets are independent
+    assert limits.count("signin-ip:a", start) == 3
+
+    limits.refund("signin-ip:a", start)
+    assert limits.count("signin-ip:a", start) == 2
+    limits.refund("signin-ip:b", start)
+    limits.refund("signin-ip:b", start)  # never below zero
+    assert limits.count("signin-ip:b", start) == 0
+
+    # A later window starts over, and an earlier one no longer counts.
+    later, later_end = end, end + timedelta(minutes=15)
+    assert limits.hit("signin-ip:a", later, later_end) == 1
+    assert limits.count("signin-ip:a", later) == 1
+    # A hit from an instance whose clock is one window behind joins the
+    # newer window instead of resetting it.
+    assert limits.hit("signin-ip:a", start, end) == 2
+
+    # clear() takes a literal prefix: "_" and "%" are not wildcards.
+    limits.hit("signin-email:x", later, later_end)
+    limits.hit("signin-email:x:ip:1", later, later_end)
+    limits.hit("signin-email:y", later, later_end)
+    limits.hit("signin_email:x", later, later_end)
+    assert limits.clear("signin-email:x") == 2
+    assert limits.clear("signin%") == 0
+    assert limits.count("signin-email:y", later) == 1
+    assert limits.count("signin_email:x", later) == 1
+
+    # Expired counters are swept; current ones stay.
+    assert limits.delete_expired(later) == 1  # signin-ip:b's window has ended
+    assert limits.delete_expired(later_end) == 3
+    assert limits.count("signin-ip:a", later) == 0
 
 
 def check_sessions(repos: Repositories) -> None:
@@ -182,7 +215,6 @@ def check_pending_revoke_and_reset(repos: Repositories) -> None:
     org = repos.organizations.create(Organization(name="Acme"))
     user = repos.users.create(User(org_id=org.id, email="bob@acme.com"), "old-hash")
     now = datetime.now(UTC)
-    repos.users.record_login_failure(user.id, 1, now + timedelta(hours=1))  # locked
     repos.sessions.create(
         UserSession(user_id=user.id, org_id=org.id, expires_at=now + timedelta(hours=1)), "s" * 64
     )
@@ -222,11 +254,7 @@ def check_pending_revoke_and_reset(repos: Repositories) -> None:
     reset_user = repos.invitations.redeem_password_reset(reset, "new-hash")
     assert reset_user.id == user.id
     creds = repos.users.get(org.id, user.id)
-    assert (creds.password_hash, creds.failed_login_count, creds.locked_until) == (
-        "new-hash",
-        0,
-        None,
-    )
+    assert creds.password_hash == "new-hash"
     assert repos.sessions.get_by_token_hash("s" * 64) is None
     with pytest.raises(InvitationInvalidError):
         repos.invitations.redeem_password_reset(reset, "newer-hash")
@@ -240,7 +268,8 @@ def check_pending_revoke_and_reset(repos: Repositories) -> None:
 
 ALL_CHECKS = (
     check_users,
-    check_login_counters,
+    check_api_key_prefix_is_unique,
+    check_rate_limits,
     check_sessions,
     check_invitations,
     check_accept_is_atomic,

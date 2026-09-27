@@ -8,6 +8,21 @@ def test_generate_key_has_expected_prefix() -> None:
     assert key_prefix(raw) == prefix
 
 
+def test_the_prefix_has_twelve_random_characters_and_fits_its_column() -> None:
+    prefixes = {generate_key()[1] for _ in range(200)}
+    assert {len(p) for p in prefixes} == {len("ddl_live_") + 12}
+    assert max(len(p) for p in prefixes) <= 32  # api_keys.prefix is String(32)
+    assert len(prefixes) == 200
+
+
+def test_keys_issued_before_the_longer_prefix_keep_their_lookup_prefix() -> None:
+    legacy = "ddl_live_" + "A" * 43  # token_urlsafe(32), the old key format
+    assert key_prefix(legacy) == "ddl_live_AAA"
+    raw, prefix = generate_key()
+    assert len(raw) != len(legacy)  # the formats never share a length
+    assert key_prefix(raw) == prefix
+
+
 def test_hash_and_verify_roundtrip() -> None:
     raw, _ = generate_key()
     hashed = hash_key(raw)

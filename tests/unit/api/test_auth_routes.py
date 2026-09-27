@@ -1,10 +1,15 @@
 """HTTP contract of the sign-in, session and invitation endpoints."""
 
 import uuid
+from dataclasses import replace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from dndlabs.core.schemas import ApiKeyCreated
+from dndlabs.api.app import create_app
+from dndlabs.api.dependencies import ApiServices
+from dndlabs.auth.service import AuthPolicy, AuthService
+from dndlabs.core.schemas import ApiKeyCreated, Organization
 
 ADMIN = {"X-Admin-Secret": "test-admin-secret-0123456789"}
 PASSWORD = "correct horse battery"
@@ -106,19 +111,70 @@ def test_login_logout(client: TestClient) -> None:
     assert after.headers["WWW-Authenticate"] == "Bearer"
 
 
-def test_failed_logins_are_generic_then_locked(client: TestClient) -> None:
+def test_failed_logins_are_generic_then_rate_limited_alike_for_unknown_emails(
+    client: TestClient,
+) -> None:
     _bootstrap(client)
-    unknown = client.post("/api/v1/auth/login", json={"email": "x@y.co", "password": "whatever"})
-    assert unknown.status_code == 401
-    for _ in range(5):
-        wrong = client.post(
-            "/api/v1/auth/login", json={"email": "ada@acme.com", "password": "wrong password"}
-        )
-        assert wrong.status_code == 401
-        assert wrong.json() == unknown.json() == {"detail": "invalid email or password"}
-    locked = client.post("/api/v1/auth/login", json={"email": "ada@acme.com", "password": PASSWORD})
-    assert locked.status_code == 429
-    assert int(locked.headers["Retry-After"]) > 0
+    responses: dict[str, list[tuple[int, object, bool]]] = {}
+    retry_after: list[int] = []
+    for email in ("ada@acme.com", "nobody@acme.com"):
+        responses[email] = []
+        for password in ["wrong password"] * 5 + [PASSWORD]:
+            r = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+            responses[email].append((r.status_code, r.json(), "Retry-After" in r.headers))
+            if r.status_code == 429:
+                retry_after.append(int(r.headers["Retry-After"]))
+    # Same status codes, bodies and headers whether or not the account exists.
+    assert responses["ada@acme.com"] == responses["nobody@acme.com"]
+    known = responses["ada@acme.com"]
+    assert known[:5] == [(401, {"detail": "invalid email or password"}, False)] * 5
+    # Even the right password is refused.
+    assert known[5] == (429, {"detail": "too many attempts; try again later"}, True)
+    assert len(retry_after) == 2 and all(0 < seconds <= 900 for seconds in retry_after)
+
+
+def test_sign_in_limits_are_per_client_ip(services: ApiServices) -> None:
+    # One app, two client addresses; no run worker (one app lifespan per client).
+    app = create_app(replace(services, worker=None))
+    with (
+        TestClient(app, client=("203.0.113.5", 1)) as attacker,
+        TestClient(app, client=("198.51.100.9", 1)) as owner,
+    ):
+        _bootstrap(owner)
+        for _ in range(6):
+            refused = attacker.post(
+                "/api/v1/auth/login", json={"email": "ada@acme.com", "password": "guess"}
+            )
+        assert refused.status_code == 429
+        # The owner, on another IP, is not locked out by the attacker.
+        ok = owner.post("/api/v1/auth/login", json={"email": "ada@acme.com", "password": PASSWORD})
+        assert ok.status_code == 200
+
+
+def test_failed_key_and_session_auth_get_429_with_retry_after(services: ApiServices) -> None:
+    repos = services.repositories
+    limited = replace(
+        services, auth=AuthService(repos, AuthPolicy(auth_failure_limit_per_ip=2)), worker=None
+    )
+    app = create_app(limited)
+    org = repos.organizations.create(Organization(name="Acme"))
+    key = limited.auth.issue_key(org)
+    wrong = {"X-API-Key": key.raw_key[:-4] + "xxxx"}
+    with (
+        TestClient(app, client=("203.0.113.5", 1)) as attacker,
+        TestClient(app, client=("198.51.100.9", 1)) as other,
+    ):
+        assert attacker.get("/api/v1/datasets", headers=wrong).status_code == 401
+        bad_session = {"Authorization": "Bearer ddl_sess_nope"}
+        assert attacker.get("/api/v1/datasets", headers=bad_session).status_code == 401
+        with patch("dndlabs.auth.service.verify_key") as verify:
+            refused = attacker.get("/api/v1/datasets", headers=wrong)
+        verify.assert_not_called()  # refused before the Argon2 verification
+        assert refused.status_code == 429
+        assert refused.json() == {"detail": "too many attempts; try again later"}
+        assert 0 < int(refused.headers["Retry-After"]) <= 900
+        valid = {"X-API-Key": key.raw_key}
+        assert other.get("/api/v1/datasets", headers=valid).status_code == 200
 
 
 def test_change_password(client: TestClient) -> None:

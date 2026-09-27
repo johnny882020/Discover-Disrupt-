@@ -159,8 +159,6 @@ class UserCredentials(_Contract):
 
     user: User
     password_hash: str
-    failed_login_count: int = 0
-    locked_until: datetime | None = None
 
 
 class UserSession(_Contract):

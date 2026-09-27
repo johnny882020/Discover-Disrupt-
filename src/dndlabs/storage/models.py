@@ -20,7 +20,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    ARRAY,
     JSON,
     DateTime,
     Float,
@@ -71,19 +70,6 @@ class GUID(TypeDecorator[uuid.UUID]):
         return value if isinstance(value, uuid.UUID) else uuid.UUID(value)
 
 
-class StringArray(TypeDecorator[list[str]]):
-    """String-array column that's native on Postgres and JSON-backed on SQLite."""
-
-    impl = JSON
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect: Any) -> Any:
-        """Use the native ARRAY type on Postgres, JSON elsewhere."""
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(ARRAY(String()))
-        return dialect.type_descriptor(JSON())
-
-
 class OrganizationRow(Base):
     """A customer organization (tenant)."""
 
@@ -129,8 +115,21 @@ class UserRow(Base):
     role: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    failed_login_count: Mapped[int] = mapped_column(Integer, default=0)
-    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RateLimitRow(Base):
+    """One brute-force counter: a bucket's count in its current fixed window."""
+
+    __tablename__ = "rate_limits"
+
+    # "<kind>:<sha256 hex>[:ip:<sha256 hex>]" (see auth/ratelimit.py): digests
+    # only, never a raw IP or email. One row per bucket, reset in place when a
+    # new window starts, so the table holds at most one row per active bucket.
+    bucket: Mapped[str] = mapped_column(String(160), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    # Indexed for the expired-counter sweep (delete_expired).
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class UserSessionRow(Base):

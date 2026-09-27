@@ -169,3 +169,19 @@ def test_admin_secret_has_no_default_and_a_minimum_length() -> None:
 def test_request_limit_must_exceed_upload_limit() -> None:
     with pytest.raises(ValueError):
         Settings(_env_file=None, upload_max_bytes=2048, request_max_bytes=2048)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("rate_limit_window_seconds", 59),
+        ("rate_limit_window_seconds", 86_401),
+        ("signin_limit_per_ip", 0),
+        ("signin_limit_per_email_and_ip", 0),
+        ("signin_limit_per_email", 0),
+        ("auth_failure_limit_per_ip", 0),
+    ],
+)
+def test_brute_force_limits_cannot_be_disabled_or_unbounded(name: str, value: int) -> None:
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, **{name: value})  # type: ignore[arg-type]

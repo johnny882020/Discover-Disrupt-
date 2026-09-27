@@ -171,6 +171,80 @@ def test_filter_records_by_molecular_weight(repos: Repositories) -> None:
     assert [r.source_record_id for r in result] == ["2"]
 
 
+def _stored_dataset(repos: Repositories, org: Organization, keys: list[str]) -> uuid.UUID:
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    records = [_record(dataset_id, key, str(n)) for n, key in enumerate(keys)]
+    repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="d",
+            source=SourceType.PUBCHEM,
+            record_count=len(records),
+        ),
+        records,
+    )
+    return dataset_id
+
+
+def test_filter_records_pages_in_a_stable_order(repos: Repositories) -> None:
+    org = _org(repos)
+    # Inserted out of order, so insertion order cannot pass for a sort.
+    keys = [letter * 27 for letter in "DBEAC"]
+    dataset_id = _stored_dataset(repos, org, keys)
+
+    def page(offset: int) -> list[str | None]:
+        found = repos.datasets.filter_records(
+            org.id, dataset_id, DatasetFilter(limit=2, offset=offset)
+        )
+        return [r.record_key for r in found]
+
+    pages = [page(0), page(2), page(4)]
+    assert [key for keys_ in pages for key in keys_] == sorted(keys)
+    assert page(2) == page(2)
+
+
+def test_enrichments_for_a_dataset_bind_no_per_record_parameters() -> None:
+    from sqlalchemy import event
+
+    from dndlabs.storage.database import create_schema
+
+    engine = create_db_engine("sqlite:///:memory:")
+    create_schema(engine)
+    repos = build_sql_repositories(engine)
+    org = _org(repos)
+    keys = [f"{n:027d}" for n in range(30)]
+    dataset_id = _stored_dataset(repos, org, keys)
+    other = _stored_dataset(repos, org, ["Z" * 27])
+    stored = repos.datasets.get(org.id, dataset_id).records
+    repos.enrichments.save_many(
+        org.id, [EnrichmentResult(record_id=r.id, status="skipped_no_key") for r in stored]
+    )
+    other_record = repos.datasets.get(org.id, other).records[0]
+    repos.enrichments.save_many(
+        org.id, [EnrichmentResult(record_id=other_record.id, status="skipped_no_key")]
+    )
+
+    params: list[int] = []
+
+    def count(_c: object, _cur: object, _stmt: str, parameters: object, *_: object) -> None:
+        params.append(len(parameters) if isinstance(parameters, tuple | list | dict) else 0)
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        results = repos.enrichments.get_for_dataset(org.id, dataset_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert {r.record_id for r in results} == {r.id for r in stored}
+    # The dataset's record ids are resolved in SQL (a subquery), so the
+    # query's parameters do not grow with the dataset (PostgreSQL caps a
+    # statement at 65,535 parameters).
+    assert params and max(params) < 5
+    assert repos.enrichments.get_for_dataset(uuid.uuid4(), dataset_id) == []
+
+
 def test_delete_org_data_removes_everything(repos: Repositories) -> None:
     org = _org(repos)
     run = repos.runs.create(_run(org.id))

@@ -124,6 +124,7 @@ def build_container(
                 batch_size=settings.pubchem_batch_size,
                 max_retries=settings.pubchem_max_retries,
                 backoff_seconds=settings.pubchem_backoff_seconds,
+                min_interval_seconds=settings.pubchem_min_interval_seconds,
             ),
             ChemblConnector(
                 chembl_http,
@@ -148,6 +149,7 @@ def build_container(
             chembl_http,
             lookup_limit=settings.structure_lookup_limit,
             batch_size=settings.pubchem_batch_size,
+            min_interval_seconds=settings.pubchem_min_interval_seconds,
             retry=RetryPolicy(settings.pubchem_max_retries, settings.pubchem_backoff_seconds),
         ),
     )
@@ -186,8 +188,11 @@ def auth_policy(settings: Settings) -> AuthPolicy:
         session_ttl=timedelta(hours=settings.session_ttl_hours),
         invitation_ttl=timedelta(hours=settings.invitation_ttl_hours),
         password_reset_ttl=timedelta(hours=settings.password_reset_ttl_hours),
-        max_login_attempts=settings.login_max_attempts,
-        lockout=timedelta(minutes=settings.login_lockout_minutes),
+        rate_limit_window=timedelta(seconds=settings.rate_limit_window_seconds),
+        signin_limit_per_ip=settings.signin_limit_per_ip,
+        signin_limit_per_email_and_ip=settings.signin_limit_per_email_and_ip,
+        signin_limit_per_email=settings.signin_limit_per_email,
+        auth_failure_limit_per_ip=settings.auth_failure_limit_per_ip,
         password_min_length=settings.password_min_length,
         frontend_origin=settings.frontend_origin,
     )

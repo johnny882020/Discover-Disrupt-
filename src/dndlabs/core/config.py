@@ -48,9 +48,20 @@ class Settings(BaseSettings):
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
     invitation_ttl_hours: int = Field(default=72, ge=1, le=720)
     password_reset_ttl_hours: int = Field(default=24, ge=1, le=168)
-    login_max_attempts: int = Field(default=5, ge=1)
-    login_lockout_minutes: int = Field(default=15, ge=1)
     password_min_length: int = Field(default=12, ge=8, le=64)
+
+    #: Brute-force limits (docs/architecture.md#auth), counted per fixed
+    #: window in the database so they hold across workers, instances and
+    #: restarts. Sign-in counts attempts per client IP, per email and IP,
+    #: and per email across all IPs; a successful sign-in is not counted.
+    #: API-key and session authentication count failures per client IP.
+    #: Bounded so a misconfiguration can neither disable a limit (0) nor
+    #: make it meaningless.
+    rate_limit_window_seconds: int = Field(default=900, ge=60, le=86_400)
+    signin_limit_per_ip: int = Field(default=20, ge=1, le=10_000)
+    signin_limit_per_email_and_ip: int = Field(default=5, ge=1, le=1_000)
+    signin_limit_per_email: int = Field(default=50, ge=1, le=10_000)
+    auth_failure_limit_per_ip: int = Field(default=50, ge=1, le=10_000)
 
     # Uploads are held in memory and stored in the database, so both size
     # and row count are capped.

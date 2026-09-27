@@ -10,10 +10,10 @@ Two kinds of principal authenticate a request, both resolved to an
   invitation, choosing their own password; signing in exchanges the email
   and password for an opaque, expiring, revocable session token.
 
-See docs/architecture.md#auth.
+Brute force is limited per client IP and per email in database-backed
+fixed windows (:mod:`dndlabs.auth.ratelimit`). See docs/architecture.md#auth.
 """
 
-import math
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,6 +27,14 @@ from dndlabs.auth.passwords import (
     verify_against_dummy,
     verify_password,
 )
+from dndlabs.auth.ratelimit import (
+    RateLimiter,
+    Window,
+    auth_failure_bucket,
+    signin_email_bucket,
+    signin_email_ip_bucket,
+    signin_ip_bucket,
+)
 from dndlabs.auth.tokens import (
     INVITATION_TOKEN_PREFIX,
     SESSION_TOKEN_PREFIX,
@@ -34,8 +42,6 @@ from dndlabs.auth.tokens import (
     token_digest,
 )
 from dndlabs.core.exceptions import (
-    AccountLockedError,
-    AuthError,
     ConflictError,
     ForbiddenError,
     InvalidApiKeyError,
@@ -66,7 +72,8 @@ from dndlabs.core.schemas import (
 
 logger = get_logger(__name__)
 
-#: How many times ``issue_key`` retries after an (unlikely) prefix collision.
+#: How many times ``issue_key`` retries after a prefix collision (with 72
+#: random bits, even one is vanishingly unlikely).
 _KEY_ISSUE_ATTEMPTS = 5
 #: Expired sessions are kept this long (for audit) before housekeeping deletes them.
 _EXPIRED_SESSION_RETENTION = timedelta(days=30)
@@ -86,8 +93,14 @@ class AuthPolicy:
         session_ttl: Absolute lifetime of a sign-in session.
         invitation_ttl: How long an invitation can be redeemed.
         password_reset_ttl: How long a password-reset link can be redeemed.
-        max_login_attempts: Consecutive failed sign-ins that lock an account.
-        lockout: How long a lock lasts.
+        rate_limit_window: Length of a brute-force limit's fixed window.
+        signin_limit_per_ip: Sign-in attempts per window from one client IP.
+        signin_limit_per_email_and_ip: Sign-in attempts per window for one
+            email from one client IP.
+        signin_limit_per_email: Sign-in attempts per window for one email
+            from all IPs together.
+        auth_failure_limit_per_ip: Failed API-key or session-token
+            authentications per window from one client IP.
         password_min_length: Minimum password length.
         frontend_origin: Web app origin; invitation links point here.
         clock: Current-time source (injectable for tests).
@@ -96,8 +109,11 @@ class AuthPolicy:
     session_ttl: timedelta = timedelta(hours=12)
     invitation_ttl: timedelta = timedelta(hours=72)
     password_reset_ttl: timedelta = timedelta(hours=24)
-    max_login_attempts: int = 5
-    lockout: timedelta = timedelta(minutes=15)
+    rate_limit_window: timedelta = timedelta(minutes=15)
+    signin_limit_per_ip: int = 20
+    signin_limit_per_email_and_ip: int = 5
+    signin_limit_per_email: int = 50
+    auth_failure_limit_per_ip: int = 50
     password_min_length: int = 12
     frontend_origin: str = "http://localhost:5173"
     clock: Callable[[], datetime] = field(default=utcnow)
@@ -111,7 +127,7 @@ class AuthService:
 
         Args:
             repositories: Repository bundle (organizations, API keys, users,
-                sessions and invitations are used).
+                sessions, invitations and rate limits are used).
             policy: Authentication parameters; defaults to :class:`AuthPolicy`.
         """
         self._organizations = repositories.organizations
@@ -120,6 +136,9 @@ class AuthService:
         self._sessions = repositories.sessions
         self._invitations = repositories.invitations
         self._policy = policy or AuthPolicy()
+        self._limiter = RateLimiter(
+            repositories.rate_limits, self._policy.rate_limit_window, self._policy.clock
+        )
 
     # ------------------------------------------------------------------
     # API keys
@@ -135,35 +154,65 @@ class AuthService:
             The one-time reveal of the new key.
 
         Raises:
-            AuthError: If no unused lookup prefix could be generated.
+            ConflictError: If every attempt drew a prefix already in use
+                (409, safe to retry; never a 500).
         """
         for _ in range(_KEY_ISSUE_ATTEMPTS):
             raw_key, prefix = generate_key()
-            if self._api_keys.get_by_prefix(prefix) is None:
+            # No lookup first: the unique index decides, so a prefix taken
+            # by a concurrent issue between a check and the insert is caught
+            # the same way as any other collision.
+            try:
                 record = self._api_keys.create(org.id, prefix, hash_key(raw_key))
-                return ApiKeyCreated(id=record.id, org_id=org.id, raw_key=raw_key, prefix=prefix)
-        raise AuthError("could not generate a unique API key prefix")
+            except ConflictError:
+                logger.warning("api_key_prefix_collision", extra={"org_id": str(org.id)})
+                continue
+            return ApiKeyCreated(id=record.id, org_id=org.id, raw_key=raw_key, prefix=prefix)
+        raise ConflictError("could not issue an API key; try again")
 
-    def resolve_api_key(self, raw_key: str) -> OrgContext:
+    def resolve_api_key(self, raw_key: str, client_ip: str) -> OrgContext:
         """Authenticate a raw API key and resolve its org context.
+
+        Failed attempts are counted per client IP. Once an IP reaches
+        ``auth_failure_limit_per_ip`` in a window, a key with a known prefix
+        is refused before its Argon2 hash is verified, so failures cannot
+        force unbounded 64 MiB hashes. That refuses a valid key sent from
+        the same IP too, until the window ends — telling it apart would take
+        the very hash the limit exists to bound. A valid key never counts
+        against the limit.
 
         Args:
             raw_key: The key presented in the ``X-API-Key`` header.
+            client_ip: The client's IP address.
 
         Returns:
             The authenticated context (``admin`` role).
 
         Raises:
             InvalidApiKeyError: If the key is missing, unknown, malformed or revoked.
+            RateLimitedError: If the client IP has too many recent failures.
         """
         if not raw_key:
             raise InvalidApiKeyError("missing API key")
+        window = self._limiter.window()
+        failures = auth_failure_bucket(client_ip)
         prefix = key_prefix(raw_key)
         record = self._api_keys.get_by_prefix(prefix)
         stored_hash = self._api_keys.get_hash(prefix) if record else None
+        if record is None or stored_hash is None:
+            # No hash is verified for an unknown prefix, so there is nothing
+            # to protect before counting the failure.
+            self._authentication_failed(failures, window)
+            raise InvalidApiKeyError("invalid API key")
+        # A read, not a hit: a valid key must not cost a write or count. The
+        # check-then-count race only lets requests already in flight through,
+        # so Argon2 work stays bounded by the limit plus the server's
+        # concurrency per window.
+        self._limiter.check(failures, self._policy.auth_failure_limit_per_ip, window)
         # Revocation is checked only after the hash matches, so "revoked" is
-        # only ever told to a holder of the real key.
-        if record is None or stored_hash is None or not verify_key(raw_key, stored_hash):
+        # only ever told to a holder of the real key (and is not counted).
+        if not verify_key(raw_key, stored_hash):
+            self._authentication_failed(failures, window)
             raise InvalidApiKeyError("invalid API key")
         if record.revoked_at is not None:
             raise InvalidApiKeyError("API key has been revoked")
@@ -195,82 +244,115 @@ class AuthService:
     # Sessions
     # ------------------------------------------------------------------
 
-    def login(self, email: str, password: str) -> SessionCreated:
+    def login(self, email: str, password: str, client_ip: str) -> SessionCreated:
         """Sign a user in with their email and password.
 
-        Unknown emails and wrong passwords fail identically, and unknown
-        emails still pay for one hash verification, so neither the message
-        nor the timing reveals whether an account exists.
+        Nothing reveals whether an account exists: unknown emails and wrong
+        passwords fail with the same message, unknown emails still pay for
+        one hash verification (same timing), and the limits below count
+        attempts per email whether or not it has an account, so both reach
+        ``429`` after the same number of attempts.
+
+        Every attempt is counted, before any lookup or hash, in three
+        buckets: the client IP (credential stuffing across many emails),
+        the email from this IP, and the email from all IPs (guessing spread
+        over many IPs). A successful sign-in is taken back out, so only
+        failures accumulate.
 
         Args:
             email: The account's email.
             password: The account's password.
+            client_ip: The client's IP address.
 
         Returns:
             A new session.
 
         Raises:
             InvalidCredentialsError: If the email or password is wrong.
-            AccountLockedError: If the account is locked after repeated failures.
+            RateLimitedError: If a sign-in limit is reached; even the right
+                password is refused, and nothing is verified.
         """
-        now = self._policy.clock()
-        credentials = self._users.get_credentials(normalize_email(email))
+        email = normalize_email(email)
+        window = self._limiter.window()
+        # Housekeeping piggybacks on sign-in; there is no separate sweeper.
+        self._limiter.purge_expired(window)
+        ip_bucket = signin_ip_bucket(client_ip)
+        email_bucket = signin_email_bucket(email)
+        # Lockout denial of service: someone who knows an email could keep
+        # it refused by failing on purpose. The per-(email, IP) bucket is the
+        # tight one (5 attempts by default), and it only refuses that IP, so
+        # one attacker cannot lock the owner out. The
+        # per-email bucket, checked last so attempts refused per IP never
+        # reach it, is looser: it bounds guessing distributed over many IPs,
+        # at the price that an attacker with enough IPs (limit / per-IP
+        # limit, 10 by default) can still exhaust it for the window.
+        # Counting before verifying bounds Argon2 work per window, even
+        # for requests sent concurrently.
+        self._limiter.hit(ip_bucket, self._policy.signin_limit_per_ip, window)
+        self._limiter.hit(
+            signin_email_ip_bucket(email, client_ip),
+            self._policy.signin_limit_per_email_and_ip,
+            window,
+        )
+        self._limiter.hit(email_bucket, self._policy.signin_limit_per_email, window)
+
+        credentials = self._users.get_credentials(email)
         if credentials is None:
             verify_against_dummy(password)
             raise InvalidCredentialsError(_INVALID_CREDENTIALS)
         user = credentials.user
-        # The lock is checked before the password, so while locked even the
-        # right password is refused and attempts are neither verified nor
-        # counted: guessing cannot continue through a lock.
-        if credentials.locked_until is not None and credentials.locked_until > now:
-            retry_after = math.ceil((credentials.locked_until - now).total_seconds())
-            logger.warning("login_refused_locked", extra={"user_id": str(user.id)})
-            raise AccountLockedError(
-                "too many failed sign-in attempts; try again later", retry_after
-            )
         if not verify_password(password, credentials.password_hash):
-            self._users.record_login_failure(
-                user.id, self._policy.max_login_attempts, now + self._policy.lockout
-            )
             logger.info("login_failed", extra={"user_id": str(user.id)})
             raise InvalidCredentialsError(_INVALID_CREDENTIALS)
 
-        self._users.record_login_success(user.id)
+        # Only the password's holder gets here, so this reveals nothing. The
+        # IP's attempt is refunded (a shared office IP is not limited by its
+        # successful sign-ins), and the email's counters are cleared, so the
+        # owner's own earlier typos do not linger into their next sign-in.
+        self._limiter.refund(ip_bucket, window)
+        self._limiter.clear(email_bucket)
         # The plaintext is only available here, at a successful sign-in.
         if needs_rehash(credentials.password_hash):
             self._users.set_password(user.org_id, user.id, hash_password(password))
-        # Housekeeping piggybacks on sign-in; there is no separate sweeper.
-        self._sessions.delete_expired(now - _EXPIRED_SESSION_RETENTION)
+        self._sessions.delete_expired(window.now - _EXPIRED_SESSION_RETENTION)
         logger.info("login_succeeded", extra={"user_id": str(user.id)})
         return self._start_session(user)
 
-    def resolve_session(self, token: str) -> OrgContext:
+    def resolve_session(self, token: str, client_ip: str) -> OrgContext:
         """Authenticate a session token and resolve its org context.
+
+        Failures are counted per client IP, like API-key failures. A valid
+        token is never refused: checking one costs a SHA-256 and an indexed
+        lookup, not an Argon2 hash, so there is nothing to protect by
+        refusing it early.
 
         Args:
             token: The bearer token presented in ``Authorization``.
+            client_ip: The client's IP address.
 
         Returns:
             The authenticated context, with the user's role.
 
         Raises:
             NotAuthenticatedError: If the token is unknown, expired or revoked.
+            RateLimitedError: If the client IP has too many recent failures.
         """
+        window = self._limiter.window()
+        failures = auth_failure_bucket(client_ip)
         if not token.startswith(SESSION_TOKEN_PREFIX):
+            self._authentication_failed(failures, window)
             raise NotAuthenticatedError(_INVALID_SESSION)
         # Looked up by digest (see auth.tokens): the raw token is never stored
         # or compared, so equality-match timing reveals nothing usable.
         session = self._sessions.get_by_token_hash(token_digest(token))
-        if (
-            session is None
-            or session.revoked_at is not None
-            or session.expires_at <= self._policy.clock()
-        ):
+        if session is None or session.revoked_at is not None or session.expires_at <= window.now:
+            self._authentication_failed(failures, window)
             raise NotAuthenticatedError(_INVALID_SESSION)
         try:
             user = self._users.get(session.org_id, session.user_id).user
             org = self._organizations.get(session.org_id)
         except NotFoundError as exc:  # the account was removed after sign-in
+            self._authentication_failed(failures, window)
             raise NotAuthenticatedError(_INVALID_SESSION) from exc
         return OrgContext(
             org_id=org.id,
@@ -572,12 +654,24 @@ class AuthService:
         reset = self._redeemable_invitation(token, InvitationPurpose.PASSWORD_RESET)
         check_password_policy(password, reset.email, self._policy.password_min_length)
         user = self._invitations.redeem_password_reset(reset, hash_password(password))
+        # Lifts the email's sign-in limits (every IP), so a user refused
+        # after failed attempts can sign in with the new password at once.
+        self._limiter.clear(signin_email_bucket(user.email))
         logger.info("password_reset", extra={"user_id": str(user.id)})
         return self._start_session(user)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _authentication_failed(self, bucket: str, window: Window) -> None:
+        """Count a failed API-key or session authentication from a client IP.
+
+        Raises:
+            RateLimitedError: If this failure exceeds the per-IP limit (the
+                caller raises its 401 otherwise).
+        """
+        self._limiter.hit(bucket, self._policy.auth_failure_limit_per_ip, window)
 
     @staticmethod
     def _require_admin(ctx: OrgContext) -> None:

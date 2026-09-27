@@ -123,3 +123,47 @@ def test_ping_without_an_expected_revision_accepts_a_create_all_schema() -> None
     SqlOrganizationRepository(SessionFactory(engine)).ping()
     with pytest.raises(StorageError, match="alembic_version"):
         SqlOrganizationRepository(SessionFactory(engine), HEAD_REVISION).ping()
+
+
+def test_0009_adds_rate_limits_and_drops_the_account_lock_reversibly(tmp_path: Path) -> None:
+    url = f"sqlite:///{tmp_path / 'r.db'}"
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "0008")
+    engine = create_db_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO organizations (id, name, created_at, is_active) "
+                "VALUES ('00000000-0000-0000-0000-00000000000a', 'A', '2026-01-01', 1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO users (id, org_id, email, password_hash, role, created_at, "
+                "password_changed_at, failed_login_count, locked_until) VALUES "
+                "('00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-00000000000a', "
+                "'ada@acme.com', 'h', 'admin', '2026-01-01', '2026-01-01', 3, '2030-01-01')"
+            )
+        )
+
+    command.upgrade(config, "head")
+    inspector = inspect(engine)
+    assert "rate_limits" in inspector.get_table_names()
+    assert {"failed_login_count", "locked_until"}.isdisjoint(
+        c["name"] for c in inspector.get_columns("users")
+    )
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT email FROM users")).scalar_one() == "ada@acme.com"
+
+    command.downgrade(config, "0008")
+    inspector = inspect(engine)
+    assert "rate_limits" not in inspector.get_table_names()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT failed_login_count, locked_until FROM users")).one() == (
+            0,
+            None,
+        )
+    command.upgrade(config, "head")
+    engine.dispose()

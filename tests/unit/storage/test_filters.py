@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from dndlabs.core.schemas import DatasetFilter, SourceType
-from dndlabs.filtering.query import build_predicate
 from dndlabs.storage.database import create_db_engine, create_schema
+from dndlabs.storage.filters import apply_filters
 from dndlabs.storage.models import DatasetRow, NormalizedRecordRow, OrganizationRow, RunRow
 from dndlabs.storage.repositories import SessionFactory
 
@@ -57,7 +57,7 @@ def _row(session: object, org_id: uuid.UUID, dataset_id: uuid.UUID, **kwargs: ob
     session.add(NormalizedRecordRow(**defaults))  # type: ignore[attr-defined]
 
 
-def test_build_predicate_filters_by_all_fields() -> None:
+def test_apply_filters_filters_by_all_fields() -> None:
     engine = create_db_engine("sqlite:///:memory:")
     create_schema(engine)
     sessions = SessionFactory(engine)
@@ -88,30 +88,22 @@ def test_build_predicate_filters_by_all_fields() -> None:
     with sessions.transaction() as session:
         stmt = select(NormalizedRecordRow).where(NormalizedRecordRow.dataset_id == dataset_id)
 
+        results = session.scalars(apply_filters(stmt, DatasetFilter(mw_min=100))).all()
+        assert [r.source_record_id for r in results] == ["heavy"]
+
+        results = session.scalars(apply_filters(stmt, DatasetFilter(mw_max=100))).all()
+        assert [r.source_record_id for r in results] == ["light"]
+
+        results = session.scalars(apply_filters(stmt, DatasetFilter(target="EGFR"))).all()
+        assert [r.source_record_id for r in results] == ["light"]
+
         results = session.scalars(
-            build_predicate(stmt, NormalizedRecordRow, DatasetFilter(mw_min=100))
+            apply_filters(stmt, DatasetFilter(source=SourceType.PUBCHEM))
         ).all()
         assert [r.source_record_id for r in results] == ["heavy"]
 
         results = session.scalars(
-            build_predicate(stmt, NormalizedRecordRow, DatasetFilter(mw_max=100))
-        ).all()
-        assert [r.source_record_id for r in results] == ["light"]
-
-        results = session.scalars(
-            build_predicate(stmt, NormalizedRecordRow, DatasetFilter(target="EGFR"))
-        ).all()
-        assert [r.source_record_id for r in results] == ["light"]
-
-        results = session.scalars(
-            build_predicate(stmt, NormalizedRecordRow, DatasetFilter(source=SourceType.PUBCHEM))
-        ).all()
-        assert [r.source_record_id for r in results] == ["heavy"]
-
-        results = session.scalars(
-            build_predicate(
-                stmt, NormalizedRecordRow, DatasetFilter(activity_min_nm=100, activity_max_nm=10000)
-            )
+            apply_filters(stmt, DatasetFilter(activity_min_nm=100, activity_max_nm=10000))
         ).all()
         assert [r.source_record_id for r in results] == ["heavy"]
 
@@ -127,7 +119,4 @@ def test_no_filters_returns_everything() -> None:
         _row(session, org_id, dataset_id, source_record_id="b")
     with sessions.transaction() as session:
         stmt = select(NormalizedRecordRow).where(NormalizedRecordRow.dataset_id == dataset_id)
-        assert (
-            len(session.scalars(build_predicate(stmt, NormalizedRecordRow, DatasetFilter())).all())
-            == 2
-        )
+        assert len(session.scalars(apply_filters(stmt, DatasetFilter())).all()) == 2
