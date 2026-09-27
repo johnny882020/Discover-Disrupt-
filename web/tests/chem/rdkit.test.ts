@@ -25,6 +25,15 @@ describe("RDKit.js depiction", () => {
     expect(depictSvg(rdkit, "C1CC(", SIZE)).toBeNull();
   });
 
+  it("highlights the requested atoms", async () => {
+    const rdkit = await loadRDKit();
+    const plain = depictSvg(rdkit, "Nc1ccccc1", SIZE) ?? "";
+    const flagged = depictSvg(rdkit, "Nc1ccccc1", SIZE, [0, 1]) ?? "";
+    // The highlight colour (0.93, 0.55, 0.55) as RDKit writes it.
+    expect(flagged.toUpperCase()).toContain("#ED8C8C");
+    expect(plain.toUpperCase()).not.toContain("#ED8C8C");
+  });
+
   it("serves repeated depictions from the cache", async () => {
     const rdkit = await loadRDKit();
     const getMol = vi.spyOn(rdkit, "get_mol");

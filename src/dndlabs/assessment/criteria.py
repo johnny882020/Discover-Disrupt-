@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 
 from dndlabs.core.schemas import (
     ACTIVE_CLASSES,
+    AlertFamily,
     CompoundProfile,
     Criterion,
     CriterionShare,
@@ -22,6 +23,7 @@ from dndlabs.core.schemas import (
     DatasetAssessment,
     NormalizedRecord,
     PotencyClass,
+    StoredFeatures,
 )
 
 #: Upper bounds (nM, exclusive) of each potency class, most potent first.
@@ -40,6 +42,8 @@ CRITERION_LABELS: dict[Criterion, str] = {
     Criterion.ROTATABLE_BONDS: "Rotatable bonds < 10",
     Criterion.TPSA: "Polar surface area < 140 Å²",
     Criterion.TPSA_CNS: "Polar surface area < 90 Å² (CNS)",
+    Criterion.NO_PAINS: "No PAINS alerts",
+    Criterion.NO_REACTIVE_METABOLITES: "No reactive-metabolite alerts",
 }
 
 #: Descriptors a profile needs (names as the featurizer stores them).
@@ -76,22 +80,26 @@ def potency_class(value_nm: float | None, relation: str | None) -> PotencyClass:
     return PotencyClass.INACTIVE if relation == "=" else PotencyClass.UNKNOWN
 
 
-def compound_profile(
-    record: NormalizedRecord, descriptors: Mapping[str, float] | None
-) -> CompoundProfile:
-    """Build a compound's profile from its computed descriptors.
+def compound_profile(record: NormalizedRecord, features: StoredFeatures | None) -> CompoundProfile:
+    """Build a compound's profile from its computed descriptors and alerts.
 
     Args:
         record: The normalized record (for its potency).
-        descriptors: Its descriptors, as the featurizer stores them, or
-            ``None`` when none were computed.
+        features: Its stored descriptors and alerts, or ``None`` when none
+            were computed.
 
     Returns:
-        The profile; property criteria are left empty without descriptors.
+        The profile; criteria are left empty without complete features.
     """
     klass = potency_class(record.activity_value_nm, record.activity_relation)
-    if descriptors is None or not descriptors.keys() >= REQUIRED_DESCRIPTORS:
+    if (
+        features is None
+        or features.alerts is None
+        or not features.descriptors.keys() >= REQUIRED_DESCRIPTORS
+    ):
         return CompoundProfile(record_id=record.id, potency_class=klass)
+    descriptors, alerts = features.descriptors, features.alerts
+    families = {alert.family for alert in alerts}
     mw = descriptors["molecular_weight"]
     clogp = descriptors["logp"]
     tpsa = descriptors["tpsa"]
@@ -110,6 +118,7 @@ def compound_profile(
         rings=int(descriptors["num_rings"]) if "num_rings" in descriptors else None,
         qed=descriptors.get("qed"),
         lipinski_violations=violations,
+        alerts=alerts,
         potency_class=klass,
         criteria={
             Criterion.MW: mw < 500,
@@ -118,6 +127,8 @@ def compound_profile(
             Criterion.ROTATABLE_BONDS: rotatable < 10,
             Criterion.TPSA: tpsa < 140,
             Criterion.TPSA_CNS: tpsa < 90,
+            Criterion.NO_PAINS: AlertFamily.PAINS not in families,
+            Criterion.NO_REACTIVE_METABOLITES: AlertFamily.REACTIVE_METABOLITE not in families,
         },
     )
 
@@ -148,20 +159,20 @@ def most_potent(
 def assess(
     dataset_id: uuid.UUID,
     records: Sequence[NormalizedRecord],
-    descriptors: Mapping[uuid.UUID, Mapping[str, float]],
+    features: Mapping[uuid.UUID, StoredFeatures],
 ) -> DatasetAssessment:
     """Assess a dataset against the hit-to-lead criteria.
 
     Args:
         dataset_id: The dataset.
         records: Its records.
-        descriptors: Computed descriptors by record id.
+        features: Stored descriptors and alerts by record id.
 
     Returns:
         Potency classes, the criteria over all compounds, the actives and the
         most potent compounds, and every compound's profile.
     """
-    profiles = [compound_profile(r, descriptors.get(r.id)) for r in records]
+    profiles = [compound_profile(r, features.get(r.id)) for r in records]
     by_id = {p.record_id: p for p in profiles}
     actives = [p for p in profiles if p.potency_class in ACTIVE_CLASSES]
     top = [by_id[r.id] for r in most_potent(records)]

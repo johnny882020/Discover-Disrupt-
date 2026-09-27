@@ -12,6 +12,7 @@ from dndlabs.core.schemas import (
     PipelineRun,
     SourceSpec,
     SourceType,
+    StoredFeatures,
 )
 from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
@@ -73,3 +74,18 @@ def test_other_orgs_cannot_assess_the_dataset() -> None:
     service, _, dataset_id, _ = _dataset(["CCO"])
     with pytest.raises(NotFoundError):
         service.assess(uuid.uuid4(), dataset_id)
+
+
+def test_vectors_without_alerts_get_them_computed(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, org_id, dataset_id, _ = _dataset(["O=C1C=CC(=O)C=C1"])
+    repos = service._repos
+    stored = repos.features.features_for
+
+    def before_alerts_existed(
+        org: uuid.UUID, ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, StoredFeatures]:
+        return {k: v.model_copy(update={"alerts": None}) for k, v in stored(org, ids).items()}
+
+    monkeypatch.setattr(repos.features, "features_for", before_alerts_existed)
+    [profile] = service.assess(org_id, dataset_id).profiles
+    assert {a.family.value for a in profile.alerts} >= {"pains", "reactive_metabolite"}

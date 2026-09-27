@@ -5,6 +5,7 @@ from rdkit.Chem import Descriptors, Lipinski, rdFingerprintGenerator, rdMolDescr
 
 from dndlabs.core.exceptions import ValidationError
 from dndlabs.core.schemas import FeatureVector, NormalizedRecord
+from dndlabs.preprocessing.alerts import AlertScanner
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
@@ -28,7 +29,7 @@ DESCRIPTOR_NAMES: tuple[str, ...] = tuple(_DESCRIPTORS)
 
 
 class RdkitFeaturizer:
-    """Computes RDKit descriptors and a Morgan (ECFP-style) fingerprint.
+    """Computes RDKit descriptors, structural alerts and a Morgan (ECFP-style) fingerprint.
 
     Attributes:
         radius: Morgan fingerprint radius.
@@ -45,9 +46,10 @@ class RdkitFeaturizer:
         self.radius = radius
         self.n_bits = n_bits
         self._generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+        self._alerts = AlertScanner()
 
     def featurize(self, record: NormalizedRecord) -> FeatureVector:
-        """Compute descriptors and a fingerprint for one record.
+        """Compute descriptors, alerts and a fingerprint for one record.
 
         Args:
             record: A normalized record with a valid canonical SMILES.
@@ -69,6 +71,7 @@ class RdkitFeaturizer:
         return FeatureVector(
             record_id=record.id,
             descriptors=descriptors,
+            alerts=self._alerts.scan(mol),
             fingerprint_bits=bits,
             fingerprint_radius=self.radius,
             fingerprint_n_bits=self.n_bits,

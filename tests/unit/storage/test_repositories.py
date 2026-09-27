@@ -9,6 +9,7 @@ from tests.upload_repository_checks import UPLOAD_CHECKS
 from dndlabs.core.exceptions import NotFoundError, StorageError
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import (
+    AlertFamily,
     Dataset,
     DatasetFilter,
     EnrichmentResult,
@@ -22,6 +23,7 @@ from dndlabs.core.schemas import (
     Severity,
     SourceSpec,
     SourceType,
+    StructuralAlert,
     ValidationIssue,
 )
 from dndlabs.storage.database import create_db_engine
@@ -292,7 +294,7 @@ def test_upload_repositories(repos: Repositories, check: Callable[[Repositories]
     check(repos)
 
 
-def test_descriptors_for_returns_only_the_orgs_vectors(
+def test_features_for_returns_only_the_orgs_vectors(
     repos: Repositories, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import dndlabs.storage.repositories as sql
@@ -313,16 +315,18 @@ def test_descriptors_for_returns_only_the_orgs_vectors(
         ),
         records,
     )
+    alert = StructuralAlert(family=AlertFamily.PAINS, name="quinone_A(370)", atoms=[0, 1])
     repos.features.save_many(
         org.id,
         [
-            FeatureVector(record_id=r.id, descriptors={"logp": float(i)})
-            for i, r in enumerate(records)
+            FeatureVector(record_id=records[0].id, descriptors={"logp": 0.0}, alerts=[alert]),
+            FeatureVector(record_id=records[1].id, descriptors={"logp": 1.0}),
         ],
     )
     ids = [r.id for r in records] + [uuid.uuid4()]
-    assert repos.features.descriptors_for(org.id, ids) == {
-        records[0].id: {"logp": 0.0},
-        records[1].id: {"logp": 1.0},
-    }
-    assert repos.features.descriptors_for(uuid.uuid4(), ids) == {}
+    found = repos.features.features_for(org.id, ids)
+    assert set(found) == {records[0].id, records[1].id}
+    assert found[records[0].id].descriptors == {"logp": 0.0}
+    assert found[records[0].id].alerts == [alert]
+    assert found[records[1].id].alerts == []
+    assert repos.features.features_for(uuid.uuid4(), ids) == {}

@@ -293,6 +293,8 @@ class FeatureVectorRow(Base):
         GUID(), ForeignKey("normalized_records.id", ondelete="CASCADE"), unique=True
     )
     descriptors: Mapped[dict[str, Any]] = mapped_column(JSON)
+    # Structural alerts; NULL for vectors stored before alerts were computed.
+    alerts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     fingerprint_bits: Mapped[list[int]] = mapped_column(JSON)
     fingerprint_radius: Mapped[int] = mapped_column(Integer)
     fingerprint_n_bits: Mapped[int] = mapped_column(Integer)

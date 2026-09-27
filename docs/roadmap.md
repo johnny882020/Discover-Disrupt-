@@ -31,7 +31,7 @@ and ADME/Tox. Line numbers below are the guide's own.
 | Hit/lead properties (32–38, 55–61) | MW < 500, clogP < 5, Lipinski, rotatable bonds < 10, PSA < 140 Å² (< 90 Å² for CNS), for the majority and for the 5 most potent compounds | Done: shown per compound and summarized over all compounds, actives and the 5 most potent | R2 |
 | Potency (21, 24–25, 41, 44–49) | Hit: IC50/Ki < 10 µM; lead: < 1 µM, ideally < 100 nM; biochemical and cell-based assays judged separately; more than 10 actives | Potency classes and the count of actives done; no assay format yet | R2 |
 | Assays and controls (14–15, 24–25, 44, 47) | Named assays (binding, competition, selectivity) with positive and negative controls | No assay metadata | R2 |
-| Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | No structural alerts | R2 |
+| Reactive metabolites (37, 60) | No functional groups known to form reactive metabolites | Done: reactive-metabolite, PAINS and Brenk alerts, highlighted on the structure | R2 |
 | Novelty, SAR, series (28–31, 52–54) | Novel scaffold, SAR-amenable, pharmacophore, 1–2 series | None | R3 |
 | ADME/Tox (35, 58, 64–67, 77–92) | Solubility at pH 7.4, plasma protein binding, CYP inhibition, PXR, hERG, PAMPA, Caco-2, metabolic stability, cytotoxicity, micronucleus, AMES | None; one activity per record | R3: measured results plus ADMET-AI predictions |
 | PK (69–72, 95) | Cmax, Tmax, t½, AUC; single and multiple dose; rodent, then non-rodent | None | R3 |
@@ -103,8 +103,9 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
 - **Hit/lead criteria panel** *(done)*: the guide's thresholds per compound
   and over all compounds, the actives and the 5 most potent. Potency
   classes: hit < 10 µM, lead < 1 µM, optimized < 100 nM. Count of actives.
-- **Liabilities:** PAINS, Brenk and reactive-metabolite alerts, highlighted
-  on the structure; filters such as "hide PAINS".
+- **Liabilities** *(done)*: PAINS, Brenk and reactive-metabolite alerts,
+  highlighted on the structure; filters to hide PAINS and reactive-metabolite
+  alerts.
 - **Assay metadata:** assay format (biochemical / cell-based), readout and
   control flag as column roles, so potency is judged per assay format.
 - **Actionable quality report:** issues grouped by cause; bulk fixes (map

@@ -76,7 +76,8 @@ any feature vector or enrichment result, since both reference
 | `QualityReport` | Counts, `issues_by_rule`, `issues`, `pass_rate` for one run |
 | `DatasetFilter` | Record query filters (MW range, target, source, activity range, pagination) |
 | `FeatureVector` | RDKit descriptors + Morgan fingerprint for one record |
-| `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class, computed properties and criteria met; each criterion over all compounds, actives and the five most potent |
+| `PotencyClass` / `Criterion` / `CompoundProfile` / `CriterionShare` / `CriterionSummary` / `DatasetAssessment` | Hit/lead assessment: a compound's potency class, computed properties, alerts and criteria met; each criterion over all compounds, actives and the five most potent |
+| `AlertFamily` / `StructuralAlert` / `StoredFeatures` | A flagged substructure (PAINS, Brenk, reactive metabolite) with its matched atoms; a record's stored descriptors and alerts (`alerts` is `None` when stored before alerts existed) |
 | `EnrichmentRequest` / `GeneratedCandidate` / `EnrichmentResult` | One record submitted for GenMol enrichment, one generated analog, per-record outcome (`enriched` / `skipped_no_key` / `failed`) |
 | `PipelineRun` | `org_id`, `status`, `error`, `dataset_id`, timestamps |
 | `Dataset` / `DatasetWithRecords` | Stored dataset metadata, with or without records — both `org_id`-scoped |
@@ -285,7 +286,9 @@ the repository layer (`GET /datasets/{id}/records?mw_min=&target=&...`) —
 selection, distinct from validation's correctness checks.
 `preprocessing/featurize.py` computes RDKit descriptors (MW, LogP, TPSA,
 HBD/HBA, Lipinski's NH + OH and N + O counts, rotatable bonds, ring count,
-QED) and a Morgan fingerprint for every accepted record with a canonical
+QED), structural alerts (`preprocessing/alerts.py`: RDKit's PAINS and Brenk
+catalogs plus a tested reactive-metabolite set, each with its matched
+atoms) and a Morgan fingerprint for every accepted record with a canonical
 SMILES, stored in `feature_vectors`.
 
 ## Hit/lead assessment
@@ -295,9 +298,9 @@ SMILES, stored in `feature_vectors`.
 classes, per-compound profiles, and each criterion over all compounds, the
 actives and the five most potent (the groups a hit-to-lead review uses).
 `pipeline/assessment.py` (`AssessmentService`) loads a dataset and its
-descriptors (`FeatureRepository.descriptors_for`, org-scoped) and
-recomputes, in memory, descriptors missing from vectors stored before they
-were added. It serves `GET /datasets/{id}/assessment`, and the exporter
+stored features (`FeatureRepository.features_for`, org-scoped) and
+recomputes, in memory, descriptors or alerts missing from vectors stored
+before they were added. It serves `GET /datasets/{id}/assessment`, and the exporter
 writes the profiles' properties after the record fields.
 
 ## NVIDIA BioNeMo enrichment
@@ -364,7 +367,7 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0005`.
+Alembic head: `0006`.
 
 | Table | Key columns | Notes |
 |---|---|---|
@@ -377,7 +380,7 @@ Alembic head: `0005`.
 | `datasets` | `org_id`, `run_id` (unique), `record_count` | One per run |
 | `normalized_records` | `org_id`, `dataset_id`, `record_key`, all `NormalizedRecord` fields | Unique `(dataset_id, record_key)` |
 | `validation_issues` | `org_id`, `dataset_id`, `severity`, `rule`, `message` | |
-| `feature_vectors` | `org_id`, `record_id` (unique), `descriptors` (JSON), `fingerprint_bits` (JSON) | |
+| `feature_vectors` | `org_id`, `record_id` (unique), `descriptors` (JSON), `alerts` (JSON, nullable), `fingerprint_bits` (JSON) | `alerts` is NULL for vectors stored before revision `0006` |
 | `enrichment_results` | `org_id`, `record_id`, `status`, `candidates` (JSON) | |
 | `uploads` | `org_id`, `filename`, `format`, `size_bytes`, `sha256`, `data` (bytes) | Uploaded files; stored in the database because the web service's disk is ephemeral |
 | `mapping_templates` | `org_id`, `name`, `mapping` (JSON) | Unique `(org_id, name)` |
@@ -402,13 +405,14 @@ the stamp.
 | `0003` | Adds `users`, `user_sessions` and `user_invitations` (each only if absent, so a stamped `create_all` schema upgrades cleanly). Deletes the organization the removed shared-password login used (`00000000-0000-0000-0000-000000000001`) and everything it owned. |
 | `0004` | Adds `user_invitations.purpose` (existing rows become `join`) and `user_invitations.revoked_at`, for password-reset links and revocable invitations. |
 | `0005` | Adds `uploads` and `mapping_templates` (each only if absent). |
+| `0006` | Adds `feature_vectors.alerts` (nullable; existing rows keep NULL and get their alerts computed when read). |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
 own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`
-upgrades and downgrades, and the account and upload repositories'
-behaviour (`tests/account_repository_checks.py`,
+upgrades and downgrades, reading a vector stored before `0006`, and the
+account and upload repositories' behaviour (`tests/account_repository_checks.py`,
 `tests/upload_repository_checks.py`, shared by both dialects).
 
 ## Readiness vs. liveness
@@ -456,7 +460,9 @@ session token or an API key — in memory and `sessionStorage` (never
 **Datasets.** A dataset's page shows the hit/lead criteria
 (`assessment/HitLeadPanel.tsx`: potency classes, the count of actives, and
 each criterion over all compounds, actives and the five most potent) above
-its records, which carry their potency class and computed properties.
+its records, which carry their potency class, computed properties and
+alerts. PAINS and reactive-metabolite atoms are highlighted on each
+structure, and those compounds can be hidden.
 
 **Structures.** `design-system/MoleculeView.tsx` draws 2D structures in the
 browser with RDKit.js (RDKit compiled to WebAssembly, BSD-3). The module

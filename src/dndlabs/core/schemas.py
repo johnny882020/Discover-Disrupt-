@@ -567,14 +567,43 @@ class DatasetFilter(_Contract):
     offset: int = Field(default=0, ge=0)
 
 
+class AlertFamily(StrEnum):
+    """Source of a structural alert."""
+
+    PAINS = "pains"
+    BRENK = "brenk"
+    REACTIVE_METABOLITE = "reactive_metabolite"
+
+
+class StructuralAlert(_Contract):
+    """A substructure flagged as a liability, with the atoms it matched.
+
+    ``atoms`` index the atoms of the record's canonical SMILES as RDKit (and
+    RDKit.js) parse it, so a depiction can highlight them.
+    """
+
+    family: AlertFamily
+    name: str
+    atoms: list[int] = Field(default_factory=list)
+
+
 class FeatureVector(_Contract):
-    """RDKit-derived descriptors and fingerprint for one normalized record."""
+    """RDKit-derived descriptors, structural alerts and fingerprint for one record."""
 
     record_id: uuid.UUID
     descriptors: dict[str, float] = Field(default_factory=dict)
+    alerts: list[StructuralAlert] = Field(default_factory=list)
     fingerprint_bits: list[int] = Field(default_factory=list)
     fingerprint_radius: int = 2
     fingerprint_n_bits: int = 2048
+
+
+class StoredFeatures(_Contract):
+    """A record's stored descriptors and alerts (``None``: not yet computed)."""
+
+    record_id: uuid.UUID
+    descriptors: dict[str, float] = Field(default_factory=dict)
+    alerts: list[StructuralAlert] | None = None
 
 
 # --------------------------------------------------------------------------
@@ -690,6 +719,8 @@ class Criterion(StrEnum):
     ROTATABLE_BONDS = "rotatable_bonds_under_10"
     TPSA = "tpsa_under_140"
     TPSA_CNS = "tpsa_under_90"
+    NO_PAINS = "no_pains_alerts"
+    NO_REACTIVE_METABOLITES = "no_reactive_metabolite_alerts"
 
 
 class CompoundProfile(_Contract):
@@ -710,6 +741,7 @@ class CompoundProfile(_Contract):
     rings: int | None = None
     qed: float | None = None
     lipinski_violations: int | None = None
+    alerts: list[StructuralAlert] = Field(default_factory=list)
     potency_class: PotencyClass = PotencyClass.UNKNOWN
     criteria: dict[Criterion, bool] = Field(default_factory=dict)
 

@@ -142,6 +142,67 @@ def test_readiness_fails_until_the_newest_migration_applies(database_url: str) -
     _ping(database_url)
 
 
+def test_vectors_stored_before_0006_read_back_without_alerts(database_url: str) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0005")
+    org_id, run_id, dataset_id, record_id = (uuid.uuid4() for _ in range(4))
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO organizations (id, name, created_at, is_active) "
+                "VALUES (:o, 'A', now(), true)"
+            ),
+            {"o": org_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO pipeline_runs "
+                "(id, org_id, source, status, request_payload, created_at) "
+                "VALUES (:r, :o, 'csv', 'succeeded', '{}', now())"
+            ),
+            {"r": run_id, "o": org_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO datasets (id, org_id, run_id, name, source, record_count, created_at) "
+                "VALUES (:d, :o, :r, 'd', 'csv', 1, now())"
+            ),
+            {"d": dataset_id, "o": org_id, "r": run_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO normalized_records (id, org_id, dataset_id, record_key, source, "
+                "source_record_id, canonical_smiles) VALUES (:id, :o, :d, 'K', 'csv', '1', 'CCO')"
+            ),
+            {"id": record_id, "o": org_id, "d": dataset_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO feature_vectors (id, org_id, record_id, descriptors, "
+                "fingerprint_bits, fingerprint_radius, fingerprint_n_bits, created_at) "
+                "VALUES (:id, :o, :rec, '{\"logp\": 1.0}', '[]', 2, 2048, now())"
+            ),
+            {"id": uuid.uuid4(), "o": org_id, "rec": record_id},
+        )
+    engine.dispose()
+
+    run_migrations(database_url)
+
+    engine = create_db_engine(database_url)
+    try:
+        [stored] = (
+            build_sql_repositories(engine).features.features_for(org_id, [record_id]).values()
+        )
+    finally:
+        engine.dispose()
+    assert (stored.descriptors, stored.alerts) == ({"logp": 1.0}, None)
+    command.downgrade(config, "0005")
+    command.upgrade(config, "head")
+
+
 @pytest.mark.parametrize("check", ALL_CHECKS + UPLOAD_CHECKS, ids=lambda c: c.__name__)
 def test_account_repositories_on_postgres(database_url: str, check: Callable[..., None]) -> None:
     run_migrations(database_url)

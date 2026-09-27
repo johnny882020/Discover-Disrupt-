@@ -19,11 +19,18 @@ const SIZES: Record<"sm" | "md" | "lg", DepictionSize> = {
 interface MoleculeViewProps {
   smiles: string | null;
   size?: keyof typeof SIZES;
+  /** Atom indices to highlight (e.g. those a structural alert matched). */
+  highlightAtoms?: readonly number[];
 }
 
-export function MoleculeView({ smiles, size = "sm" }: MoleculeViewProps): React.JSX.Element {
+const NO_ATOMS: readonly number[] = [];
+
+export function MoleculeView({ smiles, size = "sm", highlightAtoms = NO_ATOMS }: MoleculeViewProps): React.JSX.Element {
   const dims = SIZES[size];
-  const [svg, setSvg] = useState<{ smiles: string; markup: string } | null>(null);
+  const [svg, setSvg] = useState<{ key: string; markup: string } | null>(null);
+  // A stable key, so a new array with the same atoms does not redraw.
+  const highlight = highlightAtoms.join(",");
+  const key = `${highlight}:${smiles ?? ""}`;
 
   useEffect(() => {
     if (!smiles) {
@@ -32,9 +39,10 @@ export function MoleculeView({ smiles, size = "sm" }: MoleculeViewProps): React.
     let cancelled = false;
     loadRDKit()
       .then((rdkit) => {
-        const markup = depictSvg(rdkit, smiles, dims);
+        const atoms = highlight ? highlight.split(",").map(Number) : [];
+        const markup = depictSvg(rdkit, smiles, dims, atoms);
         if (!cancelled && markup) {
-          setSvg({ smiles, markup });
+          setSvg({ key: `${highlight}:${smiles}`, markup });
         }
       })
       .catch(() => {
@@ -43,13 +51,13 @@ export function MoleculeView({ smiles, size = "sm" }: MoleculeViewProps): React.
     return () => {
       cancelled = true;
     };
-  }, [smiles, dims]);
+  }, [smiles, dims, highlight]);
 
   if (!smiles) {
     return <span className="text-xs text-ink/40 dark:text-paper/40">No structure</span>;
   }
 
-  if (svg?.smiles === smiles) {
+  if (svg?.key === key) {
     return (
       <img
         src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.markup)}`}

@@ -42,6 +42,7 @@ from dndlabs.core.schemas import (
     RunStatus,
     SourceSpec,
     SourceType,
+    StoredFeatures,
     Upload,
     UploadFormat,
     User,
@@ -1397,6 +1398,7 @@ class SqlFeatureRepository:
                     org_id=org_id,
                     record_id=v.record_id,
                     descriptors=v.descriptors,
+                    alerts=[a.model_dump(mode="json") for a in v.alerts],
                     fingerprint_bits=v.fingerprint_bits,
                     fingerprint_radius=v.fingerprint_radius,
                     fingerprint_n_bits=v.fingerprint_n_bits,
@@ -1406,29 +1408,38 @@ class SqlFeatureRepository:
             )
         return len(vectors)
 
-    def descriptors_for(
+    def features_for(
         self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
-    ) -> dict[uuid.UUID, dict[str, float]]:
-        """Return the stored descriptors of the given records.
+    ) -> dict[uuid.UUID, StoredFeatures]:
+        """Return the stored descriptors and alerts of the given records.
 
         Args:
             org_id: Owning organization.
             record_ids: The records.
 
         Returns:
-            Descriptors by record id, for the records that have a vector.
+            Stored features by record id, for the records that have a vector;
+            ``alerts`` is ``None`` for vectors stored before alerts existed.
         """
-        found: dict[uuid.UUID, dict[str, float]] = {}
+        found: dict[uuid.UUID, StoredFeatures] = {}
         ids = list(record_ids)
+        columns = (
+            FeatureVectorRow.record_id,
+            FeatureVectorRow.descriptors,
+            FeatureVectorRow.alerts,
+        )
         with self._sessions.transaction() as session:
             for start in range(0, len(ids), _IN_CHUNK):
                 rows = session.execute(
-                    select(FeatureVectorRow.record_id, FeatureVectorRow.descriptors).where(
+                    select(*columns).where(
                         FeatureVectorRow.org_id == org_id,
                         FeatureVectorRow.record_id.in_(ids[start : start + _IN_CHUNK]),
                     )
                 )
-                found.update({record_id: dict(values) for record_id, values in rows})
+                for record_id, descriptors, alerts in rows:
+                    found[record_id] = StoredFeatures.model_validate(
+                        {"record_id": record_id, "descriptors": descriptors, "alerts": alerts}
+                    )
         return found
 
 
