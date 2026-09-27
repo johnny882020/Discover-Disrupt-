@@ -290,3 +290,39 @@ def test_account_repositories(repos: Repositories, check: Callable[[Repositories
 @pytest.mark.parametrize("check", UPLOAD_CHECKS, ids=lambda c: c.__name__)
 def test_upload_repositories(repos: Repositories, check: Callable[[Repositories], None]) -> None:
     check(repos)
+
+
+def test_descriptors_for_returns_only_the_orgs_vectors(
+    repos: Repositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dndlabs.storage.repositories as sql
+
+    monkeypatch.setattr(sql, "_IN_CHUNK", 1)  # exercise chunked IN lists
+    org = _org(repos)
+    run = repos.runs.create(_run(org.id))
+    dataset_id = uuid.uuid4()
+    records = [_record(dataset_id, "A" * 27, "1"), _record(dataset_id, "B" * 27, "2")]
+    repos.datasets.create(
+        Dataset(
+            id=dataset_id,
+            org_id=org.id,
+            run_id=run.id,
+            name="demo",
+            source=SourceType.PUBCHEM,
+            record_count=2,
+        ),
+        records,
+    )
+    repos.features.save_many(
+        org.id,
+        [
+            FeatureVector(record_id=r.id, descriptors={"logp": float(i)})
+            for i, r in enumerate(records)
+        ],
+    )
+    ids = [r.id for r in records] + [uuid.uuid4()]
+    assert repos.features.descriptors_for(org.id, ids) == {
+        records[0].id: {"logp": 0.0},
+        records[1].id: {"logp": 1.0},
+    }
+    assert repos.features.descriptors_for(uuid.uuid4(), ids) == {}

@@ -1,14 +1,24 @@
-/** DatasetDetail: dataset metadata, its records, and links to reports/export. */
+/** DatasetDetail: dataset metadata, hit/lead criteria, its records, and links to reports/export. */
 import { Link, useParams } from "react-router-dom";
+import type { CompoundProfile } from "../api/types";
+import { HitLeadPanel } from "../assessment/HitLeadPanel";
+import { potencyInfo } from "../assessment/potency";
 import { Badge } from "../design-system/Badge";
 import { Card } from "../design-system/Card";
 import { MoleculeView } from "../design-system/MoleculeView";
 import { Table } from "../design-system/Table";
+import { useAssessment } from "../hooks/useAssessment";
 import { useDataset } from "../hooks/useDatasets";
+
+/** A computed value to `digits` decimals, or a dash when there is none. */
+function num(value: number | null | undefined, digits = 0): string {
+  return value === null || value === undefined ? "—" : value.toFixed(digits);
+}
 
 export function DatasetDetail(): React.JSX.Element {
   const { datasetId } = useParams<{ datasetId: string }>();
   const query = useDataset(datasetId);
+  const assessment = useAssessment(datasetId);
 
   if (query.isLoading) {
     return <p className="text-sm text-ink/60 dark:text-paper/60">Loading dataset…</p>;
@@ -27,6 +37,9 @@ export function DatasetDetail(): React.JSX.Element {
   }
 
   const { dataset, records } = query.data;
+  const profiles = new Map<string, CompoundProfile>(
+    (assessment.data?.profiles ?? []).map((profile) => [profile.record_id, profile]),
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -53,6 +66,13 @@ export function DatasetDetail(): React.JSX.Element {
           </Link>
         </div>
       </div>
+
+      {assessment.data && records.length > 0 ? <HitLeadPanel assessment={assessment.data} /> : null}
+      {assessment.isError ? (
+        <p role="alert" className="text-sm text-danger">
+          Could not assess this dataset: {assessment.error.message}
+        </p>
+      ) : null}
 
       <Card>
         <h2 className="mb-4 text-lg font-medium">Records</h2>
@@ -85,6 +105,31 @@ export function DatasetDetail(): React.JSX.Element {
                     r.activity_value_nm !== null
                       ? `${r.activity_relation ?? ""}${r.activity_value_nm}`
                       : "—",
+                },
+                {
+                  key: "potency",
+                  header: "Potency",
+                  cell: (r) => {
+                    const info = potencyInfo(profiles.get(r.id)?.potency_class ?? "unknown");
+                    return info.potency === "unknown" ? "—" : <Badge tone={info.tone}>{info.label}</Badge>;
+                  },
+                },
+                { key: "clogp", header: "cLogP", align: "right", cell: (r) => num(profiles.get(r.id)?.clogp, 2) },
+                { key: "tpsa", header: "TPSA", align: "right", cell: (r) => num(profiles.get(r.id)?.tpsa, 1) },
+                { key: "hbd", header: "HBD", align: "right", cell: (r) => num(profiles.get(r.id)?.hbd) },
+                { key: "hba", header: "HBA", align: "right", cell: (r) => num(profiles.get(r.id)?.hba) },
+                {
+                  key: "rotb",
+                  header: "Rot. bonds",
+                  align: "right",
+                  cell: (r) => num(profiles.get(r.id)?.rotatable_bonds),
+                },
+                { key: "qed", header: "QED", align: "right", cell: (r) => num(profiles.get(r.id)?.qed, 2) },
+                {
+                  key: "ro5",
+                  header: "Ro5 violations",
+                  align: "right",
+                  cell: (r) => num(profiles.get(r.id)?.lipinski_violations),
                 },
               ]}
               rows={records}

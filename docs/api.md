@@ -145,10 +145,37 @@ first non-empty row as headers.
 | GET | `/datasets/{id}` | Dataset + all its records |
 | GET | `/datasets/{id}/records?mw_min=&mw_max=&target=&source=&activity_min_nm=&activity_max_nm=&limit=&offset=` | Filtered records |
 | GET | `/datasets/{id}/quality-report` | `QualityReport` |
+| GET | `/datasets/{id}/assessment` | `DatasetAssessment`: hit/lead potency classes, criteria and per-compound computed properties |
 | GET | `/datasets/{id}/enrichment` | `{"enrichment_enabled": bool, "results": EnrichmentResult[]}` |
-| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order |
+| GET | `/datasets/{id}/export?format=csv\|jsonl` | Download, fixed column order: the `NormalizedRecord` fields, then `clogp`, `tpsa`, `hbd`, `hba`, `rotatable_bonds`, `rings`, `qed`, `lipinski_violations`, `potency_class` |
 
 `EnrichmentResult.status` is one of `enriched`, `skipped_no_key`, `failed`.
+
+### Hit/lead assessment
+
+`DatasetAssessment` judges a dataset the way a hit-to-lead review does:
+
+- **Potency class** of each compound's activity value (IC50, Ki, …):
+  `optimized` < 100 nM, `lead` < 1 µM, `hit` < 10 µM, `inactive` ≥ 10 µM,
+  or `unknown` (no value, or a qualifier that leaves the class open —
+  e.g. `> 50` nM, or `< 50000` nM). `actives` counts hits or better.
+- **Criteria**, each over all compounds, the actives and the five most
+  potent (`most_potent_ids`; lower-bound values are not ranked), as
+  `{"passing", "evaluated"}`:
+
+  | `criterion` | Met when |
+  |---|---|
+  | `mw_under_500` | MW < 500 |
+  | `clogp_under_5` | cLogP (Crippen) < 5 |
+  | `lipinski` | At most one rule-of-five violation: MW > 500, cLogP > 5, NH + OH > 5, N + O > 10 |
+  | `rotatable_bonds_under_10` | Fewer than 10 rotatable bonds |
+  | `tpsa_under_140` | Polar surface area < 140 Å² |
+  | `tpsa_under_90` | Polar surface area < 90 Å² (CNS penetration) |
+
+- **Profiles**: per compound, the computed properties (RDKit, from the
+  standardized structure; `hbd`/`hba` are Lipinski's NH + OH and N + O
+  counts), `lipinski_violations`, `potency_class` and `criteria`. A compound
+  without a usable structure has no properties and is not evaluated.
 
 ## Service and health (no auth)
 

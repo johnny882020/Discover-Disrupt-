@@ -657,6 +657,92 @@ class DatasetWithRecords(_Contract):
     records: list[NormalizedRecord]
 
 
+# --------------------------------------------------------------------------
+# Hit/lead assessment
+# --------------------------------------------------------------------------
+
+
+class PotencyClass(StrEnum):
+    """Hit-to-lead potency class of a compound's activity value.
+
+    ``optimized`` < 100 nM, ``lead`` < 1 µM, ``hit`` < 10 µM, ``inactive``
+    ≥ 10 µM; ``unknown`` when the value is missing or its qualifier leaves the
+    class open (e.g. "> 50 nM").
+    """
+
+    OPTIMIZED = "optimized"
+    LEAD = "lead"
+    HIT = "hit"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+#: Potency classes that make a compound "active" in the hit phase (< 10 µM).
+ACTIVE_CLASSES = frozenset({PotencyClass.OPTIMIZED, PotencyClass.LEAD, PotencyClass.HIT})
+
+
+class Criterion(StrEnum):
+    """A computed hit-to-lead property criterion."""
+
+    MW = "mw_under_500"
+    CLOGP = "clogp_under_5"
+    LIPINSKI = "lipinski"
+    ROTATABLE_BONDS = "rotatable_bonds_under_10"
+    TPSA = "tpsa_under_140"
+    TPSA_CNS = "tpsa_under_90"
+
+
+class CompoundProfile(_Contract):
+    """Computed properties of one compound and the criteria it meets.
+
+    Properties are computed with RDKit from the standardized structure;
+    ``hbd``/``hba`` use Lipinski's definitions (NH + OH count, N + O count).
+    A criterion is ``None`` when the compound has no computed properties.
+    """
+
+    record_id: uuid.UUID
+    molecular_weight: float | None = None
+    clogp: float | None = None
+    tpsa: float | None = None
+    hbd: int | None = None
+    hba: int | None = None
+    rotatable_bonds: int | None = None
+    rings: int | None = None
+    qed: float | None = None
+    lipinski_violations: int | None = None
+    potency_class: PotencyClass = PotencyClass.UNKNOWN
+    criteria: dict[Criterion, bool] = Field(default_factory=dict)
+
+
+class CriterionShare(_Contract):
+    """How many compounds of a group meet a criterion."""
+
+    passing: int
+    evaluated: int
+
+
+class CriterionSummary(_Contract):
+    """A criterion evaluated over the groups the hit-to-lead guide uses."""
+
+    criterion: Criterion
+    label: str
+    all_compounds: CriterionShare
+    actives: CriterionShare
+    most_potent: CriterionShare
+
+
+class DatasetAssessment(_Contract):
+    """Hit-to-lead view of a dataset: potency classes, criteria, per-compound profiles."""
+
+    dataset_id: uuid.UUID
+    compounds: int
+    potency_classes: dict[PotencyClass, int]
+    actives: int
+    most_potent_ids: list[uuid.UUID]
+    criteria: list[CriterionSummary]
+    profiles: list[CompoundProfile]
+
+
 class ExportFormat(StrEnum):
     """Supported model-ready export formats."""
 

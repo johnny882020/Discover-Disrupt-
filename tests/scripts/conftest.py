@@ -38,6 +38,7 @@ def app(container: Container) -> FastAPI:
             exporter=container.exporter,
             auth=container.auth,
             uploads=container.uploads,
+            assessment=container.assessment,
             settings=container.settings,
         )
     )

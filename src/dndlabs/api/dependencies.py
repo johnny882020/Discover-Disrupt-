@@ -11,6 +11,7 @@ from dndlabs.core.config import Settings
 from dndlabs.core.protocols import Repositories
 from dndlabs.core.schemas import OrgContext
 from dndlabs.ingestion.uploads import UploadService
+from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 
@@ -25,6 +26,7 @@ class ApiServices:
         exporter: Dataset exporter.
         auth: Auth service.
         uploads: Upload service.
+        assessment: Hit-to-lead assessment service.
         settings: Application settings.
     """
 
@@ -33,6 +35,7 @@ class ApiServices:
     exporter: DatasetExporter
     auth: AuthService
     uploads: UploadService
+    assessment: AssessmentService
     settings: Settings
 
 

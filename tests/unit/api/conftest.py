@@ -10,6 +10,7 @@ from dndlabs.auth.service import AuthService
 from dndlabs.core.config import Settings
 from dndlabs.core.schemas import ApiKeyCreated, Organization, RawRecord, SourceType
 from dndlabs.ingestion.uploads import UploadConnector, UploadService
+from dndlabs.pipeline.assessment import AssessmentService
 from dndlabs.pipeline.exporter import DatasetExporter
 from dndlabs.pipeline.orchestrator import PipelineService
 from dndlabs.preprocessing.featurize import RdkitFeaturizer
@@ -39,6 +40,7 @@ def services() -> ApiServices:
         exporter=DatasetExporter(),
         auth=auth,
         uploads=UploadService(repos.uploads, repos.mapping_templates),
+        assessment=AssessmentService(repos, RdkitFeaturizer()),
         settings=Settings(
             admin_bootstrap_secret="test-admin-secret", frontend_origin="http://localhost:5173"
         ),

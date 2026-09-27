@@ -41,3 +41,11 @@ def test_no_smiles_raises() -> None:
 def test_unparseable_smiles_raises() -> None:
     with pytest.raises(ValidationError, match="unparseable"):
         RdkitFeaturizer().featurize(_record("not a molecule"))
+
+
+def test_lipinski_counts_are_stored() -> None:
+    from dndlabs.preprocessing.featurize import DESCRIPTOR_NAMES
+
+    vector = RdkitFeaturizer().featurize(_record("CC(=O)Oc1ccccc1C(=O)O"))
+    assert set(vector.descriptors) == set(DESCRIPTOR_NAMES)
+    assert (vector.descriptors["nhoh_count"], vector.descriptors["no_count"]) == (1.0, 4.0)

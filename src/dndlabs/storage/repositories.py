@@ -72,6 +72,10 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
+#: Values per SQL ``IN`` list, well under PostgreSQL's parameter limit.
+_IN_CHUNK = 5_000
+
+
 class SqlOrganizationRepository:
     """Stores organizations."""
 
@@ -1401,6 +1405,31 @@ class SqlFeatureRepository:
                 for v in vectors
             )
         return len(vectors)
+
+    def descriptors_for(
+        self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, dict[str, float]]:
+        """Return the stored descriptors of the given records.
+
+        Args:
+            org_id: Owning organization.
+            record_ids: The records.
+
+        Returns:
+            Descriptors by record id, for the records that have a vector.
+        """
+        found: dict[uuid.UUID, dict[str, float]] = {}
+        ids = list(record_ids)
+        with self._sessions.transaction() as session:
+            for start in range(0, len(ids), _IN_CHUNK):
+                rows = session.execute(
+                    select(FeatureVectorRow.record_id, FeatureVectorRow.descriptors).where(
+                        FeatureVectorRow.org_id == org_id,
+                        FeatureVectorRow.record_id.in_(ids[start : start + _IN_CHUNK]),
+                    )
+                )
+                found.update({record_id: dict(values) for record_id, values in rows})
+        return found
 
 
 class SqlEnrichmentRepository:

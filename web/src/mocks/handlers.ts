@@ -23,6 +23,7 @@ import {
   recordsStore,
   runsStore,
 } from "./data";
+import { buildAssessment } from "./assessment";
 
 const BASE = "*/api/v1";
 
@@ -195,6 +196,18 @@ export const handlers = [
       records = records.filter((r) => (r.activity_value_nm ?? Infinity) <= Number(activityMax));
 
     return HttpResponse.json(records.slice(offset, offset + limit));
+  }),
+
+  http.get(`${BASE}/datasets/:id/assessment`, ({ request, params }) => {
+    const org = authenticate(request);
+    if (!org) {
+      return HttpResponse.json(UNAUTHORIZED, { status: 401 });
+    }
+    const dataset = datasetsStore.find((d) => d.id === params.id);
+    if (!dataset) {
+      return HttpResponse.json({ detail: "Dataset not found." }, { status: 404 });
+    }
+    return HttpResponse.json(buildAssessment(dataset.id, recordsStore[dataset.id] ?? []));
   }),
 
   http.get(`${BASE}/datasets/:id/quality-report`, ({ request, params }) => {

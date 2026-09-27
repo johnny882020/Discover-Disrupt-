@@ -113,7 +113,9 @@ async def test_export_is_schema_valid_csv(container: Container) -> None:
     )
     finished = await container.service.execute(org.id, run.id)
     dataset = container.repositories.datasets.get(org.id, finished.dataset_id)
-    body = container.exporter.export(dataset.records, ExportFormat.CSV)
+    assessment = container.assessment.assess(org.id, dataset.dataset.id)
+    profiles = {p.record_id: p for p in assessment.profiles}
+    body = container.exporter.export(dataset.records, ExportFormat.CSV, profiles)
 
     import io
 
@@ -121,5 +123,11 @@ async def test_export_is_schema_valid_csv(container: Container) -> None:
 
     frame = pd.read_csv(io.BytesIO(body), dtype=str, keep_default_na=False)
     assert tuple(frame.columns) == EXPORT_COLUMNS
+    record_fields = set(NormalizedRecord.model_fields)
     for row in frame.to_dict(orient="records"):
-        NormalizedRecord.model_validate({k: (v or None) for k, v in row.items()})
+        NormalizedRecord.model_validate(
+            {k: (v or None) for k, v in row.items() if k in record_fields}
+        )
+        assert row["potency_class"] == "unknown"  # PubChem properties carry no activity
+        assert row["lipinski_violations"] == "0"
+        assert float(row["clogp"]) < 5

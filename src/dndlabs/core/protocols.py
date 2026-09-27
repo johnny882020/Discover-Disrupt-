@@ -6,13 +6,14 @@ tenants. See docs/architecture.md.
 """
 
 import uuid
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from dndlabs.core.schemas import (
     ApiKeyRecord,
+    CompoundProfile,
     Dataset,
     DatasetFilter,
     DatasetWithRecords,
@@ -174,12 +175,18 @@ class EnrichmentClient(Protocol):
 class Exporter(Protocol):
     """Serializes normalized records to a model-ready file format."""
 
-    def export(self, records: Iterable[NormalizedRecord], fmt: ExportFormat) -> bytes:
+    def export(
+        self,
+        records: Iterable[NormalizedRecord],
+        fmt: ExportFormat,
+        profiles: Mapping[uuid.UUID, CompoundProfile] | None = None,
+    ) -> bytes:
         """Render records.
 
         Args:
             records: Records to export, in export order.
             fmt: Output format.
+            profiles: Computed properties by record id, exported alongside.
 
         Returns:
             The serialized bytes.
@@ -831,6 +838,21 @@ class FeatureRepository(Protocol):
 
         Returns:
             Number stored.
+        """
+        ...
+
+    def descriptors_for(
+        self, org_id: uuid.UUID, record_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, dict[str, float]]:
+        """Return the stored descriptors of the given records.
+
+        Args:
+            org_id: Owning organization; other organizations' vectors are
+                never returned.
+            record_ids: The records.
+
+        Returns:
+            Descriptors by record id, for the records that have a vector.
         """
         ...
 
