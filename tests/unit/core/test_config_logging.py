@@ -103,3 +103,14 @@ def test_env_example_values_are_the_real_defaults(monkeypatch: pytest.MonkeyPatc
             assert not documented, name
         else:
             assert documented == default, name
+
+
+def test_admin_secret_has_no_default_and_a_minimum_length() -> None:
+    assert Settings(_env_file=None).admin_bootstrap_secret is None  # type: ignore[call-arg]
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, admin_bootstrap_secret="too-short")  # type: ignore[call-arg]
+
+
+def test_request_limit_must_exceed_upload_limit() -> None:
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, upload_max_bytes=2048, request_max_bytes=2048)  # type: ignore[call-arg]

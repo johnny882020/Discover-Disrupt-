@@ -44,6 +44,7 @@ Ingest → Validate & normalize → Featurize → Enrich → Deliver model-ready
 ## Quick start
 
 ```bash
+export DNDLABS_ADMIN_BOOTSTRAP_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
 docker compose up --build   # API on :8000 (docs at /docs), web app on :5173
 ```
 
@@ -51,9 +52,9 @@ Create an organization and invite its first admin:
 
 ```bash
 API=http://localhost:8000/api/v1
-curl -X POST $API/admin/orgs -H "X-Admin-Secret: dev-admin-secret" \
+curl -X POST $API/admin/orgs -H "X-Admin-Secret: $DNDLABS_ADMIN_BOOTSTRAP_SECRET" \
   -H "content-type: application/json" -d '{"name": "Acme Pharma"}'
-curl -X POST $API/admin/orgs/<org_id>/invitations -H "X-Admin-Secret: dev-admin-secret" \
+curl -X POST $API/admin/orgs/<org_id>/invitations -H "X-Admin-Secret: $DNDLABS_ADMIN_BOOTSTRAP_SECRET" \
   -H "content-type: application/json" -d '{"email": "you@acme.com"}'
 ```
 

@@ -15,8 +15,6 @@ services:
           property: connectionString
       - key: DNDLABS_AUTO_CREATE_SCHEMA
         value: "false"
-      - key: DNDLABS_EXPORT_DIR
-        value: /app/exports
       - key: DNDLABS_LOG_LEVEL
         value: INFO
       - key: DNDLABS_ADMIN_BOOTSTRAP_SECRET

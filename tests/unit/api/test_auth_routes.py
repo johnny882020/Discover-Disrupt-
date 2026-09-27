@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from dndlabs.core.schemas import ApiKeyCreated
 
-ADMIN = {"X-Admin-Secret": "test-admin-secret"}
+ADMIN = {"X-Admin-Secret": "test-admin-secret-0123456789"}
 PASSWORD = "correct horse battery"
 
 

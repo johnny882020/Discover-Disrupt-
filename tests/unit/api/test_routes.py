@@ -9,7 +9,7 @@ from dndlabs.api.dependencies import ApiServices
 from dndlabs.core.exceptions import StorageError
 from dndlabs.core.schemas import ApiKeyCreated
 
-ADMIN = {"X-Admin-Secret": "test-admin-secret"}
+ADMIN = {"X-Admin-Secret": "test-admin-secret-0123456789"}
 
 
 def _run_csv(client: TestClient, headers: dict[str, str]) -> dict:  # type: ignore[type-arg]

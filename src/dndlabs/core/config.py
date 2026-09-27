@@ -2,15 +2,19 @@
 
 Every tunable comes from a ``DNDLABS_*`` environment variable (or ``.env``)
 through :class:`Settings`; no other module reads the environment. Defaults
-suit local development; deployments override the insecure ones (see
-``render.yaml`` and ``docker-compose.yml``).
+suit local development, except the admin bootstrap secret, which has none:
+the API refuses to start without one (``api/app.py``).
 """
 
 from functools import lru_cache
-from pathlib import Path
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Shortest admin bootstrap secret accepted (``secrets.token_urlsafe(32)``
+#: gives 43 characters).
+ADMIN_SECRET_MIN_LENGTH = 24
 
 
 class Settings(BaseSettings):
@@ -21,7 +25,6 @@ class Settings(BaseSettings):
     # SQLite by default so a checkout runs with no services; deployments
     # point this at Postgres.
     database_url: str = "sqlite:///./dndlabs.db"
-    export_dir: Path = Path("./exports")
     log_level: str = "INFO"
     log_json: bool = True
     #: ``True`` (development): build tables with ``create_all`` and skip the
@@ -29,9 +32,12 @@ class Settings(BaseSettings):
     #: ``false`` so Alembic owns the schema and readiness requires its head.
     auto_create_schema: bool = True
 
-    # Placeholder only; any deployment must override it (render.yaml
-    # generates one), since whoever knows it can provision orgs and keys.
-    admin_bootstrap_secret: str = "change-me-in-production"
+    #: Opens the /admin routes (provision orgs, keys, invitations and resets
+    #: for any org). No default: a published placeholder would open them to
+    #: anyone, so the API refuses to start without one (the CLI never needs
+    #: it). Generate it, e.g. ``python -c "import secrets;
+    #: print(secrets.token_urlsafe(32))"``; render.yaml generates one.
+    admin_bootstrap_secret: str | None = Field(default=None, min_length=ADMIN_SECRET_MIN_LENGTH)
     #: The web app's origin: the only CORS origin allowed, and the base of
     #: invitation and password-reset links.
     frontend_origin: str = "http://localhost:5173"
@@ -49,6 +55,11 @@ class Settings(BaseSettings):
     # Uploads are held in memory and stored in the database, so both size
     # and row count are capped.
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
+    #: Largest request body the API accepts, checked before the body is read
+    #: (the upload limit is only checked once a multipart body has been
+    #: received). Must leave room above ``upload_max_bytes`` for multipart
+    #: framing.
+    request_max_bytes: int = Field(default=26 * 1024 * 1024, ge=1024)
     upload_max_rows: int = Field(default=100_000, ge=1)
     #: Distinct identifiers (InChIKey, CID, ChEMBL ID, name) looked up per run;
     #: records beyond it are reported unresolved (0 disables lookups).
@@ -70,6 +81,8 @@ class Settings(BaseSettings):
     pubchem_batch_size: int = Field(default=100, ge=1, le=500)
     pubchem_max_retries: int = Field(default=3, ge=0)
     pubchem_backoff_seconds: float = Field(default=0.5, ge=0)
+    #: Pause between PubChem requests: PubChem allows at most 5 per second.
+    pubchem_min_interval_seconds: float = Field(default=0.2, ge=0)
 
     chembl_base_url: str = "https://www.ebi.ac.uk/chembl/api/data"
     chembl_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -83,6 +96,19 @@ class Settings(BaseSettings):
     nvidia_nim_timeout_seconds: float = Field(default=60.0, gt=0)
     nvidia_nim_num_candidates: int = Field(default=5, ge=1, le=50)
     nvidia_nim_scoring: str = "QED"
+
+    @field_validator("admin_bootstrap_secret", mode="before")
+    @classmethod
+    def _empty_secret_is_unset(cls, value: object) -> object:
+        """Read an empty variable (``DNDLABS_ADMIN_BOOTSTRAP_SECRET=``) as unset."""
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def _request_limit_covers_uploads(self) -> Self:
+        """Reject a request limit that would refuse a maximum-size upload."""
+        if self.request_max_bytes <= self.upload_max_bytes:
+            raise ValueError("request_max_bytes must exceed upload_max_bytes")
+        return self
 
     @field_validator("database_url")
     @classmethod

@@ -19,9 +19,8 @@ services:
       dockerfile: docker/Dockerfile.api
     environment:
       DNDLABS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-dndlabs}:${POSTGRES_PASSWORD:-dndlabs}@db:5432/${POSTGRES_DB:-dndlabs}
-      DNDLABS_EXPORT_DIR: /app/exports
       DNDLABS_AUTO_CREATE_SCHEMA: "false"
-      DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${DNDLABS_ADMIN_BOOTSTRAP_SECRET:-dev-admin-secret}
+      DNDLABS_ADMIN_BOOTSTRAP_SECRET: ${DNDLABS_ADMIN_BOOTSTRAP_SECRET:?set DNDLABS_ADMIN_BOOTSTRAP_SECRET (at least 24 characters), see README}
       DNDLABS_FRONTEND_ORIGIN: http://localhost:5173
     ports:
       - "8000:8000"

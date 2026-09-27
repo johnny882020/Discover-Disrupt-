@@ -26,7 +26,6 @@ def recorded_chembl(request: httpx.Request) -> httpx.Response:
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url=f"sqlite:///{tmp_path / 'e2e.db'}",
-        export_dir=tmp_path / "exports",
         auto_create_schema=False,  # exercise the real Alembic migration
     )
 

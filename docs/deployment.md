@@ -97,8 +97,9 @@ docker compose up --build
 
 Starts Postgres, the API (`localhost:8000`, migrations applied
 automatically via `docker/entrypoint.sh`), and the frontend dev server
-(`localhost:5173`, against the real API). The admin secret defaults to
-`dev-admin-secret`. Onboard a user with the same two calls as on Render
+(`localhost:5173`, against the real API). Set
+`DNDLABS_ADMIN_BOOTSTRAP_SECRET` first (at least 24 characters; the API
+refuses to start without one), as in the README's quick start. Onboard a user with the same two calls as on Render
 (step 5 above), against `http://localhost:8000/api/v1`.
 
 ### Without Docker

@@ -69,5 +69,11 @@ def require_admin_secret(
     # compare_digest: constant-time, so response timing does not reveal how
     # much of a guess matched. On bytes, because on str it raises TypeError
     # for non-ASCII input (a 500 instead of a 401).
-    if not x_admin_secret or not secrets.compare_digest(x_admin_secret.encode(), expected.encode()):
+    # No configured secret (only possible with injected test services; the
+    # app refuses to start without one) opens nothing.
+    if (
+        expected is None
+        or not x_admin_secret
+        or not secrets.compare_digest(x_admin_secret.encode(), expected.encode())
+    ):
         raise InvalidApiKeyError("missing or invalid admin secret")

@@ -18,6 +18,7 @@ from dndlabs.api.errors import register_error_handlers
 from dndlabs.api.landing import ServiceInfo, render_landing
 from dndlabs.api.routers import admin, auth, datasets, enrichment, health, pipelines, uploads
 from dndlabs.core.config import get_settings
+from dndlabs.core.exceptions import ConfigurationError
 from dndlabs.core.logging import configure_logging
 from dndlabs.pipeline.factory import build_container
 
@@ -61,6 +62,12 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             return
         settings = get_settings()
         configure_logging(settings.log_level, settings.log_json)
+        # Fail the start rather than serve /admin with no secret: there is
+        # deliberately no default (a published one would open those routes).
+        if settings.admin_bootstrap_secret is None:
+            raise ConfigurationError(
+                "DNDLABS_ADMIN_BOOTSTRAP_SECRET is not set; the API needs it to start"
+            )
         container = build_container(settings)
         app.state.services = ApiServices(
             repositories=container.repositories,
