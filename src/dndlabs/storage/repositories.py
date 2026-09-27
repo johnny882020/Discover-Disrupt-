@@ -3,7 +3,13 @@
 Every method that reads or writes a specific entity takes ``org_id`` and
 filters by it — this is the tenant-isolation boundary. No method accepts a
 caller-supplied override; ``org_id`` always comes from the authenticated
-request context, never from a request body or query string.
+request context, never from a request body or query string. The unscoped
+exceptions are the authentication lookups (by key prefix, token digest or
+email, which find the org), the run worker's queue methods, and
+cross-org housekeeping; ``core.protocols`` lists them.
+
+Every write runs inside a ``SessionFactory.transaction``, which commits on
+success and rolls back on any error.
 """
 
 import uuid
@@ -75,7 +81,12 @@ from dndlabs.storage.models import (
 
 
 def _as_utc(value: datetime) -> datetime:
-    """Attach UTC to naive datetimes returned by SQLite."""
+    """Attach UTC to naive datetimes returned by SQLite.
+
+    Timestamps are written as aware UTC, but SQLite has no timezone type
+    and returns it naive; comparing that with an aware ``utcnow()`` would
+    raise. PostgreSQL's ``timestamptz`` values pass through unchanged.
+    """
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
@@ -150,6 +161,8 @@ class SqlOrganizationRepository:
             session.execute(select(OrganizationRow.id).limit(1))
             if self._expected_revision is None:
                 return
+            # Reachable is not ready: a deploy whose migrations have not run
+            # (or failed) must not take traffic against an older schema.
             revisions: set[str] = set(
                 session.execute(text("SELECT version_num FROM alembic_version")).scalars()
             )
@@ -194,6 +207,8 @@ class SqlApiKeyRepository:
 
     def get_by_prefix(self, prefix: str) -> ApiKeyRecord | None:
         """Look up a key by its prefix for verification.
+
+        Unscoped by design: this is how a request's org is found.
 
         Args:
             prefix: Non-secret lookup prefix.
@@ -295,6 +310,9 @@ class SqlUserRepository:
     def get_credentials(self, email: str) -> UserCredentials | None:
         """Look up a user and their sign-in state by normalized email.
 
+        Unscoped by design: emails are unique across orgs and sign-in is by
+        email alone.
+
         Args:
             email: Normalized email address.
 
@@ -348,6 +366,8 @@ class SqlUserRepository:
             lock_until: When a lock triggered by this failure expires.
         """
         with self._sessions.transaction() as session:
+            # Incremented in SQL, not read-modify-write in Python, so
+            # concurrent failed sign-ins are all counted.
             session.execute(
                 update(UserRow)
                 .where(UserRow.id == user_id)
@@ -535,6 +555,8 @@ class SqlSessionRepository:
     def get_by_token_hash(self, token_hash: str) -> UserSession | None:
         """Look up a session by its token digest.
 
+        Unscoped by design: this is how a request's org is found.
+
         Args:
             token_hash: SHA-256 hex digest of the presented token.
 
@@ -602,7 +624,7 @@ class SqlSessionRepository:
             return _rowcount(db.execute(statement))
 
     def delete_expired(self, before: datetime) -> int:
-        """Delete sessions that expired before ``before``.
+        """Delete sessions that expired before ``before``, across all orgs.
 
         Args:
             before: Cut-off time.
@@ -776,7 +798,11 @@ _TOKEN_UNUSABLE = "invitation is invalid, expired or already used"
 
 
 def _claim(db: Session, invitation: Invitation) -> None:
-    """Mark a token used, atomically; raise if it was already used or revoked."""
+    """Mark a token used, atomically; raise if it was already used or revoked.
+
+    The conditional UPDATE is the check: of two concurrent redemptions of
+    one token, only one matches a row, so a token can never be used twice.
+    """
     claimed = db.execute(
         update(InvitationRow)
         .where(
@@ -870,6 +896,8 @@ class SqlUploadRepository:
             UploadRow.sha256,
             UploadRow.created_at,
         )
+        # Explicit columns so the file content (up to upload_max_bytes) is
+        # not loaded just to read its metadata.
         with self._sessions.transaction() as db:
             row = db.execute(
                 select(*columns).where(UploadRow.id == upload_id, UploadRow.org_id == org_id)
@@ -928,6 +956,8 @@ class SqlMappingTemplateRepository:
         Returns:
             The stored template.
         """
+        # Delete-then-insert in one transaction: saving under an existing name
+        # replaces that template (names are unique per org).
         with self._sessions.transaction() as db:
             db.execute(
                 delete(MappingTemplateRow).where(
@@ -1413,6 +1443,9 @@ class SqlDatasetRepository:
                     created_at=dataset.created_at,
                 )
             )
+            # The dataset row goes first so its records' foreign key has a
+            # parent. Raising below rolls back the dataset too: a dataset is
+            # stored whole or not at all.
             session.flush()
             for record in records:
                 if record.record_key is None:
@@ -1488,7 +1521,11 @@ class SqlDatasetRepository:
             return [_record_from_row(r) for r in session.scalars(stmt)]
 
     def delete_org_data(self, org_id: uuid.UUID) -> int:
-        """Delete every row belonging to an organization (privacy).
+        """Delete an organization's data (privacy).
+
+        Removes its runs, uploads, datasets and everything derived from them.
+        The organization, its API keys, users, sessions, invitations and
+        mapping templates are kept, so the caller is not locked out.
 
         Args:
             org_id: Organization whose data is being deleted.
@@ -1500,6 +1537,8 @@ class SqlDatasetRepository:
             dataset_ids = list(
                 session.scalars(select(DatasetRow.id).where(DatasetRow.org_id == org_id))
             )
+            # Children before parents, so every foreign key is satisfied at
+            # each step without relying on ON DELETE CASCADE.
             session.execute(delete(EnrichmentResultRow).where(EnrichmentResultRow.org_id == org_id))
             session.execute(delete(FeatureVectorRow).where(FeatureVectorRow.org_id == org_id))
             session.execute(delete(ValidationIssueRow).where(ValidationIssueRow.org_id == org_id))
@@ -1647,6 +1686,8 @@ class SqlQualityReportRepository:
                     created_at=report.created_at,
                 )
             )
+            # Each issue is also written as its own row; reads come from the
+            # report JSON above.
             for issue in report.issues:
                 session.add(
                     ValidationIssueRow(
@@ -1697,7 +1738,10 @@ class SqlFeatureRepository:
         self._sessions = sessions
 
     def save_many(self, org_id: uuid.UUID, vectors: Sequence[FeatureVector]) -> int:
-        """Store feature vectors.
+        """Store feature vectors, all in one transaction.
+
+        The records they reference must already be stored (foreign key); the
+        orchestrator saves the dataset first.
 
         Args:
             org_id: Owning organization.
@@ -1770,7 +1814,9 @@ class SqlEnrichmentRepository:
         self._sessions = sessions
 
     def save_many(self, org_id: uuid.UUID, results: Sequence[EnrichmentResult]) -> int:
-        """Store enrichment results.
+        """Store enrichment results, all in one transaction.
+
+        The records they reference must already be stored (foreign key).
 
         Args:
             org_id: Owning organization.

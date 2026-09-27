@@ -1,4 +1,9 @@
-"""PubChem PUG REST connector."""
+"""PubChem PUG REST connector: compound properties for a list of CIDs.
+
+Its property list, response model and :func:`fault_message` are also used by
+structure resolution (``ingestion/resolution.py``), which looks compounds up
+by InChIKey, CID or name.
+"""
 
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -13,6 +18,9 @@ from dndlabs.ingestion.http import RETRYABLE_STATUS, RetryPolicy, send_with_retr
 
 logger = get_logger(__name__)
 
+#: Properties requested from PUG REST. ``SMILES``/``ConnectivitySMILES`` are
+#: PubChem's current names; :class:`PubChemProperties` also accepts the older
+#: ``IsomericSMILES``/``CanonicalSMILES`` keys should a response carry them.
 PROPERTIES = ("Title", "MolecularFormula", "MolecularWeight", "SMILES", "ConnectivitySMILES",
               "InChI", "InChIKey")  # fmt: skip
 
@@ -35,6 +43,9 @@ class PubChemProperties(BaseModel):
 
     def best_smiles(self) -> str | None:
         """Return the most specific SMILES available (isomeric first).
+
+        Connectivity (canonical) SMILES drops stereochemistry, so it is the
+        last resort.
 
         Returns:
             A SMILES string or ``None``.
@@ -124,7 +135,11 @@ class PubChemConnector:
         """
         if spec.source is not SourceType.PUBCHEM:
             raise IngestionError(f"PubChemConnector cannot fetch {spec.source.value!r}")
+        # De-duplicate (keeping order) so a repeated CID costs no extra request.
         cids = list(dict.fromkeys(i.strip() for i in spec.identifiers if i.strip()))
+        # CIDs travel comma-joined in the URL path, so the batch size bounds the
+        # URL length and the number of requests. Batches are sent one after
+        # another, with no throttle of their own (unlike resolution.py).
         for batch in _chunks(cids, self._batch_size):
             path = f"/compound/cid/{','.join(batch)}/property/{','.join(PROPERTIES)}/JSON"
             for record in self._get_properties(path):
@@ -144,7 +159,11 @@ class PubChemConnector:
         return [p.to_raw_record() for p in parsed.PropertyTable.Properties]
 
     def _request(self, path: str) -> httpx.Response:
-        """GET with retries on transient errors."""
+        """GET with retries on transient errors.
+
+        A retryable status that survives every retry is raised here with an
+        "unavailable" message, so a busy PubChem is not reported as a bad request.
+        """
         response = send_with_retries(lambda: self._client.get(path), "PubChem", self._retry)
         if response.status_code in RETRYABLE_STATUS:
             raise IngestionError(
@@ -155,7 +174,14 @@ class PubChemConnector:
 
 
 def fault_message(response: httpx.Response) -> str:
-    """Extract the PUG REST ``Fault`` message, falling back to the body text."""
+    """Extract the PUG REST ``Fault`` message, falling back to the body text.
+
+    Args:
+        response: A PUG REST error response.
+
+    Returns:
+        The fault's message (or code), else the first 200 characters of the body.
+    """
     try:
         fault = response.json().get("Fault", {})
         return str(fault.get("Message") or fault.get("Code") or response.text[:200])
@@ -179,6 +205,8 @@ def build_pubchem_client(
     return httpx.Client(
         base_url=base_url,
         timeout=timeout_seconds,
+        # A descriptive User-Agent lets the public service's operators tell
+        # this platform's traffic apart.
         headers={"User-Agent": "dndlabs/0.1 (data-infrastructure platform)"},
         transport=transport,
     )

@@ -1,4 +1,4 @@
-"""Pipeline run endpoints."""
+"""Pipeline run endpoints: queue a run, list and poll runs, request cancellation."""
 
 import uuid
 
@@ -13,6 +13,11 @@ router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 @router.post("/run", status_code=status.HTTP_202_ACCEPTED)
 def run_pipeline(spec: SourceSpec, org: CurrentOrg, services: Services) -> PipelineRun:
     """Queue a pipeline run; the API's run worker executes it.
+
+    Only queues (hence 202): a run calls external sources and can be slow,
+    so it must not hold the request open. The worker started in the app's
+    lifespan claims it under a renewed lease, so a run whose worker dies is
+    picked up again (up to ``worker_max_lost_leases`` times) rather than lost.
 
     Args:
         spec: What to ingest.

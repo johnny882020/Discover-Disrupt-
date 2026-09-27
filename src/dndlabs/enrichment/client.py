@@ -50,6 +50,8 @@ def _to_request_body(seed_smiles: str, num_candidates: int, scoring: str) -> dic
     Returns:
         The JSON body, matching NVIDIA's documented GenMol contract exactly.
     """
+    # The sampling parameters are the values in NVIDIA's notebook
+    # (docs/nvidia-nim.md), not tuned for this platform.
     return {
         "smiles": seed_smiles,
         "num_molecules": num_candidates,
@@ -86,6 +88,7 @@ def _from_response_body(body: bytes, scoring: str) -> list[GeneratedCandidate]:
 class HttpGenMolClient:
     """Calls a hosted NVIDIA BioNeMo GenMol NIM for property-guided generation."""
 
+    #: Recorded on each enriched result.
     model_id = "genmol"
 
     def __init__(
@@ -118,6 +121,9 @@ class HttpGenMolClient:
     async def enrich_batch(self, requests: Sequence[EnrichmentRequest]) -> list[EnrichmentResult]:
         """Enrich a batch of records by calling GenMol once per record.
 
+        GenMol takes one seed per request, so there is no batch call; the
+        calls are made one after another.
+
         Args:
             requests: Records to enrich.
 
@@ -137,6 +143,10 @@ class HttpGenMolClient:
             response = self._client.post("/generate", json=body)
             response.raise_for_status()
             candidates = _from_response_body(response.content, self._scoring)
+        # httpx.HTTPError covers timeouts, transport errors and (via
+        # raise_for_status) error statuses; with EnrichmentError for a bad body,
+        # every failure becomes a "failed" result instead of stopping the run.
+        # There is no retry: a failed record is reported, not re-sent.
         except (httpx.HTTPError, EnrichmentError) as exc:
             logger.warning(
                 "genmol enrichment failed",
@@ -162,6 +172,8 @@ def build_nim_client(base_url: str, api_key: str, timeout_seconds: float) -> htt
     Returns:
         A configured ``httpx.Client``.
     """
+    # The key rides in a default header, never in the URL, so it cannot leak
+    # through httpx error messages (which quote the URL) into logs or results.
     return httpx.Client(
         base_url=base_url,
         timeout=timeout_seconds,

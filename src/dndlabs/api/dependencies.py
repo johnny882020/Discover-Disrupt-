@@ -1,4 +1,8 @@
-"""Dependency-injection seams for the API."""
+"""Dependency-injection seams for the API.
+
+Routers receive the service bundle built at startup (``Services``) and the
+authenticated tenant (``CurrentOrg``) through these annotated dependencies.
+"""
 
 from dataclasses import dataclass
 from typing import Annotated
@@ -57,4 +61,7 @@ def get_services(request: Request) -> ApiServices:
 
 
 Services = Annotated[ApiServices, Depends(get_services)]
+# The only source of org_id for org-scoped routes: derived from the verified
+# API key or session, never from a path, query or body, so a caller cannot
+# name another tenant's id.
 CurrentOrg = Annotated[OrgContext, Depends(get_current_org)]

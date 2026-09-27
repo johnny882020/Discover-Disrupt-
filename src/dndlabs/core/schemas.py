@@ -33,7 +33,13 @@ def utcnow() -> datetime:
 
 
 class _Contract(BaseModel):
-    """Base for all contracts: reject unknown fields."""
+    """Base for all contracts: reject unknown fields.
+
+    Forbidding extras makes a misspelt or unexpected field (in a request
+    body, or a stored JSON column read back) an error instead of silently
+    dropped data; a request body carrying a field its contract does not
+    declare, such as an ``org_id`` the server derives itself, is rejected.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -537,6 +543,9 @@ class NormalizedRecord(_Contract):
         )
         if not any(parts):
             return ""
+        # Joined with the ASCII unit separator rather than a printable
+        # character, so field boundaries stay unambiguous. The 64-char hex
+        # digest fits ``normalized_records.context_key`` (String(64)).
         return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 

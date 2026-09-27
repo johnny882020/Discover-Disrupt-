@@ -27,6 +27,11 @@ from dndlabs.core.schemas import (
 router = APIRouter(tags=["auth"])
 
 
+# Unauthenticated routes in this module: login, and the invitation and
+# password-reset preview/accept pairs, which authenticate by their single-use
+# token. Every other route resolves the caller through ``CurrentOrg``.
+
+
 @router.post("/auth/login")
 def login(body: LoginRequest, services: Services) -> SessionCreated:
     """Exchange an email and password for a session token.
@@ -86,6 +91,9 @@ def create_invitation(
 @router.post("/auth/invitations/preview")
 def preview_invitation(body: InvitationToken, services: Services) -> InvitationPreview:
     """Describe a redeemable invitation without redeeming it.
+
+    A POST with the token in the body (not a GET with it in the query) keeps
+    the token out of URLs and access logs.
 
     Args:
         body: The invitation token.
@@ -227,7 +235,9 @@ def preview_password_reset(body: InvitationToken, services: Services) -> Passwor
 def reset_password(body: InvitationAccept, services: Services) -> SessionCreated:
     """Redeem a password-reset link with a new password; signs the user in.
 
-    All of the user's other sessions end.
+    All of the user's other sessions end. The body reuses
+    ``InvitationAccept`` because a reset token is stored as an invitation
+    with purpose ``password_reset`` (same ``token`` + ``password`` shape).
 
     Args:
         body: The reset token and the new password.
@@ -281,6 +291,7 @@ def delete_org_data(org: CurrentOrg, services: Services) -> None:
     Raises:
         ForbiddenError: If the caller is not an admin.
     """
+    # 403, not 404: the caller is inside its own tenant, only its role is short.
     if org.role is not Role.ADMIN:
         raise ForbiddenError("only organization admins can delete the organization's data")
     services.repositories.datasets.delete_org_data(org.org_id)

@@ -1,4 +1,9 @@
-"""RDKit-based featurization of normalized records for ML consumption."""
+"""RDKit-based featurization of normalized records for ML consumption.
+
+Turns one record's canonical SMILES into a :class:`FeatureVector`: named
+descriptors (read by ``assessment/criteria.py`` for the hit-to-lead criteria),
+structural alerts (``preprocessing/alerts.py``) and a Morgan fingerprint.
+"""
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, Lipinski, rdFingerprintGenerator, rdMolDescriptors
@@ -7,9 +12,14 @@ from dndlabs.core.exceptions import ValidationError
 from dndlabs.core.schemas import FeatureVector, NormalizedRecord
 from dndlabs.preprocessing.alerts import AlertScanner
 
+# RDKit writes parse warnings straight to stderr, bypassing core.logging; an
+# unparseable structure is reported by raising ValidationError instead.
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
-#: Molecular descriptors computed for every record.
+#: Molecular descriptors computed for every record. The names are a stored
+#: contract: ``assessment.criteria.REQUIRED_DESCRIPTORS`` reads them back, and
+#: vectors stored before a name existed get it recomputed at assessment time.
+#: ``logp`` is Crippen's cLogP; ``qed`` is Bickerton's drug-likeness score.
 _DESCRIPTORS: dict[str, object] = {
     "molecular_weight": Descriptors.MolWt,  # type: ignore[attr-defined]
     "logp": Descriptors.MolLogP,  # type: ignore[attr-defined]
@@ -36,6 +46,9 @@ class RdkitFeaturizer:
         n_bits: Fingerprint bit-vector length.
     """
 
+    # Radius 2 is ECFP4 (bond diameter 4), the usual similarity/ML default;
+    # 2048 bits keeps bit collisions low. Both are stored on every vector so a
+    # consumer knows how its fingerprint was generated.
     def __init__(self, radius: int = 2, n_bits: int = 2048) -> None:
         """Configure the featurizer.
 
@@ -67,6 +80,7 @@ class RdkitFeaturizer:
             raise ValidationError(f"record {record.id}: unparseable SMILES for featurization")
         descriptors = {name: round(float(fn(mol)), 4) for name, fn in _DESCRIPTORS.items()}  # type: ignore[operator]
         fingerprint = self._generator.GetFingerprint(mol)
+        # Sparse: only the set bit indices are stored (``n_bits`` recovers the vector).
         bits = list(fingerprint.GetOnBits())
         return FeatureVector(
             record_id=record.id,

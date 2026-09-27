@@ -1,1 +1,1 @@
-"""Featurization of normalized records for ML consumption."""
+"""Featurization of normalized records: RDKit descriptors, structural alerts, fingerprints."""

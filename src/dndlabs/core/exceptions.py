@@ -1,4 +1,10 @@
-"""Custom exception hierarchy for D&D Labs."""
+"""Custom exception hierarchy for D&D Labs.
+
+Every domain error subclasses :class:`DndLabsError`. ``api/errors.py`` maps
+some subclasses to 4xx responses whose body is the exception's message, so
+those messages must be client-safe; every other ``DndLabsError`` becomes a
+generic 500 and its message is only logged.
+"""
 
 
 class DndLabsError(Exception):
@@ -72,7 +78,11 @@ class ForbiddenError(AuthError):
 
 
 class ConflictError(AuthError):
-    """Raised when an account for the requested email already exists."""
+    """Raised when a change conflicts with existing accounts (HTTP 409).
+
+    For example: an account with the email already exists, or the change
+    would leave an organization without an admin.
+    """
 
 
 class PipelineError(DndLabsError):

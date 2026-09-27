@@ -8,7 +8,10 @@ Suggestions come from three sources, in order of precedence:
 3. the content itself, for structure columns under unfamiliar headers:
    ``InChI=`` strings, InChIKeys, and values RDKit parses as SMILES.
 
-The user confirms or corrects the suggestion before a run uses it.
+Content is never used to suggest a PubChem CID or a name to look up: a lookup
+sends the column's values to PubChem, so those roles come only from a template
+or an explicit header, and the user confirms or corrects the suggestion before
+a run uses it.
 """
 
 import re
@@ -58,6 +61,8 @@ def suggest_mapping(
     mapping: dict[str, ColumnRole] = {}
     for column in table.columns:
         field = canonical_field(column)
+        # One column per role: the first header claiming it wins, since a
+        # mapping with two SMILES columns would be ambiguous.
         if field is not None and ColumnRole(field) not in mapping.values():
             mapping[column] = ColumnRole(field)
     # Sniff contents unless the file's structures are already readable
@@ -109,6 +114,8 @@ def _structure_role(values: Sequence[str]) -> ColumnRole | None:
         return ColumnRole.INCHIKEY
     if share(lambda v: _CHEMBL_ID.match(v.upper()) is not None) >= _THRESHOLD:
         return ColumnRole.CHEMBL_ID
+    # Every value must look like SMILES (cheap regex, rules out prose and plain
+    # numbers such as IDs) before RDKit is asked to parse them.
     if all(_smiles_shaped(v) for v in values) and (
         share(lambda v: Chem.MolFromSmiles(v) is not None) >= _SMILES_PARSE_THRESHOLD
     ):

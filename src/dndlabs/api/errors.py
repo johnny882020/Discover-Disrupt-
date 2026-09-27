@@ -27,7 +27,12 @@ logger = get_logger(__name__)
 
 
 async def _not_found(_: Request, exc: Exception) -> JSONResponse:
-    """Return 404 for missing entities."""
+    """Return 404 for missing entities.
+
+    Repositories filter every lookup by the caller's ``org_id``, so another
+    organization's entity surfaces here too: a 404 rather than a 403, which
+    would confirm that the id exists in some other tenant.
+    """
     return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": str(exc)})
 
 
@@ -41,7 +46,11 @@ async def _unauthorized(_: Request, exc: Exception) -> JSONResponse:
 
 
 async def _locked(_: Request, exc: Exception) -> JSONResponse:
-    """Return 429 with ``Retry-After`` for an account locked after failed sign-ins."""
+    """Return 429 with ``Retry-After`` for an account locked after failed sign-ins.
+
+    Registered for ``AccountLockedError`` only; the 60-second fallback just
+    satisfies the generic ``Exception`` handler signature.
+    """
     retry_after = exc.retry_after_seconds if isinstance(exc, AccountLockedError) else 60
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -100,6 +109,12 @@ async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
 
 def register_error_handlers(app: FastAPI) -> None:
     """Attach domain exception handlers to ``app``.
+
+    Starlette picks the handler registered for the nearest class in the
+    exception's MRO, so the specific mappings win over the ``DndLabsError``
+    and ``Exception`` fallbacks regardless of registration order (e.g.
+    ``InvalidApiKeyError`` is a ``NotAuthenticatedError`` and gets a 401;
+    a ``StorageError`` other than ``NotFoundError`` gets the generic 500).
 
     Args:
         app: The FastAPI application.

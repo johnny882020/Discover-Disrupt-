@@ -1,4 +1,8 @@
-"""CSV connector for lab-instrument / ELN exports."""
+"""CSV connector for lab-instrument / ELN exports read from a server-side path.
+
+Unlike an upload, a CSV source has no column mapping: columns are matched to
+``RawRecord`` fields by header alias (``ingestion/fields.py``).
+"""
 
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -38,6 +42,8 @@ class CsvConnector:
         if spec.source is not SourceType.CSV or spec.csv_path is None:
             raise IngestionError("CsvConnector requires a csv spec with csv_path")
         table = _read_table(Path(spec.csv_path))
+        # Checked up front, so a file with no identifier column fails as a
+        # whole instead of yielding only structure-less records.
         mapped = {canonical_field(c) for c in table.columns}
         if not mapped.intersection(IDENTIFIER_FIELDS):
             needed = ", ".join(IDENTIFIER_FIELDS)
@@ -54,6 +60,8 @@ def _read_table(path: Path) -> Table:
     if not path.is_file():
         raise IngestionError(f"CSV file not found: {path}")
     try:
+        # utf-8-sig strips the BOM Excel writes. Strict UTF-8 here, whereas
+        # uploads fall back to Windows-1252 (tabular._decode).
         text = path.read_bytes().decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise IngestionError(f"cannot parse CSV {path}: {exc}") from exc

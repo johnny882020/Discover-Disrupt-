@@ -1,13 +1,16 @@
-"""Thin typed wrapper around the RDKit calls used by validation.
+"""Thin typed wrapper around the RDKit and ChEMBL Structure Pipeline calls used by validation.
 
-RDKit ships only partial type information; confining it to this module keeps
-``mypy --strict`` meaningful everywhere else.
+RDKit ships only partial type information (and the ChEMBL Structure Pipeline
+none); confining both to this module keeps ``mypy --strict`` meaningful
+everywhere else.
 """
 
 from chembl_structure_pipeline import standardizer  # type: ignore[import-untyped]
 from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, rdMolDescriptors
 
+# RDKit logs every unparseable SMILES/InChI to stderr; validation already turns
+# those into ValidationIssues, so the log lines would only be per-record noise.
 RDLogger.DisableLog("rdApp.*")  # type: ignore[attr-defined]
 
 
@@ -51,14 +54,22 @@ class Molecule:
         """Apply the ChEMBL Structure Pipeline and return the parent structure.
 
         Standardizes the molecule (normalizes functional-group
-        representations, neutralizes charges where possible) and strips
-        salts and solvents. A structure made only of salt/solvent components
-        is returned standardized but otherwise unchanged.
+        representations, neutralizes charges where possible), then takes
+        the parent: isotope labels are removed (a deuterated or 13C-labelled
+        compound becomes its unlabelled parent) and salt and solvent
+        fragments are stripped. When every fragment is a salt or solvent
+        (e.g. ``[Na+].[Cl-]``, sodium acetate) nothing is stripped. ChEMBL
+        skips standardization for structures it excludes (containing a
+        listed metal, or more than 7 boron atoms), and keeps their salts
+        too if the stripped parent would still be excluded.
 
         Returns:
             The standardized parent molecule.
         """
         standardized = standardizer.standardize_mol(self._mol)
+        # The exclusion flag only marks structures ChEMBL declines to
+        # standardize; their parent is still usable as an identity, so it is
+        # not surfaced.
         parent, _excluded = standardizer.get_parent_mol(standardized)
         return Molecule(parent)
 

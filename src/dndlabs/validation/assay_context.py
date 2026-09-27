@@ -26,7 +26,8 @@ _FORMATS: dict[str, AssayFormat] = {
 _CONTROLS: dict[str, ControlType | None] = {
     **dict.fromkeys(("positive", "positive control", "pos", "+", "pc"), ControlType.POSITIVE),
     **dict.fromkeys(("negative", "negative control", "neg", "-", "nc"), ControlType.NEGATIVE),
-    # A test compound: explicitly not a control.
+    # A test compound: explicitly not a control. Mapped to None (rather than
+    # left unrecognized) so these common spellings do not raise a warning.
     **dict.fromkeys(("no", "none", "false", "0", "test", "sample", "compound"), None),
 }
 _SEPARATORS = re.compile(r"[\s_\-/]+")

@@ -1,4 +1,9 @@
-"""FastAPI application factory."""
+"""FastAPI application factory.
+
+Builds the app: services and the in-process run worker (tied to the app's
+lifespan), CORS, the domain-error handlers, the ``/api/v1`` routers and the
+root ``/`` and ``/health`` meta endpoints.
+"""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -43,6 +48,8 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Build services on startup and release them on shutdown."""
         if services is not None:
+            # Injected services (tests) are owned by the caller: start/stop
+            # their worker if they have one, but never close their storage.
             app.state.services = services
             if services.worker is not None:
                 await services.worker.start()
@@ -65,10 +72,14 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
             settings=settings,
             worker=container.worker,
         )
+        # Runs execute in this process: POST /pipelines/run only queues, so
+        # without a started worker queued runs would never leave "pending".
         await container.worker.start()
         try:
             yield
         finally:
+            # Stop the worker before closing storage: stop() lets active runs
+            # reach a checkpoint and releases their leases, which needs the DB.
             await container.worker.stop()
             container.close()
 
@@ -82,6 +93,9 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Only the configured web-app origin may call the API from a browser; "*"
+    # is used only for injected (test) services. No allow_credentials: auth
+    # travels in X-API-Key / Authorization headers, never cookies.
     frontend_origin = get_settings().frontend_origin if services is None else "*"
     app.add_middleware(
         CORSMiddleware,
@@ -90,6 +104,7 @@ def create_app(services: ApiServices | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Includes the catch-all that keeps exception text out of 500 bodies.
     register_error_handlers(app)
     app.include_router(admin.router, prefix=API_PREFIX)
     app.include_router(auth.router, prefix=API_PREFIX)

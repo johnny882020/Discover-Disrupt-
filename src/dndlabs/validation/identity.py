@@ -16,7 +16,9 @@ class CompoundIdentityRule:
     * SMILES and InChI describing different compounds -> error.
     * Claimed InChIKey or formula disagreeing with the structure -> warning
       (the computed value wins).
-    * Missing formula / molecular weight are filled in from the structure.
+    * The formula is always set from the structure; a missing molecular
+      weight is filled in from it (a supplied one is kept as-is here).
+    * ``record_key`` is set to the computed InChIKey.
 
     Attributes:
         name: Rule name used in reports.
@@ -37,10 +39,18 @@ class CompoundIdentityRule:
         issues: list[ValidationIssue] = []
         smiles_mol = self._parse(raw.smiles, from_smiles, "smiles", record, issues)
         inchi_mol = self._parse(raw.inchi, from_inchi, "inchi", record, issues)
+        # SMILES is authoritative when both are given; the InChI is only
+        # cross-checked against it below.
         mol = smiles_mol or inchi_mol
+        # At this point issues can only hold parse errors: one unreadable
+        # identifier makes the record ambiguous, so nothing is derived from
+        # the other.
         if mol is None or issues:
             return RuleOutcome(record=record, issues=issues)
 
+        # Compare by InChIKey rather than SMILES: standard InChI normalizes
+        # mobile hydrogens, so equivalent representations (e.g. some
+        # tautomers) agree where their canonical SMILES would not.
         key = mol.inchikey
         if smiles_mol is not None and inchi_mol is not None and inchi_mol.inchikey != key:
             issues.append(
@@ -68,6 +78,9 @@ class CompoundIdentityRule:
             )
         updated = record.model_copy(
             update={
+                # The InChIKey is the compound's identity for duplicate
+                # detection; standardization replaces it with the parent's
+                # key when the two differ.
                 "record_key": key,
                 "inchikey": key,
                 "canonical_smiles": mol.canonical_smiles,

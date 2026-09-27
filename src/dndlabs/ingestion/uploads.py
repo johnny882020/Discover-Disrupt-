@@ -1,7 +1,12 @@
 """Uploaded files: store, preview with a suggested column mapping, and ingest.
 
 An upload is stored once (per organization) and can be previewed and run any
-number of times with different column mappings.
+number of times with different column mappings. The raw bytes are stored and
+re-parsed on each use, so a run always reads the file as uploaded, with the
+mapping chosen for that run.
+
+Every read is scoped by ``org_id``: the upload's metadata is fetched with it
+first, so another organization's upload id is a ``NotFoundError``, never data.
 """
 
 import hashlib
@@ -93,7 +98,7 @@ class UploadService:
         upload = self._uploads.create(
             Upload(
                 org_id=org_id,
-                filename=filename[:255],
+                filename=filename[:255],  # the column is String(255)
                 format=fmt,
                 size_bytes=len(data),
                 sha256=hashlib.sha256(data).hexdigest(),

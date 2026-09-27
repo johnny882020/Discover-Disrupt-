@@ -2,6 +2,9 @@
 
 Operates directly against the configured database (like an operator tool),
 not over HTTP — it is a thin wrapper over the same services the API uses.
+Having database access, the operator is trusted: commands take the org id
+as an argument, like the admin-secret operator endpoints, whereas the
+tenant-facing API derives it from the caller's credential.
 """
 
 import asyncio
@@ -47,7 +50,11 @@ container_factory: ContainerFactory = default_container_factory
 
 @contextmanager
 def _container() -> Iterator[Container]:
-    """Yield a container, translating domain errors into a clean exit."""
+    """Yield a container, translating domain errors into a clean exit.
+
+    Only ``DndLabsError`` is caught: the operator sees its message (it is
+    their own terminal); anything else is a bug and keeps its traceback.
+    """
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
     container = container_factory(settings)
@@ -96,6 +103,10 @@ def run(
     spec = _build_spec(source, ids, path, chembl_target, name)
     with _container() as container:
         run_record = container.service.submit(uuid.UUID(org_id), spec)
+        # Execute synchronously rather than wait for the API's background
+        # worker, which may not be running. run_now claims this exact run
+        # atomically, so it never executes twice: if a worker polling the
+        # same database got there first, the CLI reports it no longer pending.
         finished = asyncio.run(container.worker.run_now(run_record))
         typer.echo(format_run(finished))
         if finished.dataset_id:
@@ -161,7 +172,7 @@ def export(
     fmt: Annotated[str, typer.Option("--format")] = "csv",
     output: Annotated[Path | None, typer.Option(help="Output file path.")] = None,
 ) -> None:
-    """Export a stored dataset to a file."""
+    """Export a stored dataset to a file, with each record's computed properties."""
     from dndlabs.core.schemas import ExportFormat
 
     with _container() as container:
@@ -178,6 +189,8 @@ def export(
 @app.command("init-db")
 def init_db() -> None:
     """Apply database migrations (idempotent)."""
+    # No container: with auto_create_schema, building one would create the
+    # tables via create_all before the migrations run.
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
     try:

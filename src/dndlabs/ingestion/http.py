@@ -1,4 +1,8 @@
-"""Retrying HTTP requests to public chemistry databases (PubChem, ChEMBL)."""
+"""Retrying HTTP requests to public chemistry databases (PubChem, ChEMBL).
+
+Shared by the PubChem and ChEMBL connectors and by structure resolution.
+Retries use exponential backoff; the ``Retry-After`` header is not read.
+"""
 
 import time
 from collections.abc import Callable
@@ -51,11 +55,16 @@ def send_with_retries(
     for attempt in range(policy.max_retries + 1):
         try:
             response = send()
+        # TransportError covers connect/read timeouts and dropped connections,
+        # the usual way a busy public service fails, so they are retried too.
         except httpx.TransportError as exc:
             if attempt == policy.max_retries:
                 raise IngestionError(f"{service} unreachable: {exc}") from exc
             logger.warning(f"{service} transport error, retrying", extra={"error": str(exc)})
         else:
+            # A non-retryable error status is returned, not raised: to a caller
+            # it can be an answer (PubChem's 404 means "not found" during
+            # resolution), so each caller decides what an error status means.
             if response.status_code not in RETRYABLE_STATUS or attempt == policy.max_retries:
                 return response
             logger.warning(f"{service} busy, retrying", extra={"status_code": response.status_code})

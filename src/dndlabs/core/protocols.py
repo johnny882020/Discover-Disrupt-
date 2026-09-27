@@ -1,8 +1,14 @@
 """Protocols (structural interfaces) that decouple the layers.
 
-Every repository method takes an explicit ``org_id`` argument — never
-optional, never inferred client-side — so no call can accidentally cross
-tenants. See docs/architecture.md.
+Every repository method that reads or changes an organization's existing
+data takes an explicit ``org_id`` argument — never optional, never taken
+from the client — so no call can accidentally cross tenants. ``create``
+methods take the org from the stored contract itself. The deliberate
+exceptions are the authentication path, which runs before the org is known
+(lookups by API-key prefix, token digest or sign-in email, and sign-in
+bookkeeping keyed by the id those lookups returned), the run worker's queue
+methods, and housekeeping across all orgs (``delete_expired``). See
+docs/architecture.md.
 """
 
 import uuid
@@ -306,8 +312,9 @@ class UserRepository(Protocol):
     """Persistence of user accounts.
 
     Emails are globally unique (sign-in is by email alone), so lookups by
-    email are the one intentionally unscoped read; every other method takes
-    ``org_id``.
+    email are the one intentionally unscoped read. The sign-in counters
+    (``record_login_*``) are keyed by the user id that lookup returned;
+    every other method on an existing user takes ``org_id``.
     """
 
     def create(self, user: User, password_hash: str) -> User:
@@ -855,6 +862,9 @@ class DatasetRepository(Protocol):
     def create(self, dataset: Dataset, records: Sequence[NormalizedRecord]) -> Dataset:
         """Store a dataset and its records.
 
+        Must run before features or enrichment results are saved for these
+        records, which reference them by foreign key.
+
         Args:
             dataset: Dataset metadata.
             records: Normalized records, in export order.
@@ -906,7 +916,13 @@ class DatasetRepository(Protocol):
         ...
 
     def delete_org_data(self, org_id: uuid.UUID) -> int:
-        """Delete every row belonging to an organization (privacy).
+        """Delete an organization's data (privacy).
+
+        Removes its runs, uploads, datasets and everything derived from them
+        (records, quality reports, validation issues, feature vectors,
+        enrichment results). The organization, its API keys, users, sessions,
+        invitations and mapping templates are kept, so the caller is not
+        locked out.
 
         Args:
             org_id: Organization whose data is being deleted.
