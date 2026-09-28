@@ -57,6 +57,17 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 Invitation and session tokens travel in request bodies and the
 `Authorization` header, never in a URL the API receives.
 
+**Rate limiting.** Counted in a 15-minute fixed window
+(`DNDLABS_RATE_LIMIT_WINDOW_SECONDS`): sign-in attempts per IP (20, default
+`DNDLABS_SIGNIN_LIMIT_PER_IP`), per email and IP together (5, default
+`DNDLABS_SIGNIN_LIMIT_PER_EMAIL_AND_IP`), and per email (50, default
+`DNDLABS_SIGNIN_LIMIT_PER_EMAIL`); failed API-key or bearer authentication
+per IP (50, default `DNDLABS_AUTH_FAILURE_LIMIT_PER_IP`), checked before
+the password hash is verified. Over a limit, the API returns `429` before
+touching the database or hashing a password. An unknown email is rate
+limited and responds identically to a known one with a wrong password —
+account existence is never revealed.
+
 ## Pipelines
 
 | Method | Path | Purpose |
