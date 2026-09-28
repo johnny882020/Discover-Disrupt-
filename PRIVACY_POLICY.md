@@ -15,10 +15,14 @@
   key — it is shown once at creation and never stored).
 - **User accounts**: for each person who joins an organization by
   invitation — their email address, their role (`admin`/`member`), an
-  Argon2id hash of their password (never the password itself), a count of
-  recent failed sign-ins, and the times the account and password were
-  created or changed. Sign-in sessions and pending invitations are stored
-  only as SHA-256 hashes of their tokens, with expiry and revocation times.
+  Argon2id hash of their password (never the password itself), and the
+  times the account and password were created or changed. Sign-in sessions
+  and pending invitations are stored only as SHA-256 hashes of their
+  tokens, with expiry and revocation times. Sign-in and authentication
+  attempts are rate-limited using SHA-256 digests of the IP address and
+  email involved (never the raw values) in a short-lived counter table;
+  no per-account lockout is applied, and the response to a wrong password
+  is identical whether or not the email belongs to an account.
 - **Ingested chemical/biological data**: files a customer uploads (CSV,
   TSV, Excel, SD, SMILES or MOL files, stored as uploaded, with their name, size and
   SHA-256 checksum), saved column mappings (column names and their roles),

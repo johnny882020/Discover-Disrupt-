@@ -111,19 +111,29 @@ retrosynthesis (AiZynthFinder) need GPU hosting.
   context (target, assay, format, control); its potency is the class most
   of its measurements reach, judged per assay format, with controls left
   out.
-- **Actionable quality report:** issues grouped by cause, with an
-  explanation of each; bulk fixes (e.g. map an unknown unit once) with a
-  preview; edit a rejected row and re-validate it through the full
-  pipeline; edit an accepted record (re-validated); mass-concentration
+- **Actionable quality report** *(not started, next)*: issues grouped by
+  cause, with an explanation of each; bulk fixes (e.g. map an unknown unit
+  once) with a preview; edit a rejected row and re-validate it through the
+  full pipeline; edit an accepted record (re-validated); mass-concentration
   units (µg/mL, mg/L, ng/mL) converted with the standardized molecular
   weight; dismiss a row with a reason; an audit trail of every edit;
-  unmapped upload columns kept, shown and exported.
+  unmapped upload columns kept, shown and exported. Needs a new Alembic
+  revision for `rejected_records` and `record_edits`; revision `0009` is
+  now taken by the security PR's `rate_limits` table, so this work starts
+  at revision `0010`.
 - **Background job queue** *(done)*: runs are queued in Postgres and
   executed by a worker in the API process under a renewable lease, shared
   fairly between organizations, resumed after a restart or deploy (clean
   stops never count as failures), and cancellable; a live run stepper shows
   each stage with its record counts.
-- **Onboarding:** first-run checklist, a sample dataset, useful empty states.
+- **Security hardening** *(done)*: no default admin secret (24-character
+  minimum, refused at startup); rate limiting on sign-in and key/bearer
+  authentication failures, counted in Postgres, that never reveals whether
+  an account exists; a request body size limit; a longer API-key prefix;
+  proxy header trust restricted to Render's private ranges; log redaction
+  under plain-text logging.
+- **Onboarding** *(not started, next)*: first-run checklist, a sample
+  dataset, useful empty states.
 
 ### R3 — Lead-phase evidence
 

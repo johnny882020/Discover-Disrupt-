@@ -26,7 +26,7 @@ docker compose up --build                 # full stack locally
 
 - `core/` — contracts, protocols, config, logging, exceptions. Imports nothing internal.
 - `auth/`, `ingestion/`, `validation/`, `preprocessing/`, `enrichment/`, `assessment/`, `storage/` import only from `core/`.
-- `pipeline/` orchestrates a run; `pipeline/factory.py` is the only place concrete classes are wired together.
+- `pipeline/` orchestrates a run: `pipeline/orchestrator.py` executes the stages in order (ingest → resolve → validate → store → featurize → enrich), and `pipeline/worker.py`'s `RunWorker` claims and drives runs from the Postgres-backed queue. `pipeline/factory.py` is the only place concrete classes are wired together.
 - `api/`, `cli/` are thin layers over `pipeline/` and `core` protocols — never import SQLAlchemy directly.
 - `web/` is a separate React+TS app; it imports nothing from `src/dndlabs`, only the HTTP API.
 

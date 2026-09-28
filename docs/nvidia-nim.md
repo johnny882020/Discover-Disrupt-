@@ -59,6 +59,12 @@ Enrichment is a best-effort addition to an already-valid dataset, not
 something a run should stall on. Add the same backoff pattern already used
 by the ingestion connectors if production volumes need it.
 
+**Errors never reach the client raw.** `_client_error()` in
+`enrichment/client.py` maps `httpx.HTTPStatusError`, `TimeoutException` and
+other `httpx.HTTPError` subclasses to a fixed, client-safe message before
+it's stored on the record; the original exception (which can carry NIM
+response fragments or internal URLs) is only logged server-side.
+
 ## Testing without a real key
 
 - `tests/unit/enrichment/` uses `httpx.MockTransport` against a recorded

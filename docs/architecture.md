@@ -195,11 +195,11 @@ reading stored org data can only reach the running org's rows.
 Repositories (`OrganizationRepository`, `ApiKeyRepository`, `UserRepository`,
 `SessionRepository`, `InvitationRepository`, `RunRepository`,
 `DatasetRepository`, `QualityReportRepository`, `FeatureRepository`,
-`EnrichmentRepository`, `UploadRepository`, `MappingTemplateRepository`)
-are bundled as `Repositories`. Every org-scoped
+`EnrichmentRepository`, `UploadRepository`, `MappingTemplateRepository`,
+`RateLimitRepository`) are bundled as `Repositories`. Every org-scoped
 method takes `org_id` explicitly — the entire tenant-isolation mechanism;
 there is no other check. A lookup of a missing or wrong-org entity raises
-`NotFoundError`. Three kinds of method are deliberately not org-scoped:
+`NotFoundError`. Four kinds of method are deliberately not org-scoped:
 
 - lookups that *establish* identity before any org is known — an API key
   by prefix, a user by email (emails are globally unique), a session or
@@ -207,7 +207,9 @@ there is no other check. A lookup of a missing or wrong-org entity raises
 - `OrganizationRepository.ping()`, used only by the readiness probe;
 - the run worker's queue methods `RunRepository.claim_next`,
   `fail_exhausted`, `renew_lease` and `release` (see
-  [Run queue and worker](#run-queue-and-worker)).
+  [Run queue and worker](#run-queue-and-worker));
+- `RateLimitRepository.hit()`, counted by IP and email digest before any
+  org is known (see [Auth](#auth)'s brute-force protection).
 
 ## Auth
 
@@ -222,7 +224,11 @@ API key wins if a request sends both.
 
 **API keys.** An operator creates an organization and its first key with
 `POST /api/v1/admin/orgs`, guarded by `DNDLABS_ADMIN_BOOTSTRAP_SECRET`
-(compared in constant time, and distinct from any org's key). The raw key
+(compared in constant time, and distinct from any org's key). The setting
+has no default and must be at least `ADMIN_SECRET_MIN_LENGTH` (24)
+characters; the API raises `ConfigurationError` and refuses to start
+without one, so a published placeholder can never open the admin routes in
+production. The CLI never needs this secret. The raw key
 is returned once. Only an Argon2id hash and a 21-character lookup `prefix`
 (`ddl_live_` plus 12 random characters) are stored, and a prefix collision
 is retried at issue time, up to 5 attempts, before failing with `409`
@@ -353,6 +359,17 @@ once. If no admin can sign in, the operator issues the link
 - Sign-out and password change require a user session.
 - Key revocation requires an API key.
 - Every other endpoint is open to any authenticated principal of the org.
+
+**Request handling, at the ASGI layer, before routing.**
+`api/app.py`'s `BodySizeLimitMiddleware` is a pure ASGI middleware (not
+`BaseHTTPMiddleware`, which buffers the whole body) that refuses a request
+over `DNDLABS_REQUEST_MAX_BYTES` with `413` before the app sees it — both a
+declared `Content-Length` and a streamed/chunked body whose byte count is
+checked as it arrives. The setting is validated at startup to exceed
+`DNDLABS_UPLOAD_MAX_BYTES`, so a valid upload can never be rejected by the
+outer limit first. uvicorn runs with `--proxy-headers`; `--forwarded-allow-ips`
+is restricted to Render's private IP ranges (never `*`), so a client cannot
+spoof `X-Forwarded-For` to dodge the per-IP rate limits above.
 
 ## Validation
 
