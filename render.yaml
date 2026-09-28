@@ -15,14 +15,24 @@ services:
           property: connectionString
       - key: DNDLABS_AUTO_CREATE_SCHEMA
         value: "false"
-      - key: DNDLABS_EXPORT_DIR
-        value: /app/exports
       - key: DNDLABS_LOG_LEVEL
         value: INFO
       - key: DNDLABS_ADMIN_BOOTSTRAP_SECRET
         generateValue: true
       - key: DNDLABS_FRONTEND_ORIGIN
         value: https://dndlabs-web.onrender.com
+      # Proxies whose X-Forwarded-For uvicorn trusts (docker/Dockerfile.api).
+      # Render terminates TLS at its edge and forwards over its private
+      # network, from addresses that are not published or fixed, hence the
+      # RFC 1918 ranges rather than one IP. The container is reachable only
+      # through that proxy, so no client can connect from these ranges itself.
+      # Not "*": Render appends the real client IP to any X-Forwarded-For the
+      # client sent, and with "*" uvicorn takes the leftmost (client-written)
+      # entry, letting every request pick its own rate-limit bucket. With these
+      # ranges uvicorn walks the header from the right and stops at the first
+      # untrusted (public) hop -- the address Render's edge saw.
+      - key: FORWARDED_ALLOW_IPS
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       - key: DNDLABS_NVIDIA_NIM_API_KEY
         sync: false  # set manually in the dashboard; enrichment is skipped cleanly if unset
 

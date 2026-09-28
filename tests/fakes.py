@@ -63,6 +63,8 @@ class FakeApiKeys:
         self.hashes: dict[str, str] = {}
 
     def create(self, org_id: uuid.UUID, prefix: str, hashed_key: str) -> ApiKeyRecord:
+        if prefix in self.records:
+            raise ConflictError("an API key with this prefix already exists")
         record = ApiKeyRecord(id=uuid.uuid4(), org_id=org_id, prefix=prefix, created_at=_now())
         self.records[prefix] = record
         self.hashes[prefix] = hashed_key
@@ -115,21 +117,6 @@ class FakeUsers:
 
     def email_exists(self, email: str) -> bool:
         return self.get_credentials(email) is not None
-
-    def record_login_failure(
-        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
-    ) -> None:
-        creds = self.items[user_id]
-        count = creds.failed_login_count + 1
-        update: dict[str, object] = {"failed_login_count": count}
-        if count >= max_attempts:
-            update = {"failed_login_count": 0, "locked_until": lock_until}
-        self.items[user_id] = creds.model_copy(update=update)
-
-    def record_login_success(self, user_id: uuid.UUID) -> None:
-        self.items[user_id] = self.items[user_id].model_copy(
-            update={"failed_login_count": 0, "locked_until": None}
-        )
 
     def list_members(self, org_id: uuid.UUID) -> list[User]:
         members = [c.user for c in self.items.values() if c.user.org_id == org_id]
@@ -242,9 +229,7 @@ class FakeInvitations:
         )
         if creds is None:
             raise InvitationInvalidError("invitation is invalid, expired or already used")
-        self._users.items[creds.user.id] = creds.model_copy(
-            update={"password_hash": password_hash, "failed_login_count": 0, "locked_until": None}
-        )
+        self._users.items[creds.user.id] = creds.model_copy(update={"password_hash": password_hash})
         if self._users.sessions is not None:
             self._users.sessions.items = {
                 d: s for d, s in self._users.sessions.items.items() if s.user_id != creds.user.id
@@ -576,6 +561,43 @@ class FakeEnrichments:
         return list(self.items)
 
 
+class FakeRateLimits:
+    """Fixed-window counters, one per bucket, like ``SqlRateLimitRepository``."""
+
+    def __init__(self) -> None:
+        # bucket -> (window_start, count, expires_at)
+        self.items: dict[str, tuple[datetime, int, datetime]] = {}
+
+    def hit(self, bucket: str, window_start: datetime, window_end: datetime) -> int:
+        stored = self.items.get(bucket)
+        if stored is not None and stored[0] >= window_start:
+            self.items[bucket] = (stored[0], stored[1] + 1, stored[2])
+        else:
+            self.items[bucket] = (window_start, 1, window_end)
+        return self.items[bucket][1]
+
+    def count(self, bucket: str, window_start: datetime) -> int:
+        stored = self.items.get(bucket)
+        return stored[1] if stored is not None and stored[0] >= window_start else 0
+
+    def refund(self, bucket: str, window_start: datetime) -> None:
+        stored = self.items.get(bucket)
+        if stored is not None and stored[0] >= window_start and stored[1] > 0:
+            self.items[bucket] = (stored[0], stored[1] - 1, stored[2])
+
+    def clear(self, bucket_prefix: str) -> int:
+        doomed = [b for b in self.items if b.startswith(bucket_prefix)]
+        for bucket in doomed:
+            del self.items[bucket]
+        return len(doomed)
+
+    def delete_expired(self, now: datetime) -> int:
+        doomed = [b for b, (_, _, expires) in self.items.items() if expires <= now]
+        for bucket in doomed:
+            del self.items[bucket]
+        return len(doomed)
+
+
 def fake_repositories() -> Repositories:
     users = FakeUsers()
     sessions = FakeSessions()
@@ -595,6 +617,7 @@ def fake_repositories() -> Repositories:
         reports=FakeReports(),
         features=FakeFeatures(),
         enrichments=FakeEnrichments(),
+        rate_limits=FakeRateLimits(),
     )
 
 

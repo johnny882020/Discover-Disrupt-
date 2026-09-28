@@ -51,15 +51,20 @@ class InvalidCredentialsError(AuthError):
     """Raised when a sign-in presents an unknown email or a wrong password."""
 
 
-class AccountLockedError(AuthError):
-    """Raised when sign-in is refused because of too many recent failures."""
+class RateLimitedError(AuthError):
+    """Raised when a client exceeds a sign-in or authentication-failure limit (HTTP 429).
+
+    The API answers with a fixed body and ``Retry-After``, never this
+    exception's message, so the response does not say which limit (client
+    IP, email, or email and IP) refused the request.
+    """
 
     def __init__(self, message: str, retry_after_seconds: int) -> None:
         """Create the error.
 
         Args:
-            message: Client-safe message.
-            retry_after_seconds: Seconds until sign-in may be retried.
+            message: Detail for server-side logs only.
+            retry_after_seconds: Seconds until the refusing limit's window ends.
         """
         super().__init__(message)
         self.retry_after_seconds = retry_after_seconds

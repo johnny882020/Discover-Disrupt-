@@ -10,6 +10,11 @@
 | `dndlabs-web` | Static Site | Builds `web/` with Vite; CDN-backed, no cold start |
 | `dndlabs-db` | PostgreSQL | Free tier expires after 30 days |
 
+Pre-deploy note: `DNDLABS_ADMIN_BOOTSTRAP_SECRET` has no default and must be
+at least 24 characters — the API refuses to start without one. `render.yaml`
+generates a value automatically (`generateValue: true`); an operator-supplied
+value must meet the same minimum.
+
 ### Deploy
 
 1. Render Dashboard → **New → Blueprint** → connect this repo → pick the branch.
@@ -18,7 +23,15 @@
    `DNDLABS_ADMIN_BOOTSTRAP_SECRET`.
 4. Confirm the database is migrated: `GET /api/v1/health/ready` returns
    `{"status": "ok", "database": "ok"}`.
-5. Onboard the first organization — create it, then invite its admin:
+5. Check the client IP the API sees once: `FORWARDED_ALLOW_IPS` (below) must
+   trust only Render's own proxy, or a client could set its own
+   `X-Forwarded-For` and pick whatever IP the per-IP rate limits key on. From
+   one network, send `DNDLABS_SIGNIN_LIMIT_PER_IP` failed sign-ins
+   (`POST /auth/login` with a wrong password) with a made-up
+   `X-Forwarded-For` header added to each; confirm the last one still gets
+   `429` and not a fresh limit — if it succeeds, the header is being trusted
+   from an untrusted hop and `FORWARDED_ALLOW_IPS` needs narrowing.
+6. Onboard the first organization — create it, then invite its admin:
    ```bash
    API=https://dndlabs-api.onrender.com/api/v1
    SECRET=<the generated secret>
@@ -29,13 +42,23 @@
      -H "content-type: application/json" -d '{"email": "admin@yourorg.com"}'
    # -> {"accept_url": "https://dndlabs-web.onrender.com/invite#token=ddl_inv_...", ...}
    ```
-6. Send the `accept_url` to the admin over a trusted channel. It works once
+7. Send the `accept_url` to the admin over a trusted channel. It works once
    and expires after 72 hours. Opening it, they choose their own password
    and are signed in. From the web app's **Team** page they then invite
    the rest of their organization; nobody else needs the admin secret.
 
 Keep the API key for programmatic access, or discard it — web users never
 need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
+
+**Proxy headers.** `docker/Dockerfile.api` runs uvicorn with `--proxy-headers`
+so it derives the client IP (what per-IP rate limits key on) from
+`X-Forwarded-For` — but only when the immediate peer is a trusted proxy
+(`--forwarded-allow-ips`, from `$FORWARDED_ALLOW_IPS`). `render.yaml` sets it
+to Render's private address ranges (`10.0.0.0/8, 172.16.0.0/12,
+192.168.0.0/16`); `docker-compose.yml` sets it to `127.0.0.1` (no proxy in
+front locally). Never `*`: with it, uvicorn would trust the leftmost,
+client-written entry of `X-Forwarded-For`, letting a client pick a fresh "IP"
+per request and escape every per-IP limit.
 
 ### Accounts and access
 
@@ -48,8 +71,8 @@ need it. Additional keys: `POST /admin/orgs/{org_id}/keys`.
 
 People join only by invitation: the link works once, expires after 72
 hours, and is where the invitee chooses their password. Sessions last 12
-hours; five wrong passwords lock an account for 15 minutes. Details:
-[Auth](architecture.md#auth).
+hours; repeated failed sign-ins are rate-limited per client IP and per
+email, not locked per account. Details: [Auth](architecture.md#auth).
 
 ### Configuration
 
@@ -61,9 +84,12 @@ default, is listed in [`.env.example`](../.env.example).
 | `DNDLABS_NVIDIA_NIM_API_KEY` | API service env | Unset → enrichment runs but marks every record `skipped_no_key`; see [nvidia-nim.md](nvidia-nim.md) |
 | `DNDLABS_FRONTEND_ORIGIN` | API service env | Must match the deployed Static Site's URL: it is the CORS origin and the base of invitation links |
 | `DNDLABS_UPLOAD_MAX_BYTES`, `DNDLABS_UPLOAD_MAX_ROWS` | API service env | Optional; defaults 25 MiB and 100,000 rows per uploaded file |
+| `DNDLABS_REQUEST_MAX_BYTES` | API service env | Optional; default 26 MiB. Largest request body accepted, checked before the body is read (413 if exceeded); must stay above `DNDLABS_UPLOAD_MAX_BYTES` or the API refuses to start |
 | `DNDLABS_STRUCTURE_LOOKUP_LIMIT` | API service env | Optional; default 1,000 distinct InChIKeys, PubChem CIDs, ChEMBL IDs and names looked up per run. `0` disables lookups |
+| `DNDLABS_PUBCHEM_MIN_INTERVAL_SECONDS` | API service env | Optional; default 0.2 s. Pause between PubChem requests (its 5-requests-per-second limit); also applied between structure-resolution lookups |
 | `DNDLABS_WORKER_POLL_SECONDS`, `DNDLABS_WORKER_LEASE_SECONDS`, `DNDLABS_WORKER_MAX_LOST_LEASES`, `DNDLABS_WORKER_CONCURRENCY`, `DNDLABS_WORKER_SHUTDOWN_GRACE_SECONDS` | API service env | Optional; the run worker's poll interval (2 s), lease (120 s), unexpected stops before a run fails (3), runs at once (1) and shutdown grace (20 s). See [architecture](architecture.md#run-queue-and-worker) |
-| `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_PASSWORD_RESET_TTL_HOURS`, `DNDLABS_LOGIN_MAX_ATTEMPTS`, `DNDLABS_LOGIN_LOCKOUT_MINUTES`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 24 h, 5, 15 min, 12 characters — see [Auth](architecture.md#auth) |
+| `DNDLABS_SESSION_TTL_HOURS`, `DNDLABS_INVITATION_TTL_HOURS`, `DNDLABS_PASSWORD_RESET_TTL_HOURS`, `DNDLABS_PASSWORD_MIN_LENGTH` | API service env | Optional; defaults 12 h, 72 h, 24 h, 12 characters — see [Auth](architecture.md#auth) |
+| `DNDLABS_RATE_LIMIT_WINDOW_SECONDS`, `DNDLABS_SIGNIN_LIMIT_PER_IP`, `DNDLABS_SIGNIN_LIMIT_PER_EMAIL_AND_IP`, `DNDLABS_SIGNIN_LIMIT_PER_EMAIL`, `DNDLABS_AUTH_FAILURE_LIMIT_PER_IP` | API service env | Optional; brute-force limit window (900 s) and, per window, failed sign-ins per client IP (20), per email from one IP (5), per email from all IPs (50), and failed API-key/session authentications per client IP (50) — see [Auth](architecture.md#auth) |
 | `VITE_API_BASE_URL` | Static Site env (**build-time**) | Vite bakes `VITE_*` vars in at build; changing this requires a rebuild, not a restart |
 
 ### Troubleshooting
@@ -71,12 +97,14 @@ default, is listed in [`.env.example`](../.env.example).
 | Symptom | Cause / fix |
 |---|---|
 | Sent back to sign-in with "Your session has ended" | The session expired (12 h), was signed out elsewhere, or the password was changed on another device — sign in again |
-| `401 invalid email or password` | Wrong email or password. After 5 failures the account locks for 15 minutes (`429`) |
-| A user forgot their password, or is locked out | An admin opens **Team** → **Reset password** for them and sends the link (valid 24 h); redeeming it also clears the lock. If no admin can sign in, the operator calls `POST /admin/orgs/{org_id}/password-resets` |
+| `401 invalid email or password` | Wrong email or password — see the sign-in rate limits below if it keeps happening |
+| `429 too many attempts; try again later` | A sign-in, per-email or auth-failure rate limit was reached (see [Auth](architecture.md#auth)); wait out the `Retry-After` seconds, or an admin issues a password-reset link, which also lifts the email's sign-in limits |
+| A user forgot their password | An admin opens **Team** → **Reset password** for them and sends the link (valid 24 h). If no admin can sign in, the operator calls `POST /admin/orgs/{org_id}/password-resets` |
 | Invitation or reset link says "invalid, expired or already used" | Links work once and expire (invitations 72 h, resets 24 h); revoked or superseded links stop working — ask an admin (Team page) for a new one |
 | `401` on every API call from a script | Missing/wrong `X-API-Key`, or the key was revoked — issue a new key |
 | Enrichment always `skipped_no_key` | Expected until `DNDLABS_NVIDIA_NIM_API_KEY` is set; confirm the hosted base URL first — see [nvidia-nim.md](nvidia-nim.md) |
 | Upload rejected with `422` | The file is empty, over the size or row limit, not CSV/TSV/XLSX/SDF/SMILES/MOL, or unreadable (e.g. ragged CSV rows); the message says which |
+| Request rejected with `413 request body too large` | The request body exceeds `DNDLABS_REQUEST_MAX_BYTES` (default 26 MiB), checked before the body is read — send a smaller file, or raise the limit (it must stay above `DNDLABS_UPLOAD_MAX_BYTES`) |
 | Rows rejected by `structure_lookup` | The identifier was not found, a name matched several compounds, the run exceeded `DNDLABS_STRUCTURE_LOOKUP_LIMIT`, or PubChem/ChEMBL was unavailable; the quality report gives the reason per row. Re-run later for an outage |
 | A run stays **Queued** (`pending`) | The worker executes `DNDLABS_WORKER_CONCURRENCY` runs at a time (default 1), shared fairly between organizations; the run starts when earlier work finishes. If nothing progresses, check that `dndlabs-api` is up (`/api/v1/health/ready`) |
 | A run shows **Waiting to resume** | It is `pending` again after a deploy, restart or the free plan's idle shutdown stopped it cleanly; it restarts from the beginning automatically and does not count toward the failure limit |
@@ -97,8 +125,9 @@ docker compose up --build
 
 Starts Postgres, the API (`localhost:8000`, migrations applied
 automatically via `docker/entrypoint.sh`), and the frontend dev server
-(`localhost:5173`, against the real API). The admin secret defaults to
-`dev-admin-secret`. Onboard a user with the same two calls as on Render
+(`localhost:5173`, against the real API). Set
+`DNDLABS_ADMIN_BOOTSTRAP_SECRET` first (at least 24 characters; the API
+refuses to start without one), as in the README's quick start. Onboard a user with the same two calls as on Render
 (step 5 above), against `http://localhost:8000/api/v1`.
 
 ### Without Docker

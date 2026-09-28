@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from dndlabs.core.exceptions import (
-    AccountLockedError,
     ConflictError,
     DndLabsError,
     ForbiddenError,
@@ -20,6 +19,7 @@ from dndlabs.core.exceptions import (
     NotAuthenticatedError,
     NotFoundError,
     PasswordPolicyError,
+    RateLimitedError,
 )
 from dndlabs.core.logging import get_logger
 
@@ -45,16 +45,22 @@ async def _unauthorized(_: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _locked(_: Request, exc: Exception) -> JSONResponse:
-    """Return 429 with ``Retry-After`` for an account locked after failed sign-ins.
+_RATE_LIMITED_DETAIL = "too many attempts; try again later"
 
-    Registered for ``AccountLockedError`` only; the 60-second fallback just
+
+async def _rate_limited(_: Request, exc: Exception) -> JSONResponse:
+    """Return 429 with ``Retry-After`` when a brute-force limit refuses a request.
+
+    The body is fixed, never the exception's message: which limit refused
+    (client IP, email, or email and IP) must not reach the client, since
+    that could tell an attacker which emails others are targeting.
+    Registered for ``RateLimitedError`` only; the 60-second fallback just
     satisfies the generic ``Exception`` handler signature.
     """
-    retry_after = exc.retry_after_seconds if isinstance(exc, AccountLockedError) else 60
+    retry_after = exc.retry_after_seconds if isinstance(exc, RateLimitedError) else 60
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": str(exc)},
+        content={"detail": _RATE_LIMITED_DETAIL},
         headers={"Retry-After": str(retry_after)},
     )
 
@@ -122,7 +128,7 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(NotFoundError, _not_found)
     app.add_exception_handler(NotAuthenticatedError, _unauthorized)
     app.add_exception_handler(InvalidCredentialsError, _unauthorized)
-    app.add_exception_handler(AccountLockedError, _locked)
+    app.add_exception_handler(RateLimitedError, _rate_limited)
     app.add_exception_handler(ForbiddenError, _status(status.HTTP_403_FORBIDDEN))
     app.add_exception_handler(ConflictError, _status(status.HTTP_409_CONFLICT))
     app.add_exception_handler(InvitationInvalidError, _status(status.HTTP_400_BAD_REQUEST))

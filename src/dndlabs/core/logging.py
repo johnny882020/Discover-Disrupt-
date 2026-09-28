@@ -1,9 +1,9 @@
 """Structured logging with secret redaction.
 
 Every module logs through :func:`get_logger`; :func:`configure_logging`
-installs one stderr handler. With JSON output (the default) its
-:class:`JsonFormatter` redacts secret-shaped fields and ``Bearer`` tokens
-before anything is written. Redaction is by key name, so pass credentials
+installs one stderr handler whose formatter, :class:`JsonFormatter` (the
+default) or :class:`PlainFormatter`, redacts secret-shaped fields and
+``Bearer`` tokens before anything is written. Redaction is by key name, so pass credentials
 under their usual names (``api_key``, ``token``, ``password``...), never
 under a neutral key.
 """
@@ -41,6 +41,25 @@ def _redact(key: str, value: Any) -> Any:
     return value
 
 
+def _redacted_message(record: logging.LogRecord) -> str:
+    """Return the record's formatted message with embedded tokens redacted."""
+    message: str = _redact("message", record.getMessage())
+    return message
+
+
+def _redacted_extras(record: logging.LogRecord) -> dict[str, Any]:
+    """Return the record's ``extra`` fields, each passed through :func:`_redact`.
+
+    Shared by both formatters so plain-text and JSON output redact exactly
+    the same things.
+    """
+    return {
+        key: _redact(key, value)
+        for key, value in record.__dict__.items()
+        if key not in _RESERVED and not key.startswith("_")
+    }
+
+
 class JsonFormatter(logging.Formatter):
     """Format log records as single-line, secret-redacted JSON objects."""
 
@@ -57,14 +76,43 @@ class JsonFormatter(logging.Formatter):
             "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": _redact("message", record.getMessage()),
+            "message": _redacted_message(record),
         }
-        for key, value in record.__dict__.items():
-            if key not in _RESERVED and not key.startswith("_"):
-                payload[key] = _redact(key, value)
+        payload.update(_redacted_extras(record))
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
+
+
+class PlainFormatter(logging.Formatter):
+    """Format log records as human-readable, secret-redacted text lines.
+
+    ``time LEVEL logger: message key=value ...``. Plain text is meant for
+    local reading, but it is still a setting (``DNDLABS_LOG_JSON=false``)
+    that can reach a deployed container, so it redacts like the JSON output.
+    """
+
+    def __init__(self) -> None:
+        """Use the ``time LEVEL logger: message`` layout."""
+        super().__init__("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 - stdlib override
+        """Render the layout with the redacted message and extra fields.
+
+        Args:
+            record: The record to format; ``asctime`` is already set on it.
+
+        Returns:
+            The formatted line, without the traceback (added by the base class).
+        """
+        # Format a copy so the record other handlers see stays untouched.
+        redacted = logging.makeLogRecord(record.__dict__)
+        redacted.message = _redacted_message(record)
+        line = super().formatMessage(redacted)
+        extras = _redacted_extras(record)
+        if extras:
+            line += " " + " ".join(f"{key}={value}" for key, value in extras.items())
+        return line
 
 
 def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
@@ -72,7 +120,8 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
 
     Args:
         level: Log level name, e.g. ``"INFO"``.
-        json_output: Use :class:`JsonFormatter` when true, plain text otherwise.
+        json_output: Use :class:`JsonFormatter` when true,
+            :class:`PlainFormatter` otherwise.
     """
     # Replaces (not appends to) the root handlers, so calling this again
     # never duplicates output.
@@ -80,8 +129,7 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
     if json_output:
         handler.setFormatter(JsonFormatter())
     else:
-        # Plain text is for local reading only: it applies no redaction.
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(PlainFormatter())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())

@@ -85,11 +85,11 @@ def read_table(data: bytes, fmt: UploadFormat, max_rows: int) -> Table:
     elif fmt is UploadFormat.SDF:
         table = _read_sdf(data)
     elif fmt is UploadFormat.SMI:
-        table = _read_smi(_decode(data))
+        table = _read_smi(decode_text(data))
     elif fmt is UploadFormat.MOL:
-        table = _read_mol(_decode(data))
+        table = _read_mol(decode_text(data))
     else:
-        text = _decode(data)
+        text = decode_text(data)
         table = read_delimited(text, "\t" if fmt is UploadFormat.TSV else None)
     if not table.columns:
         raise IngestionError("the file has no columns")
@@ -144,11 +144,18 @@ def read_delimited(text: str, delimiter: str | None = None) -> Table:
     return Table(columns=columns, rows=_without_blank_rows(rows))
 
 
-def _decode(data: bytes) -> str:
+def decode_text(data: bytes) -> str:
     """Decode text as UTF-8 (with or without BOM), falling back to Windows-1252.
 
     Windows-1252 covers legacy Excel/instrument exports; ``errors="replace"``
     because a few of its byte values are undefined, so decoding never fails.
+    Shared by uploads and the CSV connector, so a file reads the same both ways.
+
+    Args:
+        data: The file's bytes.
+
+    Returns:
+        The decoded text.
     """
     try:
         return data.decode("utf-8-sig")

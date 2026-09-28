@@ -10,19 +10,20 @@ explicitly in the PR that makes it.
       api/ (FastAPI)        cli/ (Typer)        delivery
              └───────┬───────────┘
                  pipeline/                      orchestration, run worker, export, wiring
-      ┌──────────────┼───────────────┬──────────────┬──────────────┐
- ingestion/     validation/      filtering/   preprocessing/  enrichment/  assessment/
-      └──────────────┼───────────────┴──────────────┴──────────────┘
+      ┌──────────────┼──────────────┬──────────────┐
+ ingestion/     validation/   preprocessing/  enrichment/  assessment/
+      └──────────────┼──────────────┴──────────────┘
                    core/                        contracts, protocols, config,
                                                 logging, exceptions
                    auth/                        API keys, user accounts, sessions,
                                                 invitations, org multi-tenancy
-                   storage/                      SQLAlchemy models, repositories
+                   storage/                      SQLAlchemy models, repositories,
+                                                record query predicates (storage/filters.py)
 ```
 
 | Rule | Enforced by |
 |---|---|
-| `ingestion`, `validation`, `filtering`, `preprocessing`, `enrichment`, `assessment`, `auth`, `storage` import only from `core` | Code review |
+| `ingestion`, `validation`, `preprocessing`, `enrichment`, `assessment`, `auth`, `storage` import only from `core` | Code review |
 | Concrete classes are wired only in `pipeline/factory.py` | Composition root |
 | `api` and `cli` never touch SQLAlchemy | `Repositories` protocol bundle |
 | Values crossing a module boundary are Pydantic models | `core/schemas.py` |
@@ -114,7 +115,7 @@ everything for that run is done.
 |---|---|
 | `Organization` / `ApiKeyCreated` / `ApiKeyRecord` | Tenant, one-time key reveal, its persisted (hashed) form |
 | `OrgContext` | Resolved auth context per request: `org_id`, `principal` (`api_key` / `user`), `role` (`admin` / `member`), and the key or user + session behind it |
-| `User` / `UserCredentials` / `UserSession` / `Invitation` | Account, its sign-in state (hash, failure count, lock; internal to auth), a session and an invitation — the latter two persisted by token hash only |
+| `User` / `UserCredentials` / `UserSession` / `Invitation` | Account, its sign-in state (password hash; internal to auth), a session and an invitation — the latter two persisted by token hash only |
 | `LoginRequest` / `SessionCreated` | Sign-in body; one-time reveal of a session token with its expiry and user |
 | `InvitationCreate` / `AdminInvitationCreate` / `InvitationCreated` / `InvitationToken` / `InvitationPreview` / `InvitationAccept` / `PasswordChange` | Invitation and password request/response bodies; emails are normalized (trimmed, lowercased) on input |
 | `InvitationPurpose` / `MemberUpdate` / `PasswordResetRequest` / `PasswordResetCreated` / `PasswordResetPreview` | Single-use token purpose (`join` / `password_reset`); role change; operator reset request; one-time reset reveal; what a reset link sets |
@@ -222,9 +223,13 @@ API key wins if a request sends both.
 **API keys.** An operator creates an organization and its first key with
 `POST /api/v1/admin/orgs`, guarded by `DNDLABS_ADMIN_BOOTSTRAP_SECRET`
 (compared in constant time, and distinct from any org's key). The raw key
-is returned once. Only an Argon2id hash and a 12-character lookup `prefix`
-are stored, and a prefix collision is retried at issue time. A key can
-revoke itself (`POST /auth/keys/revoke`).
+is returned once. Only an Argon2id hash and a 21-character lookup `prefix`
+(`ddl_live_` plus 12 random characters) are stored, and a prefix collision
+is retried at issue time, up to 5 attempts, before failing with `409`
+("could not issue an API key; try again", safe to retry). Keys issued
+before the prefix was lengthened (3 random characters) are looked up by
+their shorter prefix and still work. A key can revoke itself
+(`POST /auth/keys/revoke`).
 
 **User accounts: invitation, then password.** There is no self-service
 sign-up; an organization decides who joins.
@@ -273,22 +278,54 @@ are on different `onrender.com` subdomains. `onrender.com` is on the Public
 Suffix List, so the two are cross-site, and browsers that block third-party
 cookies would break a cookie session.
 
-**Brute-force protection:**
+**Brute-force protection** (`auth/ratelimit.py`, `RateLimitedError`, 429):
+counters live in the `rate_limits` table, not process memory, so a limit
+holds across workers, instances and restarts — one row per bucket
+(`bucket` primary key, `window_start`, `count`, `expires_at`, indexed for
+the expired-counter sweep). A bucket key is a fixed prefix plus SHA-256
+digests of the client IP and/or email; the table never holds a raw IP or
+email, and rows are deleted once their window ends. Every bucket counts
+events in fixed windows of `DNDLABS_RATE_LIMIT_WINDOW_SECONDS` (default
+900) aligned to the Unix epoch — one atomic upsert per event, and an exact
+`Retry-After`. A window's known weakness — up to twice the limit in a
+burst straddling its boundary — is acceptable for limits whose job is to
+cap sustained guessing, not to be precise.
+
 - **Identical failures.** An unknown email and a wrong password fail the
-  same way (`401 invalid email or password`). An unknown email still pays
-  for one Argon2 verification, so response timing does not reveal whether
-  an account exists.
-- **Lockout.** After `DNDLABS_LOGIN_MAX_ATTEMPTS` (default 5) consecutive
-  failures, the account is locked for `DNDLABS_LOGIN_LOCKOUT_MINUTES`
-  (default 15). Sign-in then returns `429` with `Retry-After`, even for the
-  right password. The counter is incremented in the database, so the lock
-  holds across workers and restarts.
-- **Known limit: lockout reveals existence.** An attacker who triggers a
-  lockout on purpose learns that the account exists — an accepted trade-off
-  against telling a locked-out user nothing.
-- **Known limit: no per-IP limit.** Rate limiting by client IP (credential
-  stuffing across many accounts) is not implemented. Put the API behind a
-  rate-limiting proxy before exposing it widely.
+  same way (`401 invalid email or password`), and an unknown email still
+  pays for one Argon2 verification (against a dummy hash), so neither the
+  message nor response timing reveals whether an account exists. Sign-in
+  limits count an email's attempts the same way whether or not it has an
+  account, so an unknown and a known email both reach `429` after the same
+  number of attempts.
+- **Sign-in** (`POST /auth/login`) counts every attempt, before any lookup
+  or password hash, in three buckets: per client IP
+  (`DNDLABS_SIGNIN_LIMIT_PER_IP`, default 20 — credential stuffing across
+  many emails), per email from one IP (`DNDLABS_SIGNIN_LIMIT_PER_EMAIL_AND_IP`,
+  default 5 — the tight one, so one attacker cannot lock an email's owner
+  out from their own IP), and per email from all IPs
+  (`DNDLABS_SIGNIN_LIMIT_PER_EMAIL`, default 50 — looser, since an attacker
+  with enough IPs can still exhaust it). A successful sign-in refunds the
+  IP bucket and clears the email's buckets, so only failures accumulate and
+  the owner's own earlier typos do not linger.
+- **API-key and session-token authentication** count failures per client IP
+  (`DNDLABS_AUTH_FAILURE_LIMIT_PER_IP`, default 50), checked before the
+  Argon2 verification for an API key, so failures cannot force unbounded
+  64 MiB hashes. A valid key or token is never counted or refused — except
+  that a valid key sent from an IP already over the limit still gets `429`,
+  since telling it apart from an attacker would take the very hash the
+  limit exists to bound (an accepted trade-off).
+- **Response.** A refused request gets `429` with a fixed body
+  (`"too many attempts; try again later"`, never which bucket refused it)
+  and `Retry-After` set to the window's remaining seconds.
+- **No per-account lockout.** An earlier revision locked an account after a
+  configured count of consecutive failures; migration `0009` removes that
+  mechanism (`users.failed_login_count`, `users.locked_until` dropped)
+  because only real accounts could lock, so triggering one revealed that an
+  email had an account. The per-email sign-in limit above replaces it and
+  applies identically to unknown and known emails — the trade-off is that
+  an attacker who fills an email's shared buckets can still deny its real
+  owner a sign-in for the rest of the window.
 
 **Managing the team.** Admins (and org API keys) list members, change
 roles, remove members and revoke pending invitations. A removed member's
@@ -304,9 +341,10 @@ delivery). Instead, an admin issues a single-use reset link for a member
 `{DNDLABS_FRONTEND_ORIGIN}/reset#token=…`. It is the same token mechanism as
 invitations (`user_invitations.purpose = "password_reset"`), and the two
 kinds are not interchangeable. Issuing a new link supersedes the member's
-earlier unused ones. Redeeming it sets the new password, clears any
-sign-in lock and ends all of the user's sessions, in one transaction. If
-no admin can sign in, the operator issues the link
+earlier unused ones. Redeeming it sets the new password, ends all of the
+user's sessions and lifts the email's sign-in rate limits (every IP), so a
+user refused after failed attempts can sign in with the new password at
+once. If no admin can sign in, the operator issues the link
 (`POST /admin/orgs/{id}/password-resets`).
 
 **Authorization within an org:**
@@ -351,7 +389,7 @@ Malformed input never crashes a run.
 
 ## Filtering & preprocessing
 
-`filtering/query.py` translates a `DatasetFilter` into a SQL predicate at
+`storage/filters.py` translates a `DatasetFilter` into a SQL predicate at
 the repository layer (`GET /datasets/{id}/records?mw_min=&target=&...`) —
 selection, distinct from validation's correctness checks.
 `preprocessing/featurize.py` computes RDKit descriptors (MW, LogP, TPSA,
@@ -391,10 +429,10 @@ explicit or absent, never approximated.
 
 | Source | Module | Notes |
 |---|---|---|
-| PubChem | `ingestion/pubchem.py` | PUG REST property endpoint. CIDs batched (default 100). Exponential backoff on 429/5xx/transport errors. |
-| ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...`, paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same backoff pattern as PubChem. |
+| PubChem | `ingestion/pubchem.py` | PUG REST property endpoint. CIDs batched (default 100), paused `DNDLABS_PUBCHEM_MIN_INTERVAL_SECONDS` (default 0.2 s, PubChem's 5-requests-per-second limit) between batches; structure resolution (`ingestion/resolution.py`) applies the same pause per lookup. Retries (`ingestion/http.py`) on 429/500/502/503/504 and transport errors; a 429/503 response's `Retry-After` header is honoured when present, capped at 60 s, else the wait backs off exponentially from `DNDLABS_PUBCHEM_BACKOFF_SECONDS`. |
+| ChEMBL | `ingestion/chembl.py` | `/activity.json?target_chembl_id=...` (query parameters URL-encoded), paginated via `page_meta.next` (domain-root prefix stripped before reuse against the client's own `base_url`). Same retry policy as PubChem. |
 | Upload | `ingestion/uploads.py` | Org-scoped: reads the stored file (`ingestion/tabular.py`: CSV/TSV, XLSX first worksheet, SDF, SMILES, MOL) and applies the run's `column_mapping`. `UploadService` stores and previews files and manages mapping templates; `ingestion/mapping.py` suggests a mapping from a template, then header aliases, then column contents. |
-| CSV | `ingestion/csv_connector.py` | Server-side path (operators). Delimiter sniffed (`,` `;` tab); header aliases matched ignoring case, spacing and punctuation (`fields.normalize_header`); unknown columns go into `extra`. |
+| CSV | `ingestion/csv_connector.py` | Server-side path (operators). Decoded like an uploaded file (UTF-8, BOM stripped, else Windows-1252). Delimiter sniffed (`,` `;` tab); header aliases matched ignoring case, spacing and punctuation (`fields.normalize_header`); unknown columns go into `extra`. |
 | JSON | `ingestion/json_connector.py` | Server-side path (operators). A top-level list, or `{"records": [...]}` with flat scalar values. |
 | UniProt, PDB | `ingestion/registry.py` | Planned, not implemented. Not valid `SourceSpec` sources, so the API rejects them (`422`); the registry lists them in `PLANNED_SOURCES`. |
 
@@ -423,7 +461,7 @@ DndLabsError
 │   ├── NotAuthenticatedError      # 401 (no/invalid/expired credential)
 │   │   └── InvalidApiKeyError
 │   ├── InvalidCredentialsError    # 401 (sign-in)
-│   ├── AccountLockedError         # 429 + Retry-After
+│   ├── RateLimitedError           # 429 + Retry-After
 │   ├── InvitationInvalidError     # 400
 │   ├── PasswordPolicyError        # 422
 │   ├── ForbiddenError             # 403 (role or credential type)
@@ -442,13 +480,13 @@ exception's own message is never returned to the client for the generic
 
 ## Database schema
 
-Alembic head: `0008`.
+Alembic head: `0009`.
 
 | Table | Key columns | Notes |
 |---|---|---|
 | `organizations` | `id`, `name`, `is_active` | Tenant root |
 | `api_keys` | `org_id`, `prefix` (unique), `hashed_key`, `revoked_at` | Raw key never stored |
-| `users` | `org_id`, `email` (unique), `password_hash`, `role`, `failed_login_count`, `locked_until` | Email stored lowercased |
+| `users` | `org_id`, `email` (unique), `password_hash`, `role` | Email stored lowercased |
 | `user_sessions` | `user_id`, `org_id`, `token_hash` (unique), `expires_at`, `revoked_at` | Raw token never stored |
 | `user_invitations` | `org_id`, `email`, `role`, `purpose` (`join` / `password_reset`), `token_hash` (unique), `expires_at`, `accepted_at`, `revoked_at` | Invitations and reset links; raw token never stored |
 | `pipeline_runs` | `org_id`, `source`, `status`, `stage`, `progress` (JSON), `attempts`, `cancel_requested`, `worker_id`, `lease_expires_at`, `lost_leases` (internal), `dataset_id`, `request_payload` (JSON), `error`, `created_at` (indexed), `started_at`, `finished_at` | Also the run queue (see [Run queue and worker](#run-queue-and-worker)) |
@@ -460,11 +498,11 @@ Alembic head: `0008`.
 | `enrichment_results` | `org_id`, `record_id`, `status`, `candidates` (JSON) | |
 | `uploads` | `org_id`, `filename`, `format`, `size_bytes`, `sha256`, `data` (bytes) | Uploaded files; stored in the database because the web service's disk is ephemeral |
 | `mapping_templates` | `org_id`, `name`, `mapping` (JSON) | Unique `(org_id, name)` |
+| `rate_limits` | `bucket` (primary key: kind + SHA-256 digests of a client IP and/or email), `window_start`, `count`, `expires_at` (indexed) | Brute-force counters (see [Auth](#auth)); never holds a raw IP or email |
 
-`GUID`/`StringArray` custom column types make UUID and array columns native
-on PostgreSQL and JSON/TEXT-backed on SQLite, so the same models and
-migration run identically against Postgres (Docker/Render) and SQLite
-(local dev, tests).
+The `GUID` custom column type makes UUID columns native on PostgreSQL and
+TEXT-backed on SQLite, so the same models and migration run identically
+against Postgres (Docker/Render) and SQLite (local dev, tests).
 
 `dnd-pipeline init-db` applies migrations (the API container runs it on
 every boot, via `docker/entrypoint.sh`). If it finds a schema created by
@@ -484,12 +522,13 @@ the stamp.
 | `0006` | Adds `feature_vectors.alerts` (nullable; existing rows keep NULL and get their alerts computed when read). |
 | `0007` | Adds `normalized_records.assay_format`, `control` and `context_key` (existing rows get an empty key) and widens the unique constraint to `(dataset_id, record_key, context_key)`. |
 | `0008` | Adds the run queue's columns to `pipeline_runs` (`stage`, `progress`, `attempts`, `lost_leases`, `cancel_requested`, `worker_id`, `lease_expires_at`, `started_at`) and an index on `created_at`. Runs left `pending` or `running` by the previous in-request background tasks were lost with their process; they become `failed` ("start it again") rather than starting unexpectedly. |
+| `0009` | Adds `rate_limits` (one fixed-window counter per bucket, `expires_at` indexed for the expired-counter sweep) and drops `users.failed_login_count` and `users.locked_until`: brute-force limits move from per-account lockout to the database-backed limits in [Auth](#auth). |
 
 Migrations are tested against both SQLite and real PostgreSQL
 (`tests/integration/test_migrations_postgres.py`, run in CI against a
 Postgres 16 service), including the legacy-MVP upgrade path using the MVP's
 own vendored migration (`tests/fixtures/legacy_mvp_alembic/`), the `0003`–`0005`,
-`0007` and `0008` upgrades and downgrades, reading a vector stored before `0006`,
+`0007`, `0008` and `0009` upgrades and downgrades, reading a vector stored before `0006`,
 the account, upload and run-queue repositories' behaviour
 (`tests/account_repository_checks.py`, `tests/upload_repository_checks.py`,
 `tests/run_queue_checks.py`, shared by both dialects), and eight workers

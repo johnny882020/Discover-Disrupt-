@@ -5,10 +5,10 @@ data takes an explicit ``org_id`` argument — never optional, never taken
 from the client — so no call can accidentally cross tenants. ``create``
 methods take the org from the stored contract itself. The deliberate
 exceptions are the authentication path, which runs before the org is known
-(lookups by API-key prefix, token digest or sign-in email, and sign-in
-bookkeeping keyed by the id those lookups returned), the run worker's queue
-methods, and housekeeping across all orgs (``delete_expired``). See
-docs/architecture.md.
+(lookups by API-key prefix, token digest or sign-in email, and the
+brute-force counters of ``RateLimitRepository``, keyed by client IP and
+email digests), the run worker's queue methods, and housekeeping across all
+orgs (``delete_expired``). See docs/architecture.md.
 """
 
 import uuid
@@ -262,6 +262,9 @@ class ApiKeyRepository(Protocol):
 
         Returns:
             The stored key record.
+
+        Raises:
+            ConflictError: If a key with this prefix already exists.
         """
         ...
 
@@ -366,29 +369,6 @@ class UserRepository(Protocol):
 
         Returns:
             True if an account exists.
-        """
-        ...
-
-    def record_login_failure(
-        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
-    ) -> None:
-        """Count a failed sign-in, locking the account once ``max_attempts`` is reached.
-
-        The increment happens in the database, so concurrent failures are
-        all counted.
-
-        Args:
-            user_id: User identifier.
-            max_attempts: Failures that trigger a lock.
-            lock_until: When a lock triggered by this failure expires.
-        """
-        ...
-
-    def record_login_success(self, user_id: uuid.UUID) -> None:
-        """Reset the failure counter and any lock after a successful sign-in.
-
-        Args:
-            user_id: User identifier.
         """
         ...
 
@@ -1038,6 +1018,73 @@ class EnrichmentRepository(Protocol):
         ...
 
 
+class RateLimitRepository(Protocol):
+    """Fixed-window counters behind the brute-force limits.
+
+    Not org-scoped: a limit applies before any organization is known (to a
+    client IP or a sign-in email). Buckets are opaque strings chosen by the
+    caller, which puts only digests in them, never a raw IP or email. Each
+    bucket holds one counter for its current window; a hit in a later
+    window starts the count again.
+    """
+
+    def hit(self, bucket: str, window_start: datetime, window_end: datetime) -> int:
+        """Count one event in ``bucket``'s window, atomically.
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+            window_end: End of the current window (the counter expires then).
+
+        Returns:
+            The bucket's count in this window, including this event.
+        """
+        ...
+
+    def count(self, bucket: str, window_start: datetime) -> int:
+        """Read a bucket's count in the current window without changing it.
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+
+        Returns:
+            The count (0 if the bucket has no counter for this window).
+        """
+        ...
+
+    def refund(self, bucket: str, window_start: datetime) -> None:
+        """Take back one event counted in this window (never below 0).
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+        """
+        ...
+
+    def clear(self, bucket_prefix: str) -> int:
+        """Delete every counter whose bucket starts with ``bucket_prefix``.
+
+        Args:
+            bucket_prefix: Literal prefix (no wildcards).
+
+        Returns:
+            Number of counters deleted.
+        """
+        ...
+
+    def delete_expired(self, now: datetime) -> int:
+        """Delete counters whose window ended at or before ``now`` (housekeeping).
+
+        Args:
+            now: The current time.
+
+        Returns:
+            Number of counters deleted.
+        """
+        ...
+
+
 @dataclass(frozen=True)
 class Repositories:
     """Bundle of repositories handed to services and delivery layers."""
@@ -1054,3 +1101,4 @@ class Repositories:
     reports: QualityReportRepository
     features: FeatureRepository
     enrichments: EnrichmentRepository
+    rate_limits: RateLimitRepository

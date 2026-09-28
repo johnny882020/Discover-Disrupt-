@@ -159,8 +159,6 @@ class UserCredentials(_Contract):
 
     user: User
     password_hash: str
-    failed_login_count: int = 0
-    locked_until: datetime | None = None
 
 
 class UserSession(_Contract):
@@ -836,7 +834,8 @@ class CompoundProfile(_Contract):
 
     Properties are computed with RDKit from the standardized structure;
     ``hbd``/``hba`` use Lipinski's definitions (NH + OH count, N + O count).
-    A criterion is ``None`` when the compound has no computed properties.
+    ``criteria`` is empty (no criterion is a key) when the compound lacks
+    complete computed properties; otherwise it holds every criterion.
     """
 
     record_id: uuid.UUID

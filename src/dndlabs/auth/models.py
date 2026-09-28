@@ -17,7 +17,20 @@ password_hasher = PasswordHasher()
 
 #: Prefix identifying a live D&D Labs key (vs. e.g. a future "test" env).
 KEY_PREFIX = "ddl_live_"
-_PREFIX_LEN = 12  # "ddl_live_" + 3 random chars, enough to disambiguate without leaking the secret
+#: Random bytes behind ``KEY_PREFIX``: 40 bytes are 54 base64url characters.
+_SECRET_BYTES = 40
+#: ``KEY_PREFIX`` + 12 random characters (72 bits). The lookup prefix is
+#: unique, so it must stay collision-free as keys accumulate: with 3 random
+#: characters (the original length, ~262k values) collisions became likely
+#: after a few hundred keys. The prefix is stored and logged, so it is not
+#: secret; the 42 characters after it (248 bits) are.
+_PREFIX_LEN = len(KEY_PREFIX) + 12
+#: Keys issued before the longer prefix: ``KEY_PREFIX`` + 43 characters
+#: (``token_urlsafe(32)``), looked up by their first 12 characters. A new key
+#: is always longer (``token_urlsafe(40)`` gives 54), so the length alone
+#: tells the formats apart and old keys keep working.
+_LEGACY_KEY_LEN = len(KEY_PREFIX) + 43
+_LEGACY_PREFIX_LEN = 12
 
 
 def generate_key() -> tuple[str, str]:
@@ -28,10 +41,9 @@ def generate_key() -> tuple[str, str]:
         ``raw_key`` must never be stored and is shown to the caller exactly
         once.
     """
-    secret = secrets.token_urlsafe(32)
+    secret = secrets.token_urlsafe(_SECRET_BYTES)
     raw_key = f"{KEY_PREFIX}{secret}"
-    prefix = raw_key[:_PREFIX_LEN]
-    return raw_key, prefix
+    return raw_key, key_prefix(raw_key)
 
 
 def hash_key(raw_key: str) -> str:
@@ -71,6 +83,9 @@ def key_prefix(raw_key: str) -> str:
         raw_key: The raw key as presented by a caller.
 
     Returns:
-        The prefix to look up in storage.
+        The prefix to look up in storage: 12 characters for a key issued
+        before the longer prefix, 21 otherwise.
     """
+    if len(raw_key) == _LEGACY_KEY_LEN:
+        return raw_key[:_LEGACY_PREFIX_LEN]
     return raw_key[:_PREFIX_LEN]

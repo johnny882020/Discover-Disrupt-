@@ -12,14 +12,13 @@ from dndlabs.api.dependencies import ApiServices
 from dndlabs.core.config import Settings
 from dndlabs.pipeline.factory import Container, build_container, migrate
 
-ADMIN_SECRET = "script-tests-admin-secret"
+ADMIN_SECRET = "script-tests-admin-secret-0123456789"
 
 
 @pytest.fixture
 def container(tmp_path: Path) -> Iterator[Container]:
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
-        export_dir=tmp_path / "exports",
         auto_create_schema=False,
         admin_bootstrap_secret=ADMIN_SECRET,
     )

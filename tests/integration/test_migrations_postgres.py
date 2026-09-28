@@ -350,3 +350,77 @@ def test_concurrent_workers_never_claim_the_same_run(database_url: str) -> None:
     everything = [run_id for claimed in results for run_id in claimed]
     assert len(everything) == len(set(everything)) == len(created)
     assert set(everything) == created
+
+
+def test_concurrent_rate_limit_hits_are_all_counted(database_url: str) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import UTC, datetime, timedelta
+
+    run_migrations(database_url)
+    engine = create_db_engine(database_url)
+    start = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=15)
+    try:
+        limits = build_sql_repositories(engine).rate_limits
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            counts = list(pool.map(lambda _: limits.hit("race", start, end), range(40)))
+    finally:
+        engine.dispose()
+    # One atomic upsert per hit: none lost, and each saw a distinct count.
+    assert sorted(counts) == list(range(1, 41))
+
+
+def test_0009_adds_rate_limits_and_drops_the_account_lock(database_url: str) -> None:
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0008")
+    org_id, user_id = uuid.uuid4(), uuid.uuid4()
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO organizations (id, name, created_at, is_active) "
+                "VALUES (:o, 'A', now(), true)"
+            ),
+            {"o": org_id},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO users (id, org_id, email, password_hash, role, created_at, "
+                "password_changed_at, failed_login_count, locked_until) VALUES "
+                "(:u, :o, 'ada@acme.com', 'h', 'admin', now(), now(), 3, now())"
+            ),
+            {"u": user_id, "o": org_id},
+        )
+
+    command.upgrade(config, "head")
+
+    def user_columns() -> set[str]:
+        with engine.connect() as conn:
+            return set(
+                conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'users'"
+                    )
+                ).scalars()
+            )
+
+    assert {"failed_login_count", "locked_until"}.isdisjoint(user_columns())
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT email FROM users")).scalar_one() == "ada@acme.com"
+        assert conn.execute(text("SELECT count(*) FROM rate_limits")).scalar_one() == 0
+
+    command.downgrade(config, "0008")
+    assert {"failed_login_count", "locked_until"} <= user_columns()
+    with engine.connect() as conn:
+        tables = {r[0] for r in conn.execute(text("SELECT tablename FROM pg_tables"))}
+        # Accounts come back unlocked with no recorded failures.
+        assert conn.execute(text("SELECT failed_login_count, locked_until FROM users")).one() == (
+            0,
+            None,
+        )
+    assert "rate_limits" not in tables
+    engine.dispose()
+    command.upgrade(config, "head")

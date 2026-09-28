@@ -43,7 +43,8 @@ def services() -> ApiServices:
         uploads=UploadService(repos.uploads, repos.mapping_templates),
         assessment=AssessmentService(repos, RdkitFeaturizer()),
         settings=Settings(
-            admin_bootstrap_secret="test-admin-secret", frontend_origin="http://localhost:5173"
+            admin_bootstrap_secret="test-admin-secret-0123456789",
+            frontend_origin="http://localhost:5173",
         ),
         worker=RunWorker(runner, repos.runs, poll_seconds=0.01),
     )

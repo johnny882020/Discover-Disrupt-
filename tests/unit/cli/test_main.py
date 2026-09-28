@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from dndlabs.cli import main as cli_main
@@ -117,3 +118,52 @@ def test_report_for_unknown_dataset_exits_nonzero(cli_env: Path) -> None:
 def test_default_container_factory(cli_env: Path) -> None:
     container = cli_main.default_container_factory(Settings(database_url="sqlite:///:memory:"))
     container.close()
+
+
+UNKNOWN = "00000000-0000-0000-0000-00000000abcd"
+
+
+@pytest.mark.parametrize(
+    ("args", "option"),
+    [
+        (["datasets", "--org-id", "not-a-uuid"], "--org-id"),
+        (["run", "--org-id", "not-a-uuid", "--source", "pubchem", "--ids", "1"], "--org-id"),
+        (["invite-admin", "not-a-uuid", "a@b.co"], "ORG_ID"),
+        (["report", "--org-id", UNKNOWN, "not-a-uuid"], "DATASET_ID"),
+        (["export", "--org-id", "not-a-uuid", UNKNOWN], "--org-id"),
+        (["export", "--org-id", UNKNOWN, "not-a-uuid"], "DATASET_ID"),
+        (["export", "--org-id", UNKNOWN, UNKNOWN, "--format", "xml"], "--format"),
+    ],
+)
+def test_malformed_arguments_exit_cleanly(cli_env: Path, args: list[str], option: str) -> None:
+    # Plain, wide output: on CI, Rich forces colour (GITHUB_ACTIONS), and
+    # ANSI codes or wrapping would split the option name in the error box.
+    result = runner.invoke(app, args, env={"NO_COLOR": "1", "COLUMNS": "200"})
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    # A usage error (exit 2) naming the argument, not a ValueError traceback.
+    assert result.exit_code == 2, output
+    assert not isinstance(result.exception, ValueError)
+    assert "Invalid value" in output
+    assert option.lower() in output.lower()
+
+
+def test_export_jsonl_names_the_file_by_format(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(cli_env)  # the default output path is relative
+    org_id, _ = _bootstrap(cli_env)
+    csv_path = cli_env / "lab.csv"
+    csv_path.write_text("smiles,name\nCCO,ethanol\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["run", "--org-id", org_id, "--source", "csv", "--path", str(csv_path)]
+    )
+    dataset_id = re.search(r"dataset\s+(\S+)", result.output).group(1)  # type: ignore[union-attr]
+    exported = runner.invoke(
+        app,
+        ["export", "--org-id", org_id, dataset_id, "--format", "jsonl"],
+        catch_exceptions=False,
+    )
+    assert exported.exit_code == 0, exported.output
+    out = Path(exported.output.strip())
+    assert out.name == f"{dataset_id}.jsonl"
+    assert json.loads((cli_env / out).read_text(encoding="utf-8").splitlines()[0])

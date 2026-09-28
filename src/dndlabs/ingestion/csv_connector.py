@@ -11,7 +11,7 @@ from dndlabs.core.exceptions import IngestionError
 from dndlabs.core.logging import get_logger
 from dndlabs.core.schemas import RawRecord, SourceSpec, SourceType
 from dndlabs.ingestion.fields import IDENTIFIER_FIELDS, build_raw_record, canonical_field
-from dndlabs.ingestion.tabular import Table, read_delimited
+from dndlabs.ingestion.tabular import Table, decode_text, read_delimited
 
 logger = get_logger(__name__)
 
@@ -60,12 +60,8 @@ def _read_table(path: Path) -> Table:
     if not path.is_file():
         raise IngestionError(f"CSV file not found: {path}")
     try:
-        # utf-8-sig strips the BOM Excel writes. Strict UTF-8 here, whereas
-        # uploads fall back to Windows-1252 (tabular._decode).
-        text = path.read_bytes().decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise IngestionError(f"cannot parse CSV {path}: {exc}") from exc
-    try:
-        return read_delimited(text)
+        # The same decoding as uploads (UTF-8, BOM stripped, else Windows-1252),
+        # so a legacy Excel export reads from a path as it does uploaded.
+        return read_delimited(decode_text(path.read_bytes()))
     except IngestionError as exc:
         raise IngestionError(f"cannot parse CSV {path}: {exc}") from exc

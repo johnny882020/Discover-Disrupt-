@@ -5,8 +5,9 @@ filters by it — this is the tenant-isolation boundary. No method accepts a
 caller-supplied override; ``org_id`` always comes from the authenticated
 request context, never from a request body or query string. The unscoped
 exceptions are the authentication lookups (by key prefix, token digest or
-email, which find the org), the run worker's queue methods, and
-cross-org housekeeping; ``core.protocols`` lists them.
+email, which find the org), the brute-force counters (keyed by client IP
+and email digests, before any org is known), the run worker's queue
+methods, and cross-org housekeeping; ``core.protocols`` lists them.
 
 Every write runs inside a ``SessionFactory.transaction``, which commits on
 success and rolls back on any error.
@@ -17,7 +18,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, and_, delete, func, or_, select, text, update
+from sqlalchemy import ColumnElement, and_, case, delete, func, or_, select, text, update
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import CursorResult, Result
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
@@ -62,6 +64,7 @@ from dndlabs.core.schemas import (
     utcnow,
 )
 from dndlabs.storage.database import SessionFactory
+from dndlabs.storage.filters import apply_filters
 from dndlabs.storage.models import (
     ApiKeyRow,
     DatasetRow,
@@ -72,6 +75,7 @@ from dndlabs.storage.models import (
     NormalizedRecordRow,
     OrganizationRow,
     QualityReportRow,
+    RateLimitRow,
     RunRow,
     UploadRow,
     UserRow,
@@ -192,6 +196,9 @@ class SqlApiKeyRepository:
 
         Returns:
             The stored key record.
+
+        Raises:
+            ConflictError: If a key with this prefix already exists.
         """
         row = ApiKeyRow(
             id=uuid.uuid4(),
@@ -202,7 +209,14 @@ class SqlApiKeyRepository:
         )
         with self._sessions.transaction() as session:
             session.add(row)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                # The prefix is the table's only unique column (the other
+                # constraint, the org's foreign key, holds for keys issued to
+                # an org just read or created), so this is a prefix collision:
+                # a ConflictError the issuer retries, not a StorageError (500).
+                raise ConflictError("an API key with this prefix already exists") from exc
             return _key_from_row(row)
 
     def get_by_prefix(self, prefix: str) -> ApiKeyRecord | None:
@@ -355,47 +369,6 @@ class SqlUserRepository:
                 is not None
             )
 
-    def record_login_failure(
-        self, user_id: uuid.UUID, max_attempts: int, lock_until: datetime
-    ) -> None:
-        """Count a failed sign-in, locking the account once ``max_attempts`` is reached.
-
-        Args:
-            user_id: User identifier.
-            max_attempts: Failures that trigger a lock.
-            lock_until: When a lock triggered by this failure expires.
-        """
-        with self._sessions.transaction() as session:
-            # Incremented in SQL, not read-modify-write in Python, so
-            # concurrent failed sign-ins are all counted.
-            session.execute(
-                update(UserRow)
-                .where(UserRow.id == user_id)
-                .values(failed_login_count=UserRow.failed_login_count + 1)
-            )
-            count = session.scalars(
-                select(UserRow.failed_login_count).where(UserRow.id == user_id)
-            ).first()
-            if count is not None and count >= max_attempts:
-                session.execute(
-                    update(UserRow)
-                    .where(UserRow.id == user_id)
-                    .values(failed_login_count=0, locked_until=lock_until)
-                )
-
-    def record_login_success(self, user_id: uuid.UUID) -> None:
-        """Reset the failure counter and any lock.
-
-        Args:
-            user_id: User identifier.
-        """
-        with self._sessions.transaction() as session:
-            session.execute(
-                update(UserRow)
-                .where(UserRow.id == user_id)
-                .values(failed_login_count=0, locked_until=None)
-            )
-
     def list_members(self, org_id: uuid.UUID) -> list[User]:
         """List an organization's users, oldest first.
 
@@ -493,7 +466,6 @@ def _insert_user(session: Session, user: User, password_hash: str) -> None:
             role=user.role.value,
             created_at=user.created_at,
             password_changed_at=user.created_at,
-            failed_login_count=0,
         )
     )
     try:
@@ -513,8 +485,6 @@ def _credentials_from_row(row: UserRow) -> UserCredentials:
             created_at=_as_utc(row.created_at),
         ),
         password_hash=row.password_hash,
-        failed_login_count=row.failed_login_count,
-        locked_until=_as_utc(row.locked_until) if row.locked_until else None,
     )
 
 
@@ -768,8 +738,6 @@ class SqlInvitationRepository:
                 raise InvitationInvalidError(_TOKEN_UNUSABLE)
             row.password_hash = password_hash
             row.password_changed_at = datetime.now(UTC)
-            row.failed_login_count = 0
-            row.locked_until = None
             db.execute(delete(UserSessionRow).where(UserSessionRow.user_id == row.id))
             return _credentials_from_row(row).user
 
@@ -1508,14 +1476,22 @@ class SqlDatasetRepository:
             filters: Filter criteria.
 
         Returns:
-            Matching records.
+            Matching records, in a stable order (by record key, then
+            measurement context).
         """
-        from dndlabs.filtering.query import build_predicate
-
         stmt = select(NormalizedRecordRow).where(
             NormalizedRecordRow.org_id == org_id, NormalizedRecordRow.dataset_id == dataset_id
         )
-        stmt = build_predicate(stmt, NormalizedRecordRow, filters)
+        stmt = apply_filters(stmt, filters)
+        # Without ORDER BY, SQL returns rows in no guaranteed order, so pages
+        # could overlap or skip records. (dataset_id, record_key, context_key)
+        # is unique, so this order is total and served by that constraint's
+        # index; id only breaks ties defensively.
+        stmt = stmt.order_by(
+            NormalizedRecordRow.record_key,
+            NormalizedRecordRow.context_key,
+            NormalizedRecordRow.id,
+        )
         stmt = stmt.limit(filters.limit).offset(filters.offset)
         with self._sessions.transaction() as session:
             return [_record_from_row(r) for r in session.scalars(stmt)]
@@ -1855,22 +1831,22 @@ class SqlEnrichmentRepository:
         """
         from dndlabs.core.schemas import GeneratedCandidate
 
+        # A subquery rather than an IN list of the dataset's record ids: a
+        # large dataset would otherwise bind one parameter per record and
+        # exceed PostgreSQL's 65,535-parameter limit. The database resolves
+        # the ids itself, so no chunking is needed.
+        dataset_records = select(NormalizedRecordRow.id).where(
+            NormalizedRecordRow.org_id == org_id,
+            NormalizedRecordRow.dataset_id == dataset_id,
+        )
         with self._sessions.transaction() as session:
-            record_ids = list(
-                session.scalars(
-                    select(NormalizedRecordRow.id).where(
-                        NormalizedRecordRow.org_id == org_id,
-                        NormalizedRecordRow.dataset_id == dataset_id,
-                    )
-                )
-            )
-            if not record_ids:
-                return []
             rows = session.scalars(
-                select(EnrichmentResultRow).where(
+                select(EnrichmentResultRow)
+                .where(
                     EnrichmentResultRow.org_id == org_id,
-                    EnrichmentResultRow.record_id.in_(record_ids),
+                    EnrichmentResultRow.record_id.in_(dataset_records),
                 )
+                .order_by(EnrichmentResultRow.created_at, EnrichmentResultRow.id)
             )
             return [
                 EnrichmentResult(
@@ -1887,6 +1863,123 @@ class SqlEnrichmentRepository:
                 )
                 for row in rows
             ]
+
+
+class SqlRateLimitRepository:
+    """Stores fixed-window brute-force counters (one row per bucket)."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        """Create the repository.
+
+        Args:
+            sessions: Session factory to use.
+        """
+        self._sessions = sessions
+
+    def hit(self, bucket: str, window_start: datetime, window_end: datetime) -> int:
+        """Count one event in ``bucket``'s window, atomically.
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+            window_end: End of the current window.
+
+        Returns:
+            The bucket's count in this window, including this event.
+        """
+        with self._sessions.transaction() as session:
+            dialect = session.get_bind().dialect.name
+            # One INSERT ... ON CONFLICT DO UPDATE ... RETURNING, on both
+            # PostgreSQL and SQLite (3.35+): the increment and the read of
+            # the new count are a single atomic statement, so concurrent
+            # requests on any number of workers or instances are all counted
+            # and none reads a stale count (a SELECT-then-UPDATE would race).
+            insert = postgresql.insert if dialect == "postgresql" else sqlite.insert
+            stmt = insert(RateLimitRow).values(
+                bucket=bucket, window_start=window_start, count=1, expires_at=window_end
+            )
+            table = RateLimitRow.__table__.c
+            # The stored window is kept if it is this one (or, with clock skew
+            # between instances, a later one); an older window starts over.
+            same = table.window_start >= stmt.excluded.window_start
+            upsert = stmt.on_conflict_do_update(
+                index_elements=[RateLimitRow.bucket],
+                set_={
+                    "count": case((same, table.count + 1), else_=1),
+                    "window_start": case(
+                        (same, table.window_start), else_=stmt.excluded.window_start
+                    ),
+                    "expires_at": case((same, table.expires_at), else_=stmt.excluded.expires_at),
+                },
+            ).returning(RateLimitRow.count)
+            return int(session.execute(upsert).scalar_one())
+
+    def count(self, bucket: str, window_start: datetime) -> int:
+        """Read a bucket's count in the current window without changing it.
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+
+        Returns:
+            The count (0 if the bucket has no counter for this window).
+        """
+        with self._sessions.transaction() as session:
+            found = session.scalars(
+                select(RateLimitRow.count).where(
+                    RateLimitRow.bucket == bucket, RateLimitRow.window_start >= window_start
+                )
+            ).first()
+            return int(found) if found is not None else 0
+
+    def refund(self, bucket: str, window_start: datetime) -> None:
+        """Take back one event counted in this window (never below 0).
+
+        Args:
+            bucket: The bucket key.
+            window_start: Start of the current window.
+        """
+        with self._sessions.transaction() as session:
+            session.execute(
+                update(RateLimitRow)
+                .where(
+                    RateLimitRow.bucket == bucket,
+                    RateLimitRow.window_start >= window_start,
+                    RateLimitRow.count > 0,
+                )
+                .values(count=RateLimitRow.count - 1)
+            )
+
+    def clear(self, bucket_prefix: str) -> int:
+        """Delete every counter whose bucket starts with ``bucket_prefix``.
+
+        Args:
+            bucket_prefix: Literal prefix (no wildcards).
+
+        Returns:
+            Number of counters deleted.
+        """
+        with self._sessions.transaction() as session:
+            # autoescape: "_" and "%" in the prefix match only themselves.
+            result = session.execute(
+                delete(RateLimitRow).where(
+                    RateLimitRow.bucket.startswith(bucket_prefix, autoescape=True)
+                )
+            )
+            return _rowcount(result)
+
+    def delete_expired(self, now: datetime) -> int:
+        """Delete counters whose window ended at or before ``now``.
+
+        Args:
+            now: The current time.
+
+        Returns:
+            Number of counters deleted.
+        """
+        with self._sessions.transaction() as session:
+            result = session.execute(delete(RateLimitRow).where(RateLimitRow.expires_at <= now))
+            return _rowcount(result)
 
 
 def build_sql_repositories(engine: object, expected_revision: str | None = None) -> Repositories:
@@ -1914,4 +2007,5 @@ def build_sql_repositories(engine: object, expected_revision: str | None = None)
         reports=SqlQualityReportRepository(sessions),
         features=SqlFeatureRepository(sessions),
         enrichments=SqlEnrichmentRepository(sessions),
+        rate_limits=SqlRateLimitRepository(sessions),
     )

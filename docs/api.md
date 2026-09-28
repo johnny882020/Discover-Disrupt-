@@ -49,7 +49,7 @@ Header: `X-Admin-Secret: <DNDLABS_ADMIN_BOOTSTRAP_SECRET>`.
 | DELETE | `/auth/members/{user_id}` | admin | Remove a member; their account and sessions are deleted (204) |
 | POST | `/auth/members/{user_id}/password-reset` | admin | Single-use reset link → `PasswordResetCreated` (201); supersedes the member's earlier unused links |
 | POST | `/auth/password-reset/preview` | none | `{"token"}` → `PasswordResetPreview` (`email`, `org_name`, `expires_at`); does not redeem |
-| POST | `/auth/password-reset/accept` | none | `{"token", "password"}` → `SessionCreated`; sets the password, clears any lock, ends all other sessions |
+| POST | `/auth/password-reset/accept` | none | `{"token", "password"}` → `SessionCreated`; sets the password, ends all other sessions |
 | GET | `/auth/whoami` | any | `OrgContext`: `org_id`, `org_name`, `principal` (`api_key`/`user`), `role`, and `api_key_id` or `user_id` + `session_id` + `email` |
 | POST | `/auth/keys/revoke` | API key | Revoke the calling key (204) |
 | DELETE | `/orgs/me/data` | admin | Privacy: delete all of the calling org's runs, datasets, records, reports and uploaded files (204). The org, its keys, its user accounts and its saved column mappings are kept. |
@@ -273,7 +273,8 @@ HTTP 503"), never the exception's own text.
 | `401` | Missing, invalid, expired or revoked credential; wrong email or password (always `invalid email or password`); wrong admin secret on `/admin/*`. Carries `WWW-Authenticate: Bearer` |
 | `403` | Authenticated but not allowed: managing members, invitations or org data without the `admin` role, removing yourself, revoking a key from a session, signing out with a key, or a wrong current password on `/auth/password` |
 | `404` | Unknown run, dataset, upload or mapping template, or one that belongs to a different org |
-| `409` | Invitation for an email that is already a member of the org, redemption for an email that already has an account, or a change that would leave the org without an admin |
+| `409` | Invitation for an email that is already a member of the org, redemption for an email that already has an account, a change that would leave the org without an admin, or an API key issue that hit a prefix collision on every retry (`"could not issue an API key; try again"`, safe to retry) |
+| `413` | Request body larger than `DNDLABS_REQUEST_MAX_BYTES` (checked before the body is read; fixed body `"request body too large"`) |
 | `422` | Invalid request body (e.g. a `SourceSpec` missing the field its source needs, a column mapping without a column that identifies the structure, an invalid email), a password that fails the policy, or an uploaded file that is empty, too large, of an unsupported type or unreadable |
-| `429` | Sign-in locked after repeated failures; retry after the `Retry-After` seconds |
+| `429` | A sign-in, sign-in-per-email or auth-failure rate limit was reached; fixed body `"too many attempts; try again later"`, retry after the `Retry-After` seconds |
 | `500` | Internal error (e.g. storage failure); detail is logged, not returned |

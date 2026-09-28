@@ -118,7 +118,7 @@ class LookupStructureResolver:
         chembl: httpx.Client,
         lookup_limit: int = 1000,
         batch_size: int = 100,
-        throttle_seconds: float = 0.2,
+        min_interval_seconds: float = 0.2,
         retry: RetryPolicy | None = None,
     ) -> None:
         """Create the resolver.
@@ -129,14 +129,16 @@ class LookupStructureResolver:
             lookup_limit: Most distinct identifiers looked up per run; records
                 beyond it are reported rather than resolved.
             batch_size: Identifiers per batched request (CIDs, ChEMBL IDs).
-            throttle_seconds: Pause between PubChem requests.
+            min_interval_seconds: Pause before each PubChem request
+                (``Settings.pubchem_min_interval_seconds``; the default keeps
+                to PubChem's published 5 requests per second).
             retry: Retry policy for transient failures.
         """
         self._pubchem = pubchem
         self._chembl = chembl
         self._limit = lookup_limit
         self._batch = batch_size
-        self._throttle = throttle_seconds
+        self._min_interval = min_interval_seconds
         self._retry = retry or RetryPolicy()
 
     async def resolve(
@@ -302,7 +304,7 @@ class LookupStructureResolver:
         self, send: Callable[[], httpx.Response]
     ) -> list[PubChemProperties] | _Missing:
         """Send one PubChem request (throttled); parse its property table."""
-        self._retry.sleep(self._throttle)
+        self._retry.sleep(self._min_interval)
         try:
             response = send_with_retries(send, "PubChem", self._retry)
         except IngestionError:

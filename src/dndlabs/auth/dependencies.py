@@ -22,6 +22,31 @@ _bearer_scheme = HTTPBearer(
     auto_error=False, description="Session token from POST /auth/login (web app users)."
 )
 
+#: Bucket name for a request with no client address (e.g. some test
+#: transports); such requests share one set of limits.
+_UNKNOWN_CLIENT = "unknown"
+
+
+def client_ip(request: Request) -> str:
+    """The IP address the brute-force limits are counted against.
+
+    ``request.client.host`` is the TCP peer, which behind the hosting
+    platform's proxy is the proxy itself. The deployment runs uvicorn with
+    proxy headers enabled for that proxy only (``--proxy-headers`` and
+    ``--forwarded-allow-ips``), so uvicorn replaces the peer with the
+    client address the proxy forwarded. ``X-Forwarded-For`` is deliberately
+    never read here: any client can send one, and trusting it would let an
+    attacker pick a fresh "IP" for every request and escape every per-IP
+    limit.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The client's IP address.
+    """
+    return request.client.host if request.client else _UNKNOWN_CLIENT
+
 
 def get_current_org(
     request: Request,
@@ -44,12 +69,13 @@ def get_current_org(
 
     Raises:
         NotAuthenticatedError: If no valid credential is presented.
+        RateLimitedError: If the client IP has too many recent failures.
     """
     auth_service: AuthService = request.app.state.services.auth
     if api_key is not None:
-        return auth_service.resolve_api_key(api_key)
+        return auth_service.resolve_api_key(api_key, client_ip(request))
     if bearer is not None:
-        return auth_service.resolve_session(bearer.credentials)
+        return auth_service.resolve_session(bearer.credentials, client_ip(request))
     raise NotAuthenticatedError("missing credentials: send X-API-Key or Authorization: Bearer")
 
 
@@ -69,5 +95,11 @@ def require_admin_secret(
     # compare_digest: constant-time, so response timing does not reveal how
     # much of a guess matched. On bytes, because on str it raises TypeError
     # for non-ASCII input (a 500 instead of a 401).
-    if not x_admin_secret or not secrets.compare_digest(x_admin_secret.encode(), expected.encode()):
+    # No configured secret (only possible with injected test services; the
+    # app refuses to start without one) opens nothing.
+    if (
+        expected is None
+        or not x_admin_secret
+        or not secrets.compare_digest(x_admin_secret.encode(), expected.encode())
+    ):
         raise InvalidApiKeyError("missing or invalid admin secret")

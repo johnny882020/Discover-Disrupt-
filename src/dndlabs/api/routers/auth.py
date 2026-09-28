@@ -2,9 +2,10 @@
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
 from dndlabs.api.dependencies import CurrentOrg, Services
+from dndlabs.auth.dependencies import client_ip
 from dndlabs.core.exceptions import ForbiddenError
 from dndlabs.core.schemas import (
     Invitation,
@@ -33,18 +34,21 @@ router = APIRouter(tags=["auth"])
 
 
 @router.post("/auth/login")
-def login(body: LoginRequest, services: Services) -> SessionCreated:
+def login(body: LoginRequest, request: Request, services: Services) -> SessionCreated:
     """Exchange an email and password for a session token.
+
+    Limited per client IP and per email (``429`` with ``Retry-After``).
 
     Args:
         body: The credentials.
+        request: The incoming request (its client IP is rate-limited).
         services: Injected services.
 
     Returns:
         The session token (send it as ``Authorization: Bearer <token>``),
         its expiry, and the signed-in user.
     """
-    return services.auth.login(body.email, body.password)
+    return services.auth.login(body.email, body.password, client_ip(request))
 
 
 @router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)

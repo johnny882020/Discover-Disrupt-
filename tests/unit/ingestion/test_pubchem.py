@@ -13,9 +13,11 @@ def _fixture(name: str) -> bytes:
     return (FIXTURES / "pubchem" / name).read_bytes()
 
 
-def _connector(handler: httpx.MockTransport, **kwargs: object) -> PubChemConnector:
+def _connector(
+    handler: httpx.MockTransport, sleeps: list[float] | None = None, **kwargs: object
+) -> PubChemConnector:
     client = httpx.Client(base_url=BASE, transport=handler)
-    sleeps: list[float] = []
+    sleeps = sleeps if sleeps is not None else []
     return PubChemConnector(client, sleep=sleeps.append, **kwargs)  # type: ignore[arg-type]
 
 
@@ -55,10 +57,38 @@ async def test_fetch_batches_and_dedupes_cids() -> None:
             200, json={"PropertyTable": {"Properties": [by_cid[c] for c in cids]}}
         )
 
-    connector = _connector(httpx.MockTransport(handler), batch_size=2)
+    sleeps: list[float] = []
+    connector = _connector(httpx.MockTransport(handler), sleeps, batch_size=2)
     records = await _fetch(connector, "2244", "3672", "2519", "2244")
     assert len(paths) == 2
     assert [r.source_record_id for r in records] == ["2244", "3672", "2519"]
+    # One pause between the two batches (PubChem's 5 requests/s), none before the first.
+    assert sleeps == [0.2]
+
+
+async def test_batches_are_spaced_by_the_configured_interval() -> None:
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cid = int(request.url.path.split("/cid/")[1].split("/")[0])
+        return httpx.Response(200, json={"PropertyTable": {"Properties": [{"CID": cid}]}})
+
+    connector = _connector(
+        httpx.MockTransport(handler), sleeps, batch_size=1, min_interval_seconds=0.75
+    )
+    records = await _fetch(connector, "1", "2", "3")
+    assert [r.source_record_id for r in records] == ["1", "2", "3"]
+    assert sleeps == [0.75, 0.75]
+
+
+async def test_a_single_batch_is_not_delayed() -> None:
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_fixture("properties_3.json"))
+
+    await _fetch(_connector(httpx.MockTransport(handler), sleeps), "2244")
+    assert sleeps == []
 
 
 async def test_retries_transient_errors_then_succeeds() -> None:
